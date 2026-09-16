@@ -317,11 +317,9 @@ export function findNode(root: FileNode, relPath: string): FileNode | null {
   if (relPath === "") return root;
   let found: FileNode | null = null;
   walkTree(root, (node) => {
-    for (const child of node.children) {
-      if (child.relPath === relPath) {
-        found = child;
-        return false;
-      }
+    if (node.relPath === relPath) {
+      found = node;
+      return false;
     }
   });
   return found;

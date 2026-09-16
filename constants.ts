@@ -8,8 +8,11 @@
 
 // ── Refresh ──
 
-/** Git and tree refresh interval while the overlay is open. */
+/** Git and tree refresh base interval while the overlay is open. */
 export const REFRESH_INTERVAL_MS = 3000;
+
+/** Maximum idle polling interval under dynamic backoff. */
+export const MAX_POLL_INTERVAL_MS = 10000;
 
 // ── Viewing caps ──
 

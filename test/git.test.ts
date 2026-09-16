@@ -16,9 +16,11 @@ import {
   detectRepo,
   gitCodeMap,
   gitTreeProbe,
+  isGitAvailable,
   parsePorcelain,
   readGitState,
   readTrackedFiles,
+  resetGitAvailabilityCache,
   toCwdRelative,
 } from "../git";
 
@@ -258,5 +260,11 @@ describe("git integration on a scratch repository", () => {
     } finally {
       await rm(outside, { recursive: true, force: true });
     }
+  });
+
+  it("allows resetting git availability cache", async () => {
+    expect(await isGitAvailable(repo)).toBe(true);
+    resetGitAvailabilityCache();
+    expect(await isGitAvailable(repo)).toBe(true);
   });
 });

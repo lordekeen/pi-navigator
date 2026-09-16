@@ -17,7 +17,6 @@ Then start pi and run `/navigator`, or press `Ctrl+N`.
 
 ```
 /navigator      open the overlay
-Ctrl+N          open the overlay (registered shortcut)
 ```
 
 Layout: files tree on the left, git panel below it, file viewer on the right, contextual key hints in the footer.
@@ -72,7 +71,7 @@ Esc precedence in one line: filter, then search, then close.
 
 ## Behavior notes
 
-- `ctrl+n` conflicts with pi's own built-in `app.session.toggleNamedFilter` shortcut on pi 0.85.1: at startup pi prints an `[Extension issues]` banner and **uses the extension's binding anyway** (verified live on Linux). The feature works; if the banner is unwanted, drop the `registerShortcut` call and keep `/navigator` (a plan section 14 follow-up for a future pi where the built-in binding may win).
+- Launch mechanism: the extension is launched via the `/navigator` command, avoiding keybinding conflicts with pi's built-in shortcuts (such as `ctrl+n` / `app.session.toggleNamedFilter`).
 
 - Syntax highlighting uses pi's own `highlightCode` and `getLanguageFromPath`, so colors follow the active theme and no tools like `bat` are needed.
 - Tree source is hybrid: inside a repository it lists tracked plus untracked non-ignored files; without git, and in a repository with nothing to list yet (a fresh `git init`), it falls back to an async filesystem walk with a static ignore list, dot entries included but hidden by default. `.gitignore` parsing is a v2 candidate.

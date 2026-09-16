@@ -48,13 +48,16 @@ export interface NavigatorOptions {
   refresh: () => void;
 }
 
-const HINTS: Record<string, string> = {
+const FOCUS_HINTS: Record<Focus, string> = {
   // Width budget: the longest hint plus the pane labels must fit the inner
   // width at a 100-column terminal (98) so the focus indicator never gets
   // truncated off the footer (render test enforces this at 120, 100, 80).
   files: "j k move  Enter open  Tab  / filter  . hidden  y copy  ? help  q close",
   git: "j k move  Enter open file  g G jump  Tab  y copy  ? help  q close",
-  viewer: "j k scroll  Ctrl+d/u  h l x  w wrap  / search  n N  Tab  ? help  q close",
+  viewer: "j k scroll  Ctrl+d/u  h l  w wrap  / search  n N  Tab  ? help  q close",
+};
+
+const MODE_HINTS: Record<Exclude<InputMode, "normal">, string> = {
   filter: "type to filter  up/down move  Enter apply  Esc clear",
   search: "type to search  up/down match  Enter apply  Esc clear",
   help: "j k scroll  q Esc ? close help",
@@ -69,7 +72,8 @@ const HELP_ROWS: Array<[string, string]> = [
   ["Enter", "open file, or toggle a directory"],
   ["l h / arrows", "expand or collapse a directory"],
   ["/", "filter the tree, search the file"],
-  ["n N", "next or previous match"],
+  ["n N", "next/prev match (viewer)"],
+  ["up/down, ^n/^p", "cycle matches (searching)"],
   ["w", "toggle word wrap"],
   ["h l", "horizontal scroll when wrap is off"],
   [".", "toggle hidden files"],
@@ -119,6 +123,8 @@ export class NavigatorOverlay implements Focusable {
 
   private viewFile: ViewerFile | null = null;
   private viewLoading = false;
+  private viewTargetRelPath: string | null = null;
+  private loadSeq = 0;
   private viewScroll = 0;
   private viewHscroll = 0;
   private viewWrap = false;
@@ -174,10 +180,13 @@ export class NavigatorOverlay implements Focusable {
   }
 
   getOpenRelPath(): string | null {
-    return this.viewFile?.relPath ?? null;
+    return this.viewTargetRelPath ?? this.viewFile?.relPath ?? null;
   }
 
   getOpenMtime(): number | undefined {
+    if (this.viewLoading && this.viewTargetRelPath && this.viewTargetRelPath !== this.viewFile?.relPath) {
+      return undefined;
+    }
     return this.viewFile?.mtimeMs;
   }
 
@@ -190,29 +199,38 @@ export class NavigatorOverlay implements Focusable {
 
   /** Open a file by relative path (async; sets viewer state on completion). */
   async openRelPath(relPath: string, keepScroll = false): Promise<void> {
+    const seq = ++this.loadSeq;
     this.viewLoading = true;
+    this.viewTargetRelPath = relPath;
+    const sameFile = this.viewFile?.relPath === relPath;
+    if (!keepScroll || !sameFile) {
+      this.viewScroll = 0;
+      this.viewHscroll = 0;
+      if (!sameFile) {
+        this.searchQuery = "";
+        this.searchMatches = [];
+        this.searchIndex = 0;
+      }
+    }
     this.touch();
+    this.requestRender();
+
     try {
       const file = await this.loadFile(relPath);
-      if (this.disposed) return;
-      const sameFile = this.viewFile?.relPath === relPath;
+      if (this.disposed || this.loadSeq !== seq) return;
       this.viewFile = file;
       this.diskChanged = false;
       if (!keepScroll || !sameFile) {
         this.viewScroll = 0;
         this.viewHscroll = 0;
-        if (!sameFile) {
-          this.searchQuery = "";
-          this.searchMatches = [];
-          this.searchIndex = 0;
-        }
       }
     } catch {
-      if (this.disposed) return;
+      if (this.disposed || this.loadSeq !== seq) return;
       this.viewFile = { kind: "error", relPath, lines: [], message: "unexpected read failure" };
     } finally {
-      if (!this.disposed) {
+      if (!this.disposed && this.loadSeq === seq) {
         this.viewLoading = false;
+        this.viewTargetRelPath = null;
         this.touch();
         this.requestRender();
       }
@@ -344,9 +362,9 @@ export class NavigatorOverlay implements Focusable {
       this.recomputeSearch();
       this.searchIndex = 0;
       this.searchJump = true;
-    } else if (matchesKey(data, Key.down)) {
+    } else if (matchesKey(data, Key.down) || matchesKey(data, Key.ctrl("n"))) {
       this.cycleSearch(1);
-    } else if (matchesKey(data, Key.up)) {
+    } else if (matchesKey(data, Key.up) || matchesKey(data, Key.ctrl("p"))) {
       this.cycleSearch(-1);
     } else {
       const printable = printableChar(data);
@@ -561,7 +579,7 @@ export class NavigatorOverlay implements Focusable {
       if (row?.kind === "file") value = row.relPath;
       else if (row?.kind === "commit") value = row.commit.shortHash;
     } else if (this.focus === "viewer") {
-      value = this.viewFile?.relPath ?? "";
+      value = this.viewTargetRelPath ?? this.viewFile?.relPath ?? "";
     } else {
       value = this.filesRows()[this.filesCursor]?.node.relPath ?? "";
     }
@@ -731,14 +749,25 @@ export class NavigatorOverlay implements Focusable {
     return this.joinLeftRight(left, right, innerW);
   }
 
+  private getFooterHint(): string {
+    switch (this.mode) {
+      case "help":
+        return MODE_HINTS.help;
+      case "filter":
+        return MODE_HINTS.filter;
+      case "search":
+        return MODE_HINTS.search;
+      case "normal":
+        return FOCUS_HINTS[this.focus];
+    }
+  }
+
   private buildFooterRow(innerW: number): string {
     const T = this.T;
     // While filtering, the footer row area carries the filter bar instead of
     // the plain hints (plan section 3.6 item 6).
     if (this.mode === "filter") return this.buildFilterBar(innerW);
-    // HINTS is a Record index signature, so every access is string | undefined
-    // under noUncheckedIndexedAccess; the trailing ?? "" keeps the hint total.
-    const hint = (this.mode === "help" ? HINTS.help : HINTS[this.mode] ?? HINTS[this.focus]) ?? "";
+    const hint = this.getFooterHint();
     const left = " " + T.dim(hint);
     let right = "";
     if (this.notice) {
@@ -876,7 +905,8 @@ export class NavigatorOverlay implements Focusable {
       body = T.dim(indent + marker) + nameStyle(label);
     } else {
       const indent = "  ".repeat(Math.max(0, row.node.depth));
-      const isOpen = row.node.relPath === this.viewFile?.relPath;
+      const openPath = this.viewTargetRelPath ?? this.viewFile?.relPath;
+      const isOpen = row.node.relPath === openPath;
       let nameStyle = (text: string) => T.text(text);
       if (isOpen) nameStyle = (text: string) => T.accent(T.bold(text));
       else if (row.node.hidden) nameStyle = (text: string) => T.dim(text);
@@ -951,7 +981,8 @@ export class NavigatorOverlay implements Focusable {
     rows.push(headerRow);
 
     const area = Math.max(1, body - 1);
-    const file = this.viewFile;
+    const isSwitching = this.viewLoading && this.viewTargetRelPath !== null && this.viewTargetRelPath !== this.viewFile?.relPath;
+    const file = isSwitching ? null : this.viewFile;
 
     if (!file && this.viewLoading) {
       for (let i = 0; i < area; i++) rows.push(this.padTo(i === 0 ? " " + this.T.dim("(loading\u2026)") : "", rightW));
@@ -1018,8 +1049,10 @@ export class NavigatorOverlay implements Focusable {
 
   private buildViewerHeader(rightW: number): string {
     const T = this.T;
-    const file = this.viewFile;
-    const left = " " + (this.focus === "viewer" ? T.accent(T.bold(this.shortPath(file?.relPath ?? "(no file)"))) : T.muted(this.shortPath(file?.relPath ?? "(no file)")));
+    const isSwitching = this.viewLoading && this.viewTargetRelPath !== null && this.viewTargetRelPath !== this.viewFile?.relPath;
+    const currentPath = (isSwitching ? this.viewTargetRelPath : this.viewFile?.relPath) ?? "(no file)";
+    const file = isSwitching ? null : this.viewFile;
+    const left = " " + (this.focus === "viewer" ? T.accent(T.bold(this.shortPath(currentPath))) : T.muted(this.shortPath(currentPath)));
     const meta: string[] = [];
     if (file) {
       const size = formatSize(file.sizeBytes);
@@ -1029,6 +1062,8 @@ export class NavigatorOverlay implements Focusable {
       if (this.viewWrap) meta.push("wrap");
       if (this.viewHscroll > 0) meta.push(`col ${this.viewHscroll + 1}`);
       if (this.viewLoading) meta.push("loading\u2026");
+    } else if (this.viewLoading && currentPath !== "(no file)") {
+      meta.push("loading\u2026");
     }
     const right = meta.length > 0 ? T.dim(meta.join(" \u00b7 ")) + " " : " ";
     return this.joinLeftRight(left, right, rightW);
@@ -1051,7 +1086,7 @@ export class NavigatorOverlay implements Focusable {
   private buildSearchBar(rightW: number): string {
     return this.buildInputBar(
       this.searchQuery,
-      HINTS.search ?? "",
+      MODE_HINTS.search,
       this.searchQuery
         ? `${this.searchMatches.length === 0 ? 0 : this.searchIndex + 1}/${this.searchMatches.length} matches`
         : null,
@@ -1063,7 +1098,7 @@ export class NavigatorOverlay implements Focusable {
   private buildFilterBar(width: number): string {
     return this.buildInputBar(
       this.filterQuery,
-      HINTS.filter ?? "",
+      MODE_HINTS.filter,
       this.filterQuery ? `${this.filesRows().length} matches` : null,
       width,
     );

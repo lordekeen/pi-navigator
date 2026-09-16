@@ -33,20 +33,26 @@ const KEYS = {
   backspace: "\x7f",
   ctrlD: "\x04",
   ctrlU: "\x15",
+  ctrlN: "\x0e",
+  ctrlP: "\x10",
 } as const;
 
 interface Harness {
   overlay: NavigatorOverlay;
   opened: string[];
-  state: { closed: number; refreshed: number };
+  state: { closed: number; refreshed: number; renders: number };
 }
 
-function makeHarness(rows = 36): Harness {
+function makeHarness(
+  rows = 36,
+  customLoadFile?: (relPath: string) => Promise<ViewerFile>,
+  customTheme?: (color: string, text: string) => string,
+): Harness {
   const opened: string[] = [];
-  const state = { closed: 0, refreshed: 0 };
+  const state = { closed: 0, refreshed: 0, renders: 0 };
 
   const theme = makeNavigatorTheme({
-    fg: (_color: string, text: string) => text,
+    fg: (color: string, text: string) => (customTheme ? customTheme(color, text) : text),
     bg: (_color: string, text: string) => text,
     bold: (text: string) => text,
     underline: (text: string) => text,
@@ -57,20 +63,24 @@ function makeHarness(rows = 36): Harness {
     cwd: "/work",
     theme,
     getTerminalRows: () => rows,
-    requestRender: () => undefined,
+    requestRender: () => {
+      state.renders += 1;
+    },
     onClose: () => {
       state.closed += 1;
     },
-    loadFile: async (relPath: string): Promise<ViewerFile> => {
-      opened.push(relPath);
-      return {
-        kind: "text",
-        relPath,
-        sizeBytes: 10,
-        lineCount: 3,
-        lines: ["alpha", "beta", "gamma"],
-      };
-    },
+    loadFile:
+      customLoadFile ??
+      (async (relPath: string): Promise<ViewerFile> => {
+        opened.push(relPath);
+        return {
+          kind: "text",
+          relPath,
+          sizeBytes: 10,
+          lineCount: 3,
+          lines: ["alpha", "beta", "gamma"],
+        };
+      }),
     refresh: () => {
       state.refreshed += 1;
     },
@@ -279,7 +289,9 @@ describe("viewer keys", () => {
     harness.overlay.handleInput("w");
     harness.overlay.handleInput("h");
     harness.overlay.handleInput("l");
-    harness.overlay.render(120); // clamps happen in render
+    const rendered = harness.overlay.render(120).join("\n"); // clamps happen in render
+    expect(rendered).toContain("h l  w wrap");
+    expect(rendered).not.toContain("h l x");
     expect(harness.state.closed).toBe(0);
   });
 
@@ -298,8 +310,34 @@ describe("viewer keys", () => {
 
     harness.overlay.handleInput("n");
     harness.overlay.handleInput("N");
+    // Ctrl+N and Ctrl+P cycle matches while in search mode
+    harness.overlay.handleInput(KEYS.ctrlN);
+    expect(harness.overlay.render(120).join("\n")).toContain("/a");
+    harness.overlay.handleInput(KEYS.ctrlP);
+    expect(harness.overlay.render(120).join("\n")).toContain("/a");
+
     harness.overlay.handleInput(KEYS.escape);
     expect(harness.overlay.render(120).join("\n")).not.toContain("/a");
+  });
+
+  it("resolves footer hints explicitly based on mode and focus", () => {
+    const harness = makeHarness();
+    withTree(harness, ["a.ts"]);
+
+    // normal files focus
+    let rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).toContain("Enter open");
+
+    // git focus
+    harness.overlay.handleInput(KEYS.tab);
+    rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).toContain("g G jump");
+
+    // help mode
+    harness.overlay.handleInput("?");
+    rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).toContain("close help");
+    harness.overlay.handleInput(KEYS.escape);
   });
 });
 
@@ -333,5 +371,190 @@ describe("copy (y)", () => {
     harness.overlay.handleInput("y");
     await Promise.resolve();
     expect(copyToClipboard).toHaveBeenCalledWith("abc1234");
+  });
+});
+
+// ── Issue #001: Stale content race when opening file ──
+
+describe("Issue #001: stale content race when opening file", () => {
+  it("immediately updates viewer header, loading indicator, and accent styling while loading", async () => {
+    let resolveFileB!: (file: ViewerFile) => void;
+    const harness = makeHarness(
+      36,
+      (relPath: string) => {
+        if (relPath === "b.ts") {
+          return new Promise<ViewerFile>((resolve) => {
+            resolveFileB = resolve;
+          });
+        }
+        return Promise.resolve({
+          kind: "text",
+          relPath,
+          sizeBytes: 100,
+          lineCount: 3,
+          lines: ["line-from-a-alpha", "line-from-a-beta", "line-from-a-gamma"],
+        });
+      },
+      (color, text) => (color === "accent" ? `[ACCENT:${text}]` : text),
+    );
+
+    withTree(harness, ["a.ts", "b.ts"]);
+
+    // 1. Open file A and let it resolve.
+    harness.overlay.handleInput(KEYS.enter);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    let rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).toContain("line-from-a-alpha");
+    expect(rendered).toContain("[ACCENT:a.ts]");
+    expect(harness.overlay.getOpenRelPath()).toBe("a.ts");
+
+    // 2. Tab back to files pane, move cursor to b.ts, and press Enter to open file B.
+    harness.overlay.handleInput(KEYS.tab); // viewer -> files
+    harness.overlay.handleInput("j"); // cursor to b.ts
+    harness.overlay.handleInput(KEYS.enter); // trigger openRelPath("b.ts")
+
+    // File B is still in flight (resolveFileB has not been called).
+    rendered = harness.overlay.render(120).join("\n");
+
+    // Acceptance Criteria checks while in flight:
+    // - Selecting a file immediately updates the viewer header to target file (b.ts)
+    // - File-row accent highlighting immediately targets b.ts, not a.ts
+    expect(rendered).toContain("[ACCENT:b.ts]");
+    expect(rendered).not.toContain("[ACCENT:a.ts]");
+
+    // - Viewer header displays loading indicator for b.ts
+    expect(rendered).toContain("b.ts");
+    expect(rendered).toContain("loading\u2026");
+
+    // - Viewer displays loading indicator rather than stale contents from a.ts
+    expect(rendered).toContain("(loading\u2026)");
+    expect(rendered).not.toContain("line-from-a-alpha");
+
+    // - getOpenRelPath() immediately reflects b.ts
+    expect(harness.overlay.getOpenRelPath()).toBe("b.ts");
+
+    // 3. Resolve file B
+    resolveFileB({
+      kind: "text",
+      relPath: "b.ts",
+      sizeBytes: 200,
+      lineCount: 2,
+      lines: ["line-from-b-one", "line-from-b-two"],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).toContain("line-from-b-one");
+    expect(rendered).not.toContain("loading\u2026");
+    expect(rendered).not.toContain("(loading\u2026)");
+  });
+
+  it("preserves content and does not flash empty/loading during same-file reload (r)", async () => {
+    let reloadDeferred: ((file: ViewerFile) => void) | null = null;
+    let isReload = false;
+    const harness = makeHarness(
+      36,
+      (relPath: string) => {
+        if (relPath === "a.ts" && isReload) {
+          return new Promise<ViewerFile>((resolve) => {
+            reloadDeferred = resolve;
+          });
+        }
+        return Promise.resolve({
+          kind: "text",
+          relPath,
+          sizeBytes: 100,
+          lineCount: 3,
+          lines: ["content-original"],
+        });
+      },
+    );
+
+    withTree(harness, ["a.ts"]);
+    harness.overlay.handleInput(KEYS.enter); // open a.ts
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    let rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).toContain("content-original");
+
+    // Set flag so next loadFile waits for reloadDeferred
+    isReload = true;
+
+    // Press 'r' to reload
+    harness.overlay.handleInput("r");
+
+    // While in flight, the current content should STILL be visible (no regression in content or blanking)
+    rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).toContain("content-original");
+    expect(rendered).not.toContain("(loading\u2026)");
+    expect(rendered).toContain("loading\u2026"); // header meta shows loading…
+
+    // Complete reload
+    expect(reloadDeferred).not.toBeNull();
+    reloadDeferred!({
+      kind: "text",
+      relPath: "a.ts",
+      sizeBytes: 120,
+      lineCount: 1,
+      lines: ["content-reloaded"],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).toContain("content-reloaded");
+    expect(rendered).not.toContain("loading\u2026");
+  });
+
+  it("handles race condition: slow request for file A does not overwrite fast request for file B", async () => {
+    let resolveFileA!: (file: ViewerFile) => void;
+    let resolveFileB!: (file: ViewerFile) => void;
+
+    const harness = makeHarness(36, (relPath: string) => {
+      if (relPath === "a.ts") {
+        return new Promise<ViewerFile>((resolve) => {
+          resolveFileA = resolve;
+        });
+      }
+      if (relPath === "b.ts") {
+        return new Promise<ViewerFile>((resolve) => {
+          resolveFileB = resolve;
+        });
+      }
+      return Promise.resolve({ kind: "text", relPath, lines: [] });
+    });
+
+    withTree(harness, ["a.ts", "b.ts"]);
+
+    // Request file A first (slow)
+    void harness.overlay.openRelPath("a.ts");
+    // Request file B second (fast)
+    void harness.overlay.openRelPath("b.ts");
+
+    // Resolve file B first
+    resolveFileB({
+      kind: "text",
+      relPath: "b.ts",
+      lines: ["file-b-content"],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    let rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).toContain("file-b-content");
+    expect(harness.overlay.getOpenRelPath()).toBe("b.ts");
+
+    // Now resolve file A later
+    resolveFileA({
+      kind: "text",
+      relPath: "a.ts",
+      lines: ["file-a-content"],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Viewer should STILL show file B!
+    rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).toContain("file-b-content");
+    expect(rendered).not.toContain("file-a-content");
+    expect(harness.overlay.getOpenRelPath()).toBe("b.ts");
   });
 });

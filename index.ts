@@ -2,7 +2,7 @@
  * pi-navigator — read-only project file navigator overlay for pi.
  *
  * Opens a centered overlay with a file tree, git state panel, and a
- * syntax-highlighted viewer. Launch via /navigator or ctrl+n.
+ * syntax-highlighted viewer. Launch via /navigator.
  *
  * Data ownership: this entry point owns all async work (git, tree collection,
  * file stats) and pushes results into the overlay through setters. The overlay
@@ -22,8 +22,16 @@ import type {
   Theme,
 } from "@earendil-works/pi-coding-agent";
 
-import { OVERLAY_OPTIONS, REFRESH_INTERVAL_MS } from "./constants";
-import { detectRepo, gitCodeMap, gitTreeProbe, readGitState, readTrackedFiles, toCwdRelative } from "./git";
+import { MAX_POLL_INTERVAL_MS, OVERLAY_OPTIONS, REFRESH_INTERVAL_MS } from "./constants";
+import {
+  detectRepo,
+  gitCodeMap,
+  gitTreeProbe,
+  readGitState,
+  readTrackedFiles,
+  resetGitAvailabilityCache,
+  toCwdRelative,
+} from "./git";
 import { NavigatorOverlay } from "./navigator";
 import { makeNavigatorTheme } from "./theme";
 import {
@@ -61,16 +69,17 @@ async function runNavigator(ctx: ExtensionContext | ExtensionCommandContext): Pr
       let treeSource: "git" | "fs" | null = null;
       let signature = "";
       let treeProbe: string | null = null;
-      let interval: ReturnType<typeof setInterval> | null = null;
+      let pollTimer: ReturnType<typeof setTimeout> | null = null;
+      let currentPollDelay = REFRESH_INTERVAL_MS;
       let closed = false;
       let inFlight = false;
       let lastError: string | null = null;
 
       /** Stop everything this overlay owns. Safe to call more than once. */
       const cleanup = (): void => {
-        if (interval) {
-          clearInterval(interval);
-          interval = null;
+        if (pollTimer) {
+          clearTimeout(pollTimer);
+          pollTimer = null;
         }
         overlay.dispose();
       };
@@ -86,6 +95,17 @@ async function runNavigator(ctx: ExtensionContext | ExtensionCommandContext): Pr
         if (!closed) tui.requestRender();
       };
 
+      const scheduleNextPoll = (): void => {
+        if (closed) return;
+        if (pollTimer) clearTimeout(pollTimer);
+        pollTimer = setTimeout(async () => {
+          if (closed) return;
+          await refreshData();
+          scheduleRender();
+          scheduleNextPoll();
+        }, currentPollDelay);
+      };
+
       const overlay = new NavigatorOverlay({
         cwd,
         theme,
@@ -94,7 +114,12 @@ async function runNavigator(ctx: ExtensionContext | ExtensionCommandContext): Pr
         onClose: close,
         loadFile: (relPath: string) => loadFile(join(cwd, relPath), relPath),
         refresh: () => {
-          void refreshData().then(scheduleRender);
+          resetGitAvailabilityCache();
+          currentPollDelay = REFRESH_INTERVAL_MS;
+          void refreshData().then(() => {
+            scheduleRender();
+            scheduleNextPoll();
+          });
         },
       });
 
@@ -161,14 +186,26 @@ async function runNavigator(ctx: ExtensionContext | ExtensionCommandContext): Pr
           lastError = null;
 
           const openRel = overlay.getOpenRelPath();
+          let fileMtimeChanged = false;
           if (openRel) {
             try {
               const info = await stat(join(cwd, openRel));
               const known = overlay.getOpenMtime();
-              overlay.setDiskChanged(known !== undefined && Math.abs(info.mtimeMs - known) > 1);
+              const changed = known !== undefined && Math.abs(info.mtimeMs - known) > 1;
+              overlay.setDiskChanged(changed);
+              fileMtimeChanged = changed;
             } catch {
               overlay.setDiskChanged(true);
+              fileMtimeChanged = true;
             }
+          }
+
+          // Dynamic polling backoff: if state changed, poll frequently (base delay);
+          // if idle without changes, back off up to MAX_POLL_INTERVAL_MS (Issue #008).
+          if (treeChanged || fileMtimeChanged) {
+            currentPollDelay = REFRESH_INTERVAL_MS;
+          } else {
+            currentPollDelay = Math.min(MAX_POLL_INTERVAL_MS, currentPollDelay + 2000);
           }
         } catch (error) {
           if (closed) return;
@@ -184,20 +221,22 @@ async function runNavigator(ctx: ExtensionContext | ExtensionCommandContext): Pr
         }
       };
 
-      void refreshData().then(scheduleRender);
-      interval = setInterval(() => {
-        void refreshData().then(scheduleRender);
-      }, REFRESH_INTERVAL_MS);
+      void refreshData().then(() => {
+        scheduleRender();
+        scheduleNextPoll();
+      });
 
       return {
         render: (width: number) => overlay.render(width),
         handleInput: (data: string) => {
           overlay.handleInput(data);
           scheduleRender();
+          currentPollDelay = REFRESH_INTERVAL_MS;
+          scheduleNextPoll();
         },
         invalidate: () => overlay.invalidate(),
         // The framework calls dispose() when it closes the overlay itself, so
-        // the interval is cleared even if close() was never reached.
+        // the polling timer is cleared even if close() was never reached.
         dispose: cleanup,
       };
     },
@@ -209,13 +248,6 @@ export default function (pi: ExtensionAPI): void {
   pi.registerCommand("navigator", {
     description: "Open the read-only project navigator (file tree, git state, viewer)",
     handler: async (_args, ctx) => {
-      await runNavigator(ctx);
-    },
-  });
-
-  pi.registerShortcut("ctrl+n", {
-    description: "Open pi-navigator",
-    handler: async (ctx) => {
       await runNavigator(ctx);
     },
   });
