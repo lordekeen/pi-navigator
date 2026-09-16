@@ -181,9 +181,10 @@ export function formatSize(bytes: number | undefined): string {
 
 /**
  * Decode UTF-8 bytes, dropping a trailing sequence that the read cut in half,
- * so a capped read never ends on a replacement character.
+ * so a capped read never ends on a replacement character. Exported for the
+ * unit suite; the loader itself uses it through readCappedHead.
  */
-function decodeUtf8Head(buffer: Buffer): string {
+export function decodeUtf8Head(buffer: Buffer): string {
   let end = buffer.length;
   const last = buffer[end - 1];
   if (last !== undefined && last >= 0x80) {
@@ -341,7 +342,11 @@ export function searchLines(lines: string[], query: string): SearchMatch[] {
   const needle = smartCase ? query : query.toLowerCase();
   const matches: SearchMatch[] = [];
   for (let line = 0; line < lines.length; line++) {
-    const haystack = smartCase ? lines[line] : lines[line].toLowerCase();
+    // Defensive: a malformed ViewerFile with a hole in lines would otherwise
+    // throw on the .toLowerCase() below. Well-formed files never hit this.
+    const raw = lines[line];
+    if (raw === undefined) continue;
+    const haystack = smartCase ? raw : raw.toLowerCase();
     let from = 0;
     let idx: number;
     while ((idx = haystack.indexOf(needle, from)) !== -1) {
@@ -369,6 +374,7 @@ export function computeRows(file: ViewerFile, width: number, wrap: boolean, hscr
   if (width <= 0) return rows;
   for (let i = 0; i < file.lines.length; i++) {
     const line = file.lines[i];
+    if (line === undefined) continue;
     if (wrap) {
       const chunks = wrapTextWithAnsi(line, width);
       chunks.forEach((chunk: string, index: number) => rows.push({ line: index === 0 ? i : null, text: chunk }));

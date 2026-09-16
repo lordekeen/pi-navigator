@@ -171,7 +171,8 @@ export function buildTree(cwd: string, entries: TreeEntry[], gitCodes: Map<strin
     let rel = "";
 
     for (let i = 0; i < parts.length - 1; i++) {
-      const part = parts[i];
+      // i is bounded by parts.length, so parts[i] is always present.
+      const part = parts[i]!;
       rel = rel ? `${rel}/${part}` : part;
       let dirNode = dirMap.get(rel);
       if (!dirNode) {
@@ -182,7 +183,8 @@ export function buildTree(cwd: string, entries: TreeEntry[], gitCodes: Map<strin
       current = dirNode;
     }
 
-    const name = parts[parts.length - 1];
+    // parts was checked non-empty above, so the final element exists.
+    const name = parts[parts.length - 1]!;
     const fullRel = parts.join("/");
     const existing = dirMap.get(fullRel);
     if (isDir) {

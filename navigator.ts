@@ -363,7 +363,7 @@ export class NavigatorOverlay implements Focusable {
     if (isShiftTab || matchesKey(data, Key.tab)) {
       const order: Focus[] = ["files", "git", "viewer"];
       const index = order.indexOf(this.focus);
-      this.focus = order[(index + (isShiftTab ? order.length - 1 : 1)) % order.length];
+      this.focus = order[(index + (isShiftTab ? order.length - 1 : 1)) % order.length] ?? "files";
       this.touch();
       return;
     }
@@ -733,7 +733,9 @@ export class NavigatorOverlay implements Focusable {
     // While filtering, the footer row area carries the filter bar instead of
     // the plain hints (plan section 3.6 item 6).
     if (this.mode === "filter") return this.buildFilterBar(innerW);
-    const hint = this.mode === "help" ? HINTS.help : HINTS[this.mode] ?? HINTS[this.focus];
+    // HINTS is a Record index signature, so every access is string | undefined
+    // under noUncheckedIndexedAccess; the trailing ?? "" keeps the hint total.
+    const hint = (this.mode === "help" ? HINTS.help : HINTS[this.mode] ?? HINTS[this.focus]) ?? "";
     const left = " " + T.dim(hint);
     let right = "";
     if (this.notice) {
@@ -888,6 +890,9 @@ export class NavigatorOverlay implements Focusable {
     let info = "";
     if (git?.available) {
       info = T.dim(`${git.unstaged.length} unstaged \u00b7 ${git.staged.length} staged`) + " ";
+      // Plan section 7: when the tree came from the filesystem walk (empty
+      // repository fallback), the panel says so instead of implying git mode.
+      if (this.treeSource === "fs") info = T.dim("fs walk") + " ";
     } else {
       info = T.dim(git?.error ?? "unavailable") + " ";
     }
@@ -1036,7 +1041,7 @@ export class NavigatorOverlay implements Focusable {
   private buildSearchBar(rightW: number): string {
     return this.buildInputBar(
       this.searchQuery,
-      HINTS.search,
+      HINTS.search ?? "",
       this.searchQuery ? `${this.searchIndex + 1}/${this.searchMatches.length} matches` : null,
       rightW,
     );
@@ -1046,7 +1051,7 @@ export class NavigatorOverlay implements Focusable {
   private buildFilterBar(width: number): string {
     return this.buildInputBar(
       this.filterQuery,
-      HINTS.filter,
+      HINTS.filter ?? "",
       this.filterQuery ? `${this.filesRows().length} matches` : null,
       width,
     );
@@ -1144,7 +1149,9 @@ export class NavigatorOverlay implements Focusable {
     for (let i = 0; i < modal.length; i++) {
       const target = 3 + startRow + i; // lines[0..2] are top, title, separator
       if (target >= lines.length - 1) break;
-      const rowInner = " ".repeat(colPad) + modal[i] + " ".repeat(Math.max(0, innerW - colPad - visibleWidth(modal[i])));
+      const modalRow = modal[i];
+      if (modalRow === undefined) continue;
+      const rowInner = " ".repeat(colPad) + modalRow + " ".repeat(Math.max(0, innerW - colPad - visibleWidth(modalRow)));
       lines[target] = T.frame("\u2502") + this.padTo(rowInner, innerW) + T.frame("\u2502");
     }
   }

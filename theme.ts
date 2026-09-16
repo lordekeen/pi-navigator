@@ -38,7 +38,10 @@ export function makeNavigatorTheme(theme: Theme): NavigatorTheme {
     bold: (t) => (typeof theme.bold === "function" ? theme.bold(t) : t),
     selectedBg: (t) => theme.bg("selectedBg", t),
     searchMatch: (t) => theme.bg("searchMatchBg", theme.fg("searchMatchText", t)),
-    searchCurrent: (t) => theme.bg("searchMatchText", theme.fg("searchMatchBg", t)),
+    // Current match: same pair plus underline, mirroring pi's own tui-renderer.
+    // A token-inverted pair would pass a ThemeColor name to theme.bg(), which
+    // throws at runtime (theme.bg rejects unknown keys) and fails typecheck.
+    searchCurrent: (t) => theme.underline(theme.bg("searchMatchBg", theme.fg("searchMatchText", t))),
     frame: (t) => theme.fg("dim", t),
   };
 }
