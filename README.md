@@ -92,11 +92,25 @@ Files: `index.ts` (entry, async data ownership), `navigator.ts` (overlay compone
 
 Planning documents live in `plans/`: `ui-standards-report.md` (platform and reference findings) and `pi-navigator-implementation-plan.md` (locked decisions, contracts, QA checklist). The throwaway visual mock is `mockups/navigator.html` — open it in a browser and drive it with the same keymap.
 
-### Deferred tooling (enable when Node and npm are available)
+### Tooling (enabled — Linux, Node 26, git 2.55)
 
-Not scaffolded yet on purpose: the current development machine has no node/npm, and the extension runs without them inside pi's bundled runtime.
+Dev-only: `typescript`, `@types/node`, `vitest`, and `@earendil-works/pi-tui` +
+`@earendil-works/pi-coding-agent` pinned to the running pi version (0.85.1), so
+the suites exercise the real wrap/width/highlighting implementations. No
+runtime dependencies, ever — `node_modules` is dev-only.
 
-1. `npm install -D typescript @types/node vitest`
-2. Add `tsconfig.json` (strict, NodeNext, no emit) and run `npx tsc --noEmit`.
-3. Add `vitest.config.ts` and `test/` for the pure logic: porcelain parsing (staged versus unstaged split, renames, prefix translation), tree building and expansion preservation, filter ranking, viewer caps, binary detection, display-row math, and keymap reducers.
-4. Add `"scripts": { "typecheck": "tsc --noEmit", "test": "vitest run" }` to `package.json`.
+- `npm run typecheck` — `tsc --noEmit`. `moduleResolution: "bundler"` rather
+  than the plan's original "NodeNext" because pi loads extensions through jiti,
+  which resolves the code's intentionally extensionless relative imports;
+  NodeNext would demand `.js` extensions the runtime does not need.
+- `npm test` — five vitest suites (99 cases): porcelain `-z` parsing plus a
+  real-git scratch-repo integration pass, tree building/fs-walk fixtures
+  (ignores, dot entries, symlink cycles), viewer caps and UTF-8 head decoding,
+  the keymap reducer (escape precedence, focus cycling, copy), and render
+  width-safety at 120x36, 100x28 and 80x24 including help/filter/search modes
+  and the compact notice.
+
+Test runs must stay green with `typecheck` and `test`; the suites have already
+caught real bugs (a search-highlight crash from inverted theme tokens, a
+symlink-to-root walk cycle, and footer focus labels truncated off at narrow
+widths), so they are part of the definition of done, not decoration.

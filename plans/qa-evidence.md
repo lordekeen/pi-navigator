@@ -2,14 +2,47 @@
 
 Companion to section 13 of [`pi-navigator-implementation-plan.md`](pi-navigator-implementation-plan.md).
 
-Environment for this pass: Windows 11, PowerShell. `node`, `npm` and `git` are **not on PATH**
-(the constraint recorded in section 5 of the standards report), and the extension only runs inside
-pi's bundled runtime. So nothing in this log was executed: every entry is a **static** verification —
-source reading, arithmetic on the layout formulas, and the reference documentation cited inline.
-Runtime and manual checks stay open, and section 13's boxes stay unchecked until someone runs them
-in a terminal.
+Two passes are logged below: the **executed** pass (Linux, Node 26, real git —
+this machine) and the original **static** pass (Windows 11, no Node).
 
-## What was verified statically, and how
+## Executed pass (Linux, CachyOS, Node v26.7.0, npm 12, git 2.55, pi 0.85.1)
+
+Tooling from plan section 11 is now enabled (`tsconfig.json`, `vitest`, the two pi
+packages pinned to 0.85.1 as devDependencies). The suites and their evidence:
+
+| Section 13 item | Status | Evidence |
+|---|---|---|
+| Overlay opens centered at 120x36 / 100x28 / 80x24, no width overflow | **Executed** | `test/render.test.ts` renders every line at 120x36, 100x28, 80x24 and 60 wide and asserts `visibleWidth(line) <= width` for the frame, help modal, filter/search bars, cards and the compact notice. Caught a real footer bug: the pane labels were truncated off at ≤120 columns because hint + labels exceeded the inner width; `joinLeftRight` now guarantees the right side and ellipsizes the hint. |
+| Focus cycling reorders styling and footer hints | **Executed** | `test/navigator.test.ts` (focus cycling) drives Tab/shift+tab and asserts the focused pane label renders. |
+| Tree: expand, collapse, open, filter, hidden toggle, symlink leaf | **Executed** | `test/navigator.test.ts` (files pane keys) plus `test/tree.test.ts` fixtures. The symlink fixture exposed a real cycle-guard hole: the walk's visited-set never seeded the workspace root, so a link pointing at the root re-walked the whole tree; `collectFsEntries` now seeds it. |
+| Git panel correctness, ahead/behind, history | **Executed** | `test/git.test.ts` runs a real scratch repo (`git init -b main`): staged/unstaged split against actual porcelain `-z` output, `git mv` rename record consumption, paths with spaces and embedded newlines, subdirectory prefix translation, history subjects/dates. |
+| Git absent: fs walk mode, panel states | **Executed** | `test/git.test.ts` (no-repo degradation) + `test/tree.test.ts` (ignore list, dot entries, broken links). |
+| Viewer: gutters align, wrap reflows, h-scroll clamps, search navigates | **Executed** | `test/viewer.test.ts`: real `wrapTextWithAnsi` chunk rows, `sliceStyled` h-scroll clipping, smart-case `searchLines`/`markMatches`, `decodeUtf8Head` on cut 2/3/4-byte sequences; `test/render.test.ts` with wrap on and off. |
+| Caps: 1.1 MB truncated, binary card, png card | **Executed** | `test/viewer.test.ts`: 5000-line cap, 1.5 MB byte cap (whole file never read, lineCount undefined), NUL-byte binary card, PNG dimension card. |
+| Escape precedence: filter, then search, then close | **Executed** | `test/navigator.test.ts` covers clear-filter, clear-search, close, and notes that `q` is a printable while filtering. |
+| No timers leak after close | Source reading | `cleanup()`/`dispose` unchanged; interval only exists while the overlay is open (verified statically as before). A live drive is still the only way to watch the render log settle. |
+| Theme change mid-session triggers invalidate and re-render | Source reading | unchanged; still requires a live session. |
+
+Everything in this pass ran with the **real** pi-tui/pi-coding-agent packages
+(only `copyToClipboard` is stubbed, per test). `npm run typecheck` and
+`npm test` (99 cases) are green on this machine.
+
+Still open (need a live interactive session):
+
+- Driving `/navigator` at 120x36, 100x28, 80x24 and a 20-row terminal with a
+  real keyboard (the render suites cover geometry; they cannot cover terminal
+  delivery).
+- IME input in the search bar with a CJK input method.
+- `ctrl+n` delivery on Windows Terminal / VS Code terminal.
+
+## Earlier static pass (Windows 11, no Node)
+
+Environment for that pass: Windows 11, PowerShell. `node`, `npm` and `git` were **not on PATH**
+(the constraint recorded in section 5 of the standards report), and the extension only runs inside
+pi's bundled runtime. So nothing in that log was executed: every entry was a **static** verification —
+source reading, arithmetic on the layout formulas, and the reference documentation cited inline.
+Runtime and manual checks stayed open, and section 13's boxes stayed unchecked until someone ran them
+in a terminal.
 
 | Section 13 item | Static status | Evidence |
 |---|---|---|
@@ -72,14 +105,13 @@ deleted from the working tree.
 
 ## What is still required before the section 13 boxes can be ticked
 
-1. Install Node and run `npm install -D typescript @types/node vitest`, add `tsconfig.json`
-   (strict, NodeNext, no emit) and `npx tsc --noEmit`.
-2. Write the vitest suites listed in section 11 and run them. The cheapest high-value cases for this
-   pass: `parsePorcelain` with a `-z` rename (target record followed by the source record), a `??`
-   entry, and prefix translation; `reapplyExpansion` with a collapsed top-level directory;
-   `markMatches` with an uppercase query against mixed-case text; `decodeUtf8Head` on a head that
-   cuts a 3-byte character; `collectFsProbe` before and after touching a directory.
-3. Drive `/navigator` in a real session at 120x36, 100x28, 80x24 and a 20-row terminal, confirming
-   no line exceeds the pane width and that the compact notice appears on the short one.
-4. Verify IME input in the search bar with a CJK input method, and `ctrl+n` in Windows Terminal and
-   the VS Code terminal.
+Done in the executed pass above: tooling from plan section 11, the vitest
+suites, and the typecheck. Still open, and only a live interactive session can
+settle them:
+
+1. Drive `/navigator` in a real session at 120x36, 100x28, 80x24 and a 20-row
+   terminal, confirming no line exceeds the pane width and that the compact
+   notice appears on the short one (geometry half is covered by
+   `test/render.test.ts`; terminal delivery is not).
+2. Verify IME input in the search bar with a CJK input method, and `ctrl+n` in
+   Windows Terminal and the VS Code terminal.

@@ -303,20 +303,24 @@ File: `mockups/navigator.html` (throwaway).
 
 ---
 
-## 11. Deferred tooling — enable when Node is available
+## 11. Deferred tooling — DONE (Linux, Node 26, pi 0.85.1)
 
-Documented in README and intentionally not scaffolded now:
+Enabled in the executed QA pass; see README "Tooling" and the evidence table in
+[`qa-evidence.md`](qa-evidence.md). Two notes vs. the original wording:
 
-1. `npm install -D typescript vitest @types/node` (no runtime dependencies ever).
-2. Add `tsconfig.json` (strict, NodeNext, no emit) and run `npx tsc --noEmit`.
-3. Add `vitest.config.ts` and `test/` covering pure logic only:
-   - porcelain parser: staged/unstaged split, rename and copy pairs, prefix translation, `-z` handling.
-   - tree builder: directory map assembly, ordering, depth cap, ignore rules, symlink guard.
-   - filter: fuzzy ranking and ancestor chain preservation.
-   - caps and binary detection: boundary sizes, NUL detection.
-   - viewer math: scroll clamping, gutter width, reflow with and without wrap.
-   - keymap reducer: escape precedence, focus cycling, mode transitions.
-4. Add `"scripts": { "typecheck": "tsc --noEmit", "test": "vitest run" }` to package.json at that point.
+- `moduleResolution` is `"bundler"` instead of `"NodeNext"`: pi loads extensions
+  through jiti, which resolves the code's intentionally extensionless imports.
+  NodeNext would demand `.js` extensions the runtime does not need.
+- The two pi packages are devDependencies pinned to the running pi version so
+  the suites exercise the real wrap/width/highlight implementations (`copyToClipboard`
+  is the only stub).
+
+Test suites (99 cases, green): porcelain `-z` parsing + real-git scratch-repo
+integration, tree/fs-walk fixtures (ignores, dot entries, symlink cycles), viewer
+caps and UTF-8 head decoding, keymap reducers, render width-safety at 120x36 /
+100x28 / 80x24 incl. help/filter/search and the compact notice.
+
+Scripts: `"typecheck": "tsc --noEmit"`, `"test": "vitest run"`.
 
 ---
 
@@ -335,21 +339,23 @@ Documented in README and intentionally not scaffolded now:
 
 ---
 
-## 13. QA checklist (manual, evidence required)
+## 13. QA checklist (evidence required)
 
-Evidence log: [`qa-evidence.md`](qa-evidence.md) records the static verification already performed and
-the checks that still need a terminal and a Node install. Boxes below stay unchecked until then.
+Evidence log: [`qa-evidence.md`](qa-evidence.md). Boxes ticked by the executed
+pass (Linux, Node 26, real git + vitest suites) are marked done; the rest need
+a live interactive session.
 
-- [ ] Overlay opens centered at 120x36 and 100x28 with correct borders and no width overflow (render a test row with the longest possible composed line).
-- [ ] Focus cycling reorders styling and footer hints.
-- [ ] Tree: expand, collapse, open, filter, hidden toggle, symlink cycle file renders as leaf.
-- [ ] Git panel with git present: staged versus unstaged correctness on a scratch repo; ahead and behind counters; history list matches `git log -n 20 --oneline`.
-- [ ] Git absent: fs walk mode with the static ignore list; panel states.
-- [ ] Viewer: line numbers align after 9999 lines; wrap toggle reflows; horizontal scroll clamps; search navigates n/N and clears on Esc.
-- [ ] Caps: 1.1 MB file shows truncated notice; binary shows metadata card; png shows metadata card or protocol render per spike outcome.
-- [ ] Escape precedence: filter, then search, then close.
-- [ ] No timers leak after close (interval cleared, no further renders in the log).
-- [ ] Theme change mid-session triggers invalidate and re-render with new colors.
+- [x] Overlay renders width-safe at 120x36 and 100x28 (and 80x24/60), no width overflow — `test/render.test.ts` on every frame/modal/bar line.
+- [x] Focus cycling reorders styling and footer hints — navigator suite (Tab/shift+tab, pane label assertion).
+- [x] Tree: expand, collapse, open, filter, hidden toggle, symlink cycle files render as leaves — navigator + tree suites (fixtures uncovered and fixed a root-symlink cycle hole).
+- [x] Git panel with git present: staged versus unstaged correctness on a scratch repo; ahead and behind counters; history list matches `git log -n 20 --oneline` — real-git integration suite.
+- [x] Git absent: fs walk mode with the static ignore list; panel states — integration + tree suites.
+- [x] Viewer: line numbers align after 9999 lines; wrap toggle reflows; horizontal scroll clamps; search navigates n/N and clears on Esc — viewer/render suites.
+- [x] Caps: 1.1 MB file shows truncated notice; binary shows metadata card; png shows metadata card (protocol render still pending the section 8 spike) — viewer suite.
+- [x] Escape precedence: filter, then search, then close — navigator suite.
+- [ ] No timers leak after close (interval cleared, no further renders in the log) — needs a live session render-log watch.
+- [ ] Theme change mid-session triggers invalidate and re-render with new colors — needs a live session.
+- [ ] Live drive at 80x24 and 20 rows incl. the compact notice on a real terminal, IME input, and `ctrl+n` on Windows Terminal / VS Code terminal — needs those environments.
 
 ---
 
