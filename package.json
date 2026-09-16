@@ -1,0 +1,43 @@
+{
+  "name": "pi-navigator",
+  "version": "0.1.0",
+  "description": "Read-only project file navigator overlay for pi: file tree, git state, and syntax-highlighted viewing without leaving the session.",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "coding-agent",
+    "navigator",
+    "file-tree",
+    "file-viewer",
+    "git",
+    "tui",
+    "terminal-ui",
+    "overlay"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "index.ts",
+    "navigator.ts",
+    "tree.ts",
+    "git.ts",
+    "viewer.ts",
+    "theme.ts",
+    "types.ts",
+    "constants.ts",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

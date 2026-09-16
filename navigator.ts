@@ -1,0 +1,1169 @@
+/**
+ * pi-navigator overlay component.
+ *
+ * Composes the frame, the files pane, the git panel, the viewer pane, the
+ * footer and the help modal. Implements the locked keymap from
+ * plans/pi-navigator-implementation-plan.md section 4.
+ *
+ * All data arrives through setters that follow the plan section 3.6 contract
+ * (setTree / setGitState); the viewer's state is installed by openRelPath(),
+ * which owns its async load. This class owns UI state only and never touches
+ * the filesystem or git directly — the render path stays pure and the async
+ * work stays in index.ts.
+ */
+
+import { copyToClipboard } from "@earendil-works/pi-coding-agent";
+import {
+  CURSOR_MARKER,
+  decodeKittyPrintable,
+  Key,
+  matchesKey,
+  truncateToWidth,
+  visibleWidth,
+  type Focusable,
+} from "@earendil-works/pi-tui";
+
+import {
+  GIT_MIN_ROWS,
+  HALF_PAGE_DIVISOR,
+  LEFT_COLUMN_HIDE_BELOW,
+  LEFT_COLUMN_MAX,
+  LEFT_COLUMN_MIN,
+  LEFT_COLUMN_RATIO,
+  MIN_OVERLAY_HEIGHT,
+  MIN_OVERLAY_WIDTH,
+} from "./constants";
+import { expandAncestors, filterRows, findNode, flattenVisible, hasChanges, moveCursor, pageJump } from "./tree";
+import type { NavigatorTheme } from "./theme";
+import type { FileNode, FilesRow, Focus, GitRow, GitState, InputMode, SearchMatch, ViewerFile } from "./types";
+import { computeRows, formatSize, markMatches, maxLineWidth, searchLines } from "./viewer";
+
+export interface NavigatorOptions {
+  cwd: string;
+  theme: NavigatorTheme;
+  getTerminalRows: () => number;
+  requestRender: () => void;
+  onClose: () => void;
+  loadFile: (relPath: string) => Promise<ViewerFile>;
+  refresh: () => void;
+}
+
+const HINTS: Record<string, string> = {
+  files: "j k move  Enter open  Tab pane  / filter  . hidden  y copy  r refresh  ? help  q close",
+  git: "j k move  Enter open file  g G jump  Tab pane  y copy  r refresh  ? help  q close",
+  viewer: "j k scroll  Ctrl+d/u page  h l scroll-x  w wrap  / search  n N match  Tab pane  r refresh  ? help  q close",
+  filter: "type to filter  up/down move  Enter apply  Esc clear",
+  search: "type to search  up/down match  Enter apply  Esc clear",
+  help: "j k scroll  q Esc ? close help",
+};
+
+const HELP_ROWS: Array<[string, string]> = [
+  ["Tab / Shift+Tab", "cycle pane focus (files, git, viewer)"],
+  ["t", "toggle the file tree"],
+  ["j k / arrows", "move the cursor or scroll"],
+  ["g G", "jump to top or bottom"],
+  ["Ctrl+d Ctrl+u", "half page"],
+  ["Enter", "open file, or toggle a directory"],
+  ["l h / arrows", "expand or collapse a directory"],
+  ["/", "filter the tree, search the file"],
+  ["n N", "next or previous match"],
+  ["w", "toggle word wrap"],
+  ["h l", "horizontal scroll when wrap is off"],
+  [".", "toggle hidden files"],
+  ["y", "copy the selected path"],
+  ["r", "refresh tree and git"],
+  ["?", "this help"],
+  ["q Esc", "close (Esc clears filter or search first)"],
+];
+
+/**
+ * Printable character from a key event, using the platform rule: the Kitty
+ * decoder first, then a single printable code unit. Shared by the filter and
+ * the search input modes so the two cannot drift apart.
+ */
+function printableChar(data: string): string | null {
+  const decoded = decodeKittyPrintable(data) ?? (data.length === 1 && data >= " " ? data : null);
+  return decoded && decoded.length === 1 ? decoded : null;
+}
+
+export class NavigatorOverlay implements Focusable {
+  /** Set by TUI when focus changes; gates the CURSOR_MARKER emission. */
+  focused = false;
+
+  private cwd: string;
+  private T: NavigatorTheme;
+  private getTerminalRows: () => number;
+  private requestRender: () => void;
+  private onClose: () => void;
+  private loadFile: (relPath: string) => Promise<ViewerFile>;
+  private refresh: () => void;
+
+  private root: FileNode | null = null;
+  private treeSource: "git" | "fs" | null = null;
+  private git: GitState | null = null;
+
+  private focus: Focus = "files";
+  private mode: InputMode = "normal";
+  private showHidden = false;
+  private showTree = true;
+
+  private filesCursor = 0;
+  private filesScroll = 0;
+  private filterQuery = "";
+
+  private gitCursor = 0;
+  private gitScroll = 0;
+
+  private viewFile: ViewerFile | null = null;
+  private viewLoading = false;
+  private viewScroll = 0;
+  private viewHscroll = 0;
+  private viewWrap = false;
+  private diskChanged = false;
+
+  private searchQuery = "";
+  private searchMatches: SearchMatch[] = [];
+  private searchIndex = 0;
+  private searchJump = false;
+
+  private helpScroll = 0;
+  private notice: string | null = null;
+  private noticeTimer: ReturnType<typeof setTimeout> | null = null;
+  private disposed = false;
+
+  private cachedWidth: number | undefined;
+  private cachedLines: string[] | undefined;
+
+  constructor(options: NavigatorOptions) {
+    this.cwd = options.cwd;
+    this.T = options.theme;
+    this.getTerminalRows = options.getTerminalRows;
+    this.requestRender = options.requestRender;
+    this.onClose = options.onClose;
+    this.loadFile = options.loadFile;
+    this.refresh = options.refresh;
+  }
+
+  // ── Public API ──
+
+  /**
+   * Install a freshly built tree. Expansion state is applied by index.ts before
+   * this call, so the tree arrives ready to render (plan section 3.6 setters).
+   */
+  setTree(root: FileNode, treeSource: "git" | "fs"): void {
+    this.root = root;
+    this.treeSource = treeSource;
+    this.filesCursor = moveCursor(this.filesRows().length, this.filesCursor, 0);
+    this.touch();
+  }
+
+  /** Install a new git state, keeping the git cursor in range. */
+  setGitState(git: GitState): void {
+    this.git = git;
+    this.gitCursor = moveCursor(this.gitNavRows().length, this.gitCursor, 0);
+    this.touch();
+  }
+
+  setDiskChanged(changed: boolean): void {
+    if (this.diskChanged === changed) return;
+    this.diskChanged = changed;
+    this.touch();
+  }
+
+  getOpenRelPath(): string | null {
+    return this.viewFile?.relPath ?? null;
+  }
+
+  getOpenMtime(): number | undefined {
+    return this.viewFile?.mtimeMs;
+  }
+
+  /** Reload the open file, keeping scroll position. Used by "r". */
+  reloadOpenFile(): void {
+    const relPath = this.viewFile?.relPath;
+    if (!relPath) return;
+    void this.openRelPath(relPath, true);
+  }
+
+  /** Open a file by relative path (async; sets viewer state on completion). */
+  async openRelPath(relPath: string, keepScroll = false): Promise<void> {
+    this.viewLoading = true;
+    this.touch();
+    try {
+      const file = await this.loadFile(relPath);
+      if (this.disposed) return;
+      const sameFile = this.viewFile?.relPath === relPath;
+      this.viewFile = file;
+      this.diskChanged = false;
+      if (!keepScroll || !sameFile) {
+        this.viewScroll = 0;
+        this.viewHscroll = 0;
+        if (!sameFile) {
+          this.searchQuery = "";
+          this.searchMatches = [];
+          this.searchIndex = 0;
+        }
+      }
+    } catch {
+      if (this.disposed) return;
+      this.viewFile = { kind: "error", relPath, lines: [], message: "unexpected read failure" };
+    } finally {
+      if (!this.disposed) {
+        this.viewLoading = false;
+        this.touch();
+        this.requestRender();
+      }
+    }
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    if (this.noticeTimer) {
+      clearTimeout(this.noticeTimer);
+      this.noticeTimer = null;
+    }
+  }
+
+  invalidate(): void {
+    this.cachedWidth = undefined;
+    this.cachedLines = undefined;
+  }
+
+  // ── Row models ──
+
+  private filesRows(): FilesRow[] {
+    if (!this.root) return [];
+    if (this.filterQuery) return filterRows(this.root, this.filterQuery, this.showHidden);
+    return flattenVisible(this.root, this.showHidden);
+  }
+
+  private gitRows(): GitRow[] {
+    const rows: GitRow[] = [];
+    const git = this.git;
+    if (!git || !git.available) {
+      rows.push({ kind: "group", label: git?.error ?? "git unavailable", tone: "dim" });
+      return rows;
+    }
+    rows.push({
+      kind: "group",
+      label: `Unstaged (${git.unstaged.length})`,
+      tone: git.unstaged.length > 0 ? "warning" : "dim",
+    });
+    for (const file of git.unstaged) rows.push({ kind: "file", relPath: file.relPath, code: file.code, staged: false });
+    rows.push({
+      kind: "group",
+      label: `Staged (${git.staged.length})`,
+      tone: git.staged.length > 0 ? "success" : "dim",
+    });
+    for (const file of git.staged) rows.push({ kind: "file", relPath: file.relPath, code: file.code, staged: true });
+    if (git.unstaged.length === 0 && git.staged.length === 0) {
+      // Plan section 5 item 5: a dim Clean row when both lists are empty.
+      rows.push({ kind: "group", label: "Clean \u2014 nothing staged or unstaged", tone: "dim" });
+    }
+    rows.push({ kind: "group", label: `History (${git.history.length})`, tone: "muted" });
+    for (const commit of git.history) rows.push({ kind: "commit", commit });
+    return rows;
+  }
+
+  private gitNavRows(): GitRow[] {
+    return this.gitRows().filter((row) => row.kind !== "group");
+  }
+
+  // ── Input ──
+
+  handleInput(data: string): void {
+    if (this.mode === "help") {
+      this.handleHelpInput(data);
+      return;
+    }
+    if (this.mode === "filter") {
+      this.handleFilterInput(data);
+      return;
+    }
+    if (this.mode === "search") {
+      this.handleSearchInput(data);
+      return;
+    }
+    this.handleNormalInput(data);
+  }
+
+  private handleHelpInput(data: string): void {
+    const maxScroll = this.helpMaxScroll();
+    if (matchesKey(data, Key.up) || data === "k") {
+      this.helpScroll = Math.max(0, this.helpScroll - 1);
+    } else if (matchesKey(data, Key.down) || data === "j") {
+      this.helpScroll = Math.min(maxScroll, this.helpScroll + 1);
+    } else if (data === "?" || data === "q" || matchesKey(data, Key.escape)) {
+      this.mode = "normal";
+    } else {
+      return;
+    }
+    this.touch();
+  }
+
+  private handleFilterInput(data: string): void {
+    const rows = this.filesRows();
+    if (matchesKey(data, Key.escape)) {
+      this.filterQuery = "";
+      this.mode = "normal";
+      this.filesCursor = 0;
+      this.filesScroll = 0;
+    } else if (matchesKey(data, Key.enter)) {
+      this.mode = "normal";
+    } else if (matchesKey(data, Key.backspace)) {
+      this.filterQuery = this.filterQuery.slice(0, -1);
+      this.filesCursor = 0;
+      this.filesScroll = 0;
+    } else if (matchesKey(data, Key.down)) {
+      this.filesCursor = Math.min(this.filesCursor + 1, Math.max(0, rows.length - 1));
+    } else if (matchesKey(data, Key.up)) {
+      this.filesCursor = Math.max(0, this.filesCursor - 1);
+    } else {
+      const printable = printableChar(data);
+      if (printable) {
+        this.filterQuery += printable;
+        this.filesCursor = 0;
+        this.filesScroll = 0;
+      }
+    }
+    this.touch();
+  }
+
+  private handleSearchInput(data: string): void {
+    if (matchesKey(data, Key.escape)) {
+      this.searchQuery = "";
+      this.searchMatches = [];
+      this.mode = "normal";
+    } else if (matchesKey(data, Key.enter)) {
+      this.mode = "normal";
+    } else if (matchesKey(data, Key.backspace)) {
+      this.searchQuery = this.searchQuery.slice(0, -1);
+      this.recomputeSearch();
+      this.searchIndex = 0;
+      this.searchJump = true;
+    } else if (matchesKey(data, Key.down)) {
+      this.cycleSearch(1);
+    } else if (matchesKey(data, Key.up)) {
+      this.cycleSearch(-1);
+    } else {
+      const printable = printableChar(data);
+      if (printable) {
+        this.searchQuery += printable;
+        this.recomputeSearch();
+        this.searchIndex = 0;
+        this.searchJump = true;
+      }
+    }
+    this.touch();
+  }
+
+  private handleNormalInput(data: string): void {
+    // Global keys first.
+    const isShiftTab = matchesKey(data, Key.shift("tab"));
+    if (isShiftTab || matchesKey(data, Key.tab)) {
+      const order: Focus[] = ["files", "git", "viewer"];
+      const index = order.indexOf(this.focus);
+      this.focus = order[(index + (isShiftTab ? order.length - 1 : 1)) % order.length];
+      this.touch();
+      return;
+    }
+    if (data === "?") {
+      this.mode = "help";
+      this.helpScroll = 0;
+      this.touch();
+      return;
+    }
+    if (data === "q") {
+      this.onClose();
+      return;
+    }
+    if (matchesKey(data, Key.escape)) {
+      if (this.filterQuery) {
+        this.filterQuery = "";
+        this.filesCursor = 0;
+        this.filesScroll = 0;
+        this.touch();
+        return;
+      }
+      if (this.searchQuery) {
+        this.searchQuery = "";
+        this.searchMatches = [];
+        this.touch();
+        return;
+      }
+      this.onClose();
+      return;
+    }
+    if (data === "t") {
+      this.showTree = !this.showTree;
+      this.touch();
+      return;
+    }
+    if (data === "r") {
+      this.refresh();
+      this.reloadOpenFile();
+      this.showNotice("refreshing tree and git");
+      return;
+    }
+    if (data === "y") {
+      void this.copyContext();
+      return;
+    }
+
+    if (this.focus === "files") this.handleFilesInput(data);
+    else if (this.focus === "git") this.handleGitInput(data);
+    else this.handleViewerInput(data);
+  }
+
+  private handleFilesInput(data: string): void {
+    const rows = this.filesRows();
+    const area = this.filesArea();
+    const current = rows[this.filesCursor];
+
+    if (matchesKey(data, Key.up) || data === "k") {
+      this.filesCursor = moveCursor(rows.length, this.filesCursor, -1);
+    } else if (matchesKey(data, Key.down) || data === "j") {
+      this.filesCursor = moveCursor(rows.length, this.filesCursor, 1);
+    } else if (data === "g") {
+      this.filesCursor = 0;
+    } else if (data === "G") {
+      this.filesCursor = moveCursor(rows.length, this.filesCursor, rows.length);
+    } else if (matchesKey(data, Key.ctrl("d"))) {
+      this.filesCursor = pageJump(rows.length, this.filesCursor, 1, area);
+    } else if (matchesKey(data, Key.ctrl("u"))) {
+      this.filesCursor = pageJump(rows.length, this.filesCursor, -1, area);
+    } else if (matchesKey(data, Key.enter)) {
+      if (current?.node.isDir) {
+        current.node.expanded = !current.node.expanded;
+      } else if (current && current.kind !== "dir") {
+        this.focus = "viewer";
+        void this.openRelPath(current.node.relPath);
+      }
+    } else if (matchesKey(data, Key.right) || data === "l") {
+      if (current?.node.isDir) current.node.expanded = true;
+    } else if (matchesKey(data, Key.left) || data === "h") {
+      if (current?.node.isDir) current.node.expanded = false;
+    } else if (data === "/") {
+      this.mode = "filter";
+      this.filterQuery = "";
+      this.filesCursor = 0;
+      this.filesScroll = 0;
+    } else if (data === ".") {
+      // Files-scoped per the plan's keymap table, not a global key.
+      this.showHidden = !this.showHidden;
+      this.filesCursor = 0;
+      this.filesScroll = 0;
+    } else {
+      return;
+    }
+    this.touch();
+  }
+
+  private handleGitInput(data: string): void {
+    const rows = this.gitNavRows();
+    if (matchesKey(data, Key.up) || data === "k") {
+      this.gitCursor = moveCursor(rows.length, this.gitCursor, -1);
+    } else if (matchesKey(data, Key.down) || data === "j") {
+      this.gitCursor = moveCursor(rows.length, this.gitCursor, 1);
+    } else if (data === "g") {
+      this.gitCursor = 0;
+    } else if (data === "G") {
+      this.gitCursor = moveCursor(rows.length, this.gitCursor, rows.length);
+    } else if (matchesKey(data, Key.enter)) {
+      const row = rows[this.gitCursor];
+      if (!row) return;
+      if (row.kind === "file") {
+        if (this.root) {
+          const node = findNode(this.root, row.relPath);
+          if (node) expandAncestors(node);
+        }
+        this.filterQuery = "";
+        this.alignFilesCursor(row.relPath);
+        this.focus = "viewer";
+        void this.openRelPath(row.relPath);
+      } else if (row.kind === "commit") {
+        this.showNotice("commit detail view is deferred to v2 (plan section 1)");
+      }
+    } else {
+      return;
+    }
+    this.touch();
+  }
+
+  private handleViewerInput(data: string): void {
+    const area = this.viewerArea();
+    const half = Math.max(1, Math.ceil(area / HALF_PAGE_DIVISOR));
+    if (matchesKey(data, Key.up) || data === "k") {
+      this.viewScroll = Math.max(0, this.viewScroll - 1);
+    } else if (matchesKey(data, Key.down) || data === "j") {
+      this.viewScroll += 1;
+    } else if (matchesKey(data, Key.ctrl("d"))) {
+      this.viewScroll += half;
+    } else if (matchesKey(data, Key.ctrl("u"))) {
+      this.viewScroll = Math.max(0, this.viewScroll - half);
+    } else if (data === "g") {
+      this.viewScroll = 0;
+    } else if (data === "G") {
+      this.viewScroll = Number.MAX_SAFE_INTEGER;
+    } else if (data === "/") {
+      this.mode = "search";
+      this.searchQuery = "";
+      this.searchMatches = [];
+      this.searchIndex = 0;
+    } else if (data === "n") {
+      this.cycleSearch(1);
+    } else if (data === "N") {
+      this.cycleSearch(-1);
+    } else if (data === "w") {
+      this.viewWrap = !this.viewWrap;
+      this.viewHscroll = 0;
+    } else if (matchesKey(data, Key.left) || data === "h") {
+      this.viewHscroll = Math.max(0, this.viewHscroll - 4);
+    } else if (matchesKey(data, Key.right) || data === "l") {
+      this.viewHscroll += 4;
+    } else {
+      return;
+    }
+    this.touch();
+  }
+
+  // ── Actions ──
+
+  private recomputeSearch(): void {
+    const lines = this.viewFile?.lines ?? [];
+    this.searchMatches = searchLines(lines, this.searchQuery);
+    if (this.searchMatches.length === 0) this.searchIndex = 0;
+  }
+
+  private cycleSearch(delta: number): void {
+    if (this.searchMatches.length === 0) return;
+    const count = this.searchMatches.length;
+    this.searchIndex = (this.searchIndex + delta + count) % count;
+    this.searchJump = true;
+  }
+
+  private alignFilesCursor(relPath: string): void {
+    const rows = this.filesRows();
+    const index = rows.findIndex((row) => row.node.relPath === relPath);
+    if (index >= 0) {
+      this.filesCursor = index;
+      this.ensureFilesCursorVisible();
+    }
+  }
+
+  private async copyContext(): Promise<void> {
+    let value = "";
+    if (this.focus === "git") {
+      const row = this.gitNavRows()[this.gitCursor];
+      if (row?.kind === "file") value = row.relPath;
+      else if (row?.kind === "commit") value = row.commit.shortHash;
+    } else if (this.focus === "viewer") {
+      value = this.viewFile?.relPath ?? "";
+    } else {
+      value = this.filesRows()[this.filesCursor]?.node.relPath ?? "";
+    }
+    if (!value) return;
+    try {
+      await copyToClipboard(value);
+      this.showNotice(`copied ${value}`);
+    } catch {
+      this.showNotice("clipboard unavailable");
+    }
+  }
+
+  private showNotice(message: string): void {
+    this.notice = message;
+    if (this.noticeTimer) clearTimeout(this.noticeTimer);
+    this.noticeTimer = setTimeout(() => {
+      this.notice = null;
+      this.noticeTimer = null;
+      this.touch();
+      this.requestRender();
+    }, 2000);
+    this.touch();
+    this.requestRender();
+  }
+
+  private touch(): void {
+    this.cachedWidth = undefined;
+    this.cachedLines = undefined;
+  }
+
+  // ── Geometry helpers ──
+
+  /**
+   * Height in rows, bounded by the terminal so the overlay never overflows it.
+   * Deliberately free to fall below MIN_OVERLAY_HEIGHT: that is what makes the
+   * compact "terminal too small" notice reachable (plan section 6).
+   */
+  private overlayHeight(): number {
+    const termRows = this.getTerminalRows() || 24;
+    return Math.max(0, Math.min(Math.floor(termRows * 0.85), termRows - 2));
+  }
+
+  private bodyRows(overlayH: number): number {
+    return Math.max(4, overlayH - 5);
+  }
+
+  /** Help rows that fit. Shared by the input clamp and the renderer. */
+  private helpVisibleRows(body = this.bodyRows(this.overlayHeight())): number {
+    return Math.min(HELP_ROWS.length, Math.max(1, body - 4));
+  }
+
+  /** Single source of truth for the help scroll limit. */
+  private helpMaxScroll(): number {
+    return Math.max(0, HELP_ROWS.length - this.helpVisibleRows());
+  }
+
+  private useLeftColumn(innerW: number, bodyRows: number): boolean {
+    if (!this.showTree || bodyRows < 8) return false;
+    const candidate = this.leftColumnWidth(innerW);
+    return innerW >= LEFT_COLUMN_HIDE_BELOW && innerW - candidate - 1 >= 30;
+  }
+
+  private leftColumnWidth(innerW: number): number {
+    return Math.min(LEFT_COLUMN_MAX, Math.max(LEFT_COLUMN_MIN, Math.floor(innerW * LEFT_COLUMN_RATIO)));
+  }
+
+  private filesArea(): number {
+    const overlayH = this.overlayHeight();
+    const body = this.bodyRows(overlayH);
+    const split = this.splitRows(body);
+    return Math.max(2, split.filesH - 1);
+  }
+
+  private viewerArea(): number {
+    const overlayH = this.overlayHeight();
+    return Math.max(2, this.bodyRows(overlayH) - 1);
+  }
+
+  private splitRows(body: number): { filesH: number; gitH: number } {
+    let filesH = Math.max(6, Math.floor(body * 0.55));
+    let gitH = body - filesH - 1;
+    if (gitH < GIT_MIN_ROWS) {
+      filesH = Math.max(3, body - GIT_MIN_ROWS - 1);
+      gitH = Math.max(2, body - filesH - 1);
+    }
+    return { filesH, gitH };
+  }
+
+  // ── Render ──
+
+  render(width: number): string[] {
+    if (this.cachedLines && this.cachedWidth === width) return this.cachedLines;
+    const T = this.T;
+    const overlayH = this.overlayHeight();
+    const innerW = Math.max(0, width - 2);
+
+    if (width < MIN_OVERLAY_WIDTH || overlayH < MIN_OVERLAY_HEIGHT) {
+      // Compact notice for terminals that cannot host the frame. Every line is
+      // clipped to `width`, so the notice is width-safe like the frame.
+      const barW = Math.max(0, width - 2);
+      const notice = (text: string) =>
+        this.padTo(T.frame("\u2502") + this.padTo(text, barW) + T.frame("\u2502"), width);
+      const lines = [
+        this.padTo(T.frame("\u250c" + "\u2500".repeat(barW) + "\u2510"), width),
+        notice(T.warning(" terminal too small for pi-navigator ")),
+        this.padTo(T.frame("\u2514" + "\u2500".repeat(barW) + "\u2518"), width),
+      ];
+      this.cachedWidth = width;
+      this.cachedLines = lines;
+      return lines;
+    }
+    const body = this.bodyRows(overlayH);
+    const withLeft = this.useLeftColumn(innerW, body);
+    const leftW = withLeft ? this.leftColumnWidth(innerW) : 0;
+    const rightW = withLeft ? innerW - leftW - 1 : innerW;
+    const { filesH } = this.splitRows(body);
+
+    const leftRows = withLeft ? this.buildLeftRows(leftW, filesH, body) : null;
+    const rightRows = this.buildRightRows(rightW, body);
+
+    const lines: string[] = [];
+    lines.push(T.frame("\u250c" + "\u2500".repeat(innerW) + "\u2510"));
+    lines.push(T.frame("\u2502") + this.buildTitleRow(innerW) + T.frame("\u2502"));
+    lines.push(T.frame("\u251c" + "\u2500".repeat(innerW) + "\u2524"));
+
+    for (let i = 0; i < body; i++) {
+      if (!leftRows) {
+        lines.push(T.frame("\u2502") + rightRows[i] + T.frame("\u2502"));
+        continue;
+      }
+      if (i === filesH) {
+        lines.push(
+          T.frame("\u251c") + T.frame("\u2500".repeat(leftW)) + T.frame("\u2524") + rightRows[i] + T.frame("\u2502"),
+        );
+      } else {
+        lines.push(T.frame("\u2502") + leftRows[i] + T.frame("\u2502") + rightRows[i] + T.frame("\u2502"));
+      }
+    }
+
+    lines.push(T.frame("\u2502") + this.buildFooterRow(innerW) + T.frame("\u2502"));
+    lines.push(T.frame("\u2514" + "\u2500".repeat(innerW) + "\u2518"));
+
+    if (this.mode === "help") this.composeHelp(lines, innerW, body);
+
+    this.cachedWidth = width;
+    this.cachedLines = lines;
+    return lines;
+  }
+
+  // ── Frame pieces ──
+
+  private buildTitleRow(innerW: number): string {
+    const T = this.T;
+    const left = " " + T.accent(T.bold("pi-navigator")) + "  " + T.muted(this.shortPath(this.cwd));
+    const git = this.git;
+    const branchLabel = git?.available
+      ? (git.detached ? "(detached)" : git.branch ?? "(detached)")
+      : "no git";
+    const counters: string[] = [];
+    if (git?.available) {
+      if (git.ahead > 0) counters.push(T.success(`\u2191${git.ahead}`));
+      if (git.behind > 0) counters.push(T.error(`\u2193${git.behind}`));
+      const changed = git.unstaged.length + git.staged.length;
+      if (changed > 0) counters.push(T.dim(`${changed} changed`));
+    }
+    const right = " " + T.accent(branchLabel) + (counters.length > 0 ? "  " + counters.join(" ") : "") + " ";
+    return this.joinLeftRight(left, right, innerW);
+  }
+
+  private buildFooterRow(innerW: number): string {
+    const T = this.T;
+    // While filtering, the footer row area carries the filter bar instead of
+    // the plain hints (plan section 3.6 item 6).
+    if (this.mode === "filter") return this.buildFilterBar(innerW);
+    const hint = this.mode === "help" ? HINTS.help : HINTS[this.mode] ?? HINTS[this.focus];
+    const left = " " + T.dim(hint);
+    let right = "";
+    if (this.notice) {
+      right = " " + T.warning(this.notice) + " ";
+    } else {
+      const panes: Array<[Focus, string]> = [
+        ["files", "files"],
+        ["git", "git"],
+        ["viewer", "viewer"],
+      ];
+      right =
+        " " +
+        panes.map(([pane, label]) => (this.focus === pane ? T.accent(T.bold(label)) : T.dim(label))).join("  ") +
+        " ";
+    }
+    return this.joinLeftRight(left, right, innerW);
+  }
+
+  private joinLeftRight(left: string, right: string, width: number): string {
+    const leftW = visibleWidth(left);
+    const rightW = visibleWidth(right);
+    const gap = Math.max(1, width - leftW - rightW);
+    const line = left + " ".repeat(gap) + right;
+    return this.padTo(line, width);
+  }
+
+  // ── Left column ──
+
+  private buildLeftRows(leftW: number, filesH: number, body: number): string[] {
+    const rows: string[] = [];
+    const filesRows = this.filesRows();
+    const filesArea = Math.max(1, filesH - 1);
+    this.ensureFilesCursorVisibleFor(filesRows.length, filesArea);
+
+    rows.push(this.buildFilesHeader(leftW, filesRows.length));
+    for (let i = 0; i < filesArea; i++) {
+      const index = this.filesScroll + i;
+      const row = filesRows[index];
+      rows.push(row ? this.buildFileRow(row, index === this.filesCursor, leftW) : this.padTo("", leftW));
+    }
+
+    // Placeholder so git rows start at index filesH + 1; the horizontal
+    // separator row is drawn by render() and must not consume a data row.
+    rows.push(this.padTo("", leftW));
+
+    const gitRows = this.gitRows();
+    const navRows = this.gitNavRows();
+    const gitArea = Math.max(1, body - filesH - 1 - 1);
+    this.ensureGitCursorVisibleFor(gitRows, navRows, gitArea);
+
+    rows.push(this.buildGitHeader(leftW));
+    // A dim … in the last slot when git rows continue below the window, unless
+    // that slot holds the selection (plan section 3.6 item 4).
+    const lastIndex = this.gitScroll + gitArea - 1;
+    const selectedRow = navRows[this.gitCursor];
+    const selectedIndex = selectedRow ? gitRows.indexOf(selectedRow) : -1;
+    const markerIndex = gitRows.length > lastIndex + 1 && selectedIndex !== lastIndex ? lastIndex : -1;
+    for (let i = 0; i < gitArea; i++) {
+      const index = this.gitScroll + i;
+      if (index === markerIndex) {
+        rows.push(this.padTo(" " + this.T.dim("\u2026"), leftW));
+        continue;
+      }
+      const row = gitRows[index];
+      if (!row) {
+        rows.push(this.padTo("", leftW));
+        continue;
+      }
+      rows.push(this.buildGitRow(row, index === selectedIndex, leftW));
+    }
+
+    return rows;
+  }
+
+  private ensureFilesCursorVisibleFor(total: number, area: number): void {
+    if (this.filesCursor < this.filesScroll) this.filesScroll = this.filesCursor;
+    if (this.filesCursor >= this.filesScroll + area) this.filesScroll = this.filesCursor - area + 1;
+    this.filesScroll = Math.max(0, Math.min(this.filesScroll, Math.max(0, total - area)));
+  }
+
+  private ensureFilesCursorVisible(): void {
+    this.ensureFilesCursorVisibleFor(this.filesRows().length, this.filesArea());
+  }
+
+  private ensureGitCursorVisibleFor(rows: GitRow[], navRows: GitRow[], area: number): void {
+    const selected = navRows[this.gitCursor];
+    if (!selected) return;
+    const index = rows.indexOf(selected);
+    if (index < 0) return;
+    if (index < this.gitScroll) this.gitScroll = index;
+    if (index >= this.gitScroll + area) this.gitScroll = index - area + 1;
+    this.gitScroll = Math.max(0, Math.min(this.gitScroll, Math.max(0, rows.length - area)));
+  }
+
+  private buildFilesHeader(leftW: number, total: number): string {
+    const T = this.T;
+    const label = " " + (this.focus === "files" ? T.accent(T.bold("FILES")) : T.dim("FILES"));
+    const info = this.filterQuery
+      ? T.warning(`${total} matches`) + " "
+      : T.dim(`${Math.max(1, Math.min(this.filesCursor + 1, total))}/${total}`) + " ";
+    return this.joinLeftRight(label, info, leftW);
+  }
+
+  private buildFileRow(row: FilesRow, isCursor: boolean, leftW: number): string {
+    const T = this.T;
+    const arrow = isCursor ? T.accent(T.bold("\u25b6 ")) : "  ";
+    let body: string;
+    let badge = "";
+
+    if (row.kind === "match") {
+      const prefixRaw = row.prefix.length > 18 ? "\u2026" + row.prefix.slice(-18) : row.prefix;
+      const prefix = T.dim(prefixRaw);
+      const name = row.node.name;
+      if (row.nameIndex >= 0 && this.filterQuery) {
+        const before = name.slice(0, row.nameIndex);
+        const hit = name.slice(row.nameIndex, row.nameIndex + this.filterQuery.length);
+        const after = name.slice(row.nameIndex + this.filterQuery.length);
+        body = prefix + T.text(before) + T.warning(T.bold(hit)) + T.text(after);
+      } else {
+        body = prefix + T.text(name);
+      }
+      if (row.node.gitCode) badge = " " + this.codeText(row.node.gitCode);
+    } else if (row.node.isDir) {
+      const marker = row.node.expanded ? "\u25be " : "\u25b8 ";
+      const indent = "  ".repeat(Math.max(0, row.node.depth));
+      const nameStyle = hasChanges(row.node) ? T.warning : row.node.hidden ? T.dim : T.muted;
+      const label = row.node.name + (row.node.isSymlink ? T.dim(" \u2197") : "");
+      body = T.dim(indent + marker) + nameStyle(label);
+    } else {
+      const indent = "  ".repeat(Math.max(0, row.node.depth));
+      const isOpen = row.node.relPath === this.viewFile?.relPath;
+      let nameStyle = (text: string) => T.text(text);
+      if (isOpen) nameStyle = (text: string) => T.accent(T.bold(text));
+      else if (row.node.hidden) nameStyle = (text: string) => T.dim(text);
+      else if (row.node.gitCode === "??" || row.node.gitCode === "!!") nameStyle = (text: string) => T.dim(text);
+      const label = row.node.name + (row.node.isSymlink ? T.dim(" \u2197") : "");
+      body = T.dim(indent) + nameStyle(label);
+      if (row.node.gitCode) badge = " " + this.codeText(row.node.gitCode);
+    }
+
+    const room = Math.max(4, leftW - 2 - visibleWidth(badge));
+    const content = arrow + truncateToWidth(body, room);
+    const gap = Math.max(0, leftW - visibleWidth(arrow) - visibleWidth(truncateToWidth(body, room)) - visibleWidth(badge));
+    const line = content + " ".repeat(gap) + badge;
+    return isCursor ? T.selectedBg(this.padTo(line, leftW)) : this.padTo(line, leftW);
+  }
+
+  private buildGitHeader(leftW: number): string {
+    const T = this.T;
+    const label = " " + (this.focus === "git" ? T.accent(T.bold("GIT")) : T.dim("GIT"));
+    const git = this.git;
+    let info = "";
+    if (git?.available) {
+      info = T.dim(`${git.unstaged.length} unstaged \u00b7 ${git.staged.length} staged`) + " ";
+    } else {
+      info = T.dim(git?.error ?? "unavailable") + " ";
+    }
+    return this.joinLeftRight(label, info, leftW);
+  }
+
+  private buildGitRow(row: GitRow, selected: boolean, leftW: number): string {
+    const T = this.T;
+    let line: string;
+    if (row.kind === "group") {
+      const tone = row.tone === "warning" ? T.warning : row.tone === "success" ? T.success : T.muted;
+      line = " " + tone(row.label);
+    } else if (row.kind === "file") {
+      const arrow = selected ? T.accent(T.bold("\u25b6 ")) : "  ";
+      const nameStyle = selected ? T.text : row.staged ? T.success : T.warning;
+      const badge = " " + this.codeText(row.code);
+      const room = Math.max(4, leftW - 2 - visibleWidth(badge));
+      const body = truncateToWidth(nameStyle(row.relPath), room);
+      const gap = Math.max(0, leftW - 2 - visibleWidth(body) - visibleWidth(badge));
+      line = arrow + body + " ".repeat(gap) + badge;
+    } else {
+      const arrow = selected ? T.accent(T.bold("\u25b6 ")) : "  ";
+      const hash = T.muted(row.commit.shortHash);
+      const room = Math.max(4, leftW - 2 - visibleWidth(row.commit.shortHash) - 2);
+      const subject = T.dim(truncateToWidth(row.commit.subject, room));
+      line = arrow + hash + "  " + subject;
+    }
+    return selected ? T.selectedBg(this.padTo(line, leftW)) : this.padTo(line, leftW);
+  }
+
+  private codeText(code: string): string {
+    const T = this.T;
+    if (code === "M") return T.warning(code);
+    if (code === "A") return T.success(code);
+    if (code === "D") return T.error(code);
+    if (code === "??") return T.dim("?");
+    if (code === "!!") return T.dim("!");
+    return T.muted(code);
+  }
+
+  // ── Right pane ──
+
+  private buildRightRows(rightW: number, body: number): string[] {
+    const rows: string[] = [];
+    const headerRow = this.mode === "search" ? this.buildSearchBar(rightW) : this.buildViewerHeader(rightW);
+    rows.push(headerRow);
+
+    const area = Math.max(1, body - 1);
+    const file = this.viewFile;
+
+    if (!file && this.viewLoading) {
+      for (let i = 0; i < area; i++) rows.push(this.padTo(i === 0 ? " " + this.T.dim("(loading\u2026)") : "", rightW));
+      return rows;
+    }
+    if (!file) {
+      for (let i = 0; i < area; i++) rows.push(this.padTo(i === 0 ? " " + this.T.dim("(select a file)") : "", rightW));
+      return rows;
+    }
+
+    if (file.kind === "binary" || file.kind === "image" || file.kind === "error") {
+      rows.push(...this.buildCard(file, rightW, area));
+      return rows;
+    }
+
+    // Text-like content.
+    const T = this.T;
+    let noticeRows = 0;
+    if (file.kind === "truncated" && file.notice) noticeRows += 1;
+    if (this.diskChanged) noticeRows += 1;
+
+    // Gutter width follows the total line count when it is known, not the
+    // number of rows actually displayed (plan sections 3.4 and 6).
+    const digits = Math.max(2, String(file.lineCount ?? file.lines.length).length);
+    const gutterW = digits + 1;
+    const contentW = Math.max(10, rightW - 2 - (gutterW + 2));
+    const contentArea = Math.max(1, area - noticeRows);
+
+    // Optional notices above the content.
+    if (file.kind === "truncated" && file.notice) rows.push(this.padTo(" " + T.warning(file.notice), rightW));
+    if (this.diskChanged) {
+      rows.push(this.padTo(" " + T.warning("file changed on disk \u2014 press r to reload"), rightW));
+    }
+
+    this.recomputeSearchIfNeeded();
+    const marked = this.markSearch(file);
+
+    // Clamp horizontal scroll and scroll position.
+    const maxH = Math.max(0, maxLineWidth(marked) - contentW);
+    this.viewHscroll = Math.max(0, Math.min(this.viewHscroll, maxH));
+
+    const display = computeRows(marked, contentW, this.viewWrap, this.viewHscroll);
+    if (this.searchJump && this.searchMatches.length > 0) {
+      const currentMatch = this.searchMatches[this.searchIndex];
+      const target = display.findIndex((row) => row.line === currentMatch?.line);
+      if (target >= 0) this.viewScroll = Math.max(0, target - Math.floor(contentArea / 2));
+      this.searchJump = false;
+    }
+    this.viewScroll = Math.max(0, Math.min(this.viewScroll, Math.max(0, display.length - contentArea)));
+
+    for (let i = 0; i < contentArea; i++) {
+      const row = display[this.viewScroll + i];
+      if (!row) {
+        rows.push(this.padTo("", rightW));
+        continue;
+      }
+      const gutter = row.line === null ? " ".repeat(digits) + " " : String(row.line + 1).padStart(digits) + " ";
+      const line = " " + T.dim(gutter) + T.frame("\u2502") + " " + row.text;
+      rows.push(this.padTo(line, rightW));
+    }
+
+    return rows;
+  }
+
+  private buildViewerHeader(rightW: number): string {
+    const T = this.T;
+    const file = this.viewFile;
+    const left = " " + (this.focus === "viewer" ? T.accent(T.bold(this.shortPath(file?.relPath ?? "(no file)"))) : T.muted(this.shortPath(file?.relPath ?? "(no file)")));
+    const meta: string[] = [];
+    if (file) {
+      const size = formatSize(file.sizeBytes);
+      if (size) meta.push(size);
+      if (file.lineCount !== undefined) meta.push(`${file.lineCount}L`);
+      if (file.kind === "truncated") meta.push("truncated");
+      if (this.viewWrap) meta.push("wrap");
+      if (this.viewHscroll > 0) meta.push(`col ${this.viewHscroll + 1}`);
+      if (this.viewLoading) meta.push("loading\u2026");
+    }
+    const right = meta.length > 0 ? T.dim(meta.join(" \u00b7 ")) + " " : " ";
+    return this.joinLeftRight(left, right, rightW);
+  }
+
+  /**
+   * A typed query plus a reverse-video cursor. While the component is focused
+   * the hardware cursor marker precedes the fake cursor, which is what lets the
+   * terminal position the IME candidate window over it (standards section 2.3).
+   */
+  private buildInputBar(query: string, placeholder: string, info: string | null, width: number): string {
+    const T = this.T;
+    const cursor = this.focused ? CURSOR_MARKER + T.text("\u2588") : T.text("\u2588");
+    const left = " " + T.text("/" + query) + cursor;
+    const right = (info ? T.warning(info) : T.dim(placeholder)) + " ";
+    return this.joinLeftRight(left, right, width);
+  }
+
+  /** Search bar: replaces the viewer header line while searching. */
+  private buildSearchBar(rightW: number): string {
+    return this.buildInputBar(
+      this.searchQuery,
+      HINTS.search,
+      this.searchQuery ? `${this.searchIndex + 1}/${this.searchMatches.length} matches` : null,
+      rightW,
+    );
+  }
+
+  /** Filter bar: drawn in the footer row area while filtering. */
+  private buildFilterBar(width: number): string {
+    return this.buildInputBar(
+      this.filterQuery,
+      HINTS.filter,
+      this.filterQuery ? `${this.filesRows().length} matches` : null,
+      width,
+    );
+  }
+
+  private recomputeSearchIfNeeded(): void {
+    if (!this.searchQuery) {
+      this.searchMatches = [];
+      return;
+    }
+    this.recomputeSearch();
+  }
+
+  private markSearch(file: ViewerFile): ViewerFile {
+    if (!this.searchQuery || this.searchMatches.length === 0) return file;
+    const currentLine = this.searchMatches[Math.min(this.searchIndex, this.searchMatches.length - 1)]?.line;
+    const T = this.T;
+    const marked = file.lines.map((line, index) => {
+      if (!this.searchMatches.some((match) => match.line === index)) return line;
+      return markMatches(line, this.searchQuery, T.searchMatch, T.searchCurrent, index === currentLine);
+    });
+    return { ...file, lines: marked };
+  }
+
+  private buildCard(file: ViewerFile, rightW: number, area: number): string[] {
+    const T = this.T;
+    const title = file.kind === "image" ? "Image" : file.kind === "binary" ? "Binary file" : "Cannot read";
+    const titleStyle = file.kind === "error" ? T.error : file.kind === "binary" ? T.warning : T.accent;
+    const body: string[] = [file.relPath];
+    if (file.message) body.push(file.message);
+    if (file.kind === "binary") body.push("binary content is not rendered");
+    if (file.kind === "image") body.push("metadata card in v1; native protocol and chafa");
+    if (file.kind === "image") body.push("rendering is the plan section 8 spike");
+    if (file.kind === "error") body.push("press Tab, then pick another file");
+
+    const contentWidth = Math.max(24, Math.min(rightW - 6, Math.max(...[title, ...body].map((text) => visibleWidth(text))) + 4));
+    const boxW = contentWidth + 2;
+    const boxH = body.length + 2;
+    const topPad = Math.max(0, Math.floor((area - boxH) / 2));
+    const leftPad = Math.max(0, Math.floor((rightW - boxW) / 2));
+
+    const out: string[] = [];
+    const blank = (text: string) => " ".repeat(leftPad) + text + " ".repeat(Math.max(0, rightW - leftPad - visibleWidth(text)));
+    const borderRow = (left: string, fill: string, right: string) => blank(T.frame(left + fill.repeat(boxW - 2) + right));
+    for (let i = 0; i < topPad; i++) out.push(blank(""));
+    out.push(borderRow("\u250c", "\u2500", "\u2510"));
+    // Interior = 1 space + " title " + padding = contentWidth, so the title row
+    // is exactly as wide as the border rows (boxW = contentWidth + 2).
+    const titlePad = Math.max(0, contentWidth - visibleWidth(title) - 3);
+    out.push(blank(T.frame("\u2502") + " " + titleStyle(T.bold(" " + title + " ")) + " ".repeat(titlePad) + T.frame("\u2502")));
+    for (const text of body) {
+      out.push(
+        blank(T.frame("\u2502") + " " + T.muted(truncateToWidth(text, contentWidth - 1)) + " ".repeat(Math.max(0, contentWidth - 1 - visibleWidth(truncateToWidth(text, contentWidth - 1)))) + T.frame("\u2502")),
+      );
+    }
+    out.push(borderRow("\u2514", "\u2500", "\u2518"));
+    while (out.length < area) out.push(this.padTo("", rightW));
+    return out.slice(0, area);
+  }
+
+  // ── Help modal ──
+
+  private composeHelp(lines: string[], innerW: number, body: number): void {
+    const T = this.T;
+    const boxW = Math.min(innerW - 2, 66);
+    const visibleRows = this.helpVisibleRows(body);
+    const boxH = visibleRows + 3;
+    const startRow = Math.max(0, Math.floor((body - boxH) / 2));
+    const colPad = Math.max(0, Math.floor((innerW - boxW) / 2));
+    // The same limit the input handler clamps against, and written back so the
+    // stored offset can never sit past what the modal can show.
+    const scroll = Math.max(0, Math.min(this.helpScroll, this.helpMaxScroll()));
+    this.helpScroll = scroll;
+
+    const modal: string[] = [];
+    const inner = (text: string) => {
+      const padded = this.padTo(text, boxW - 2);
+      return T.frame("\u2502") + padded + T.frame("\u2502");
+    };
+    modal.push(T.frame("\u250c" + "\u2500".repeat(boxW - 2) + "\u2510"));
+    modal.push(inner(" " + T.accent(T.bold("pi-navigator \u2014 keys"))));
+    for (let i = 0; i < visibleRows; i++) {
+      const row = HELP_ROWS[scroll + i];
+      if (!row) {
+        modal.push(inner(""));
+        continue;
+      }
+      const [keys, description] = row;
+      const keyCell = T.accent(keys.padEnd(16));
+      const descCell = truncateToWidth(description, boxW - 22);
+      modal.push(inner(" " + keyCell + " " + T.muted(descCell)));
+    }
+    modal.push(T.frame("\u2514" + "\u2500".repeat(boxW - 2) + "\u2518"));
+
+    for (let i = 0; i < modal.length; i++) {
+      const target = 3 + startRow + i; // lines[0..2] are top, title, separator
+      if (target >= lines.length - 1) break;
+      const rowInner = " ".repeat(colPad) + modal[i] + " ".repeat(Math.max(0, innerW - colPad - visibleWidth(modal[i])));
+      lines[target] = T.frame("\u2502") + this.padTo(rowInner, innerW) + T.frame("\u2502");
+    }
+  }
+
+  // ── Small helpers ──
+
+  private padTo(content: string, width: number): string {
+    const vw = visibleWidth(content);
+    if (vw < width) return content + " ".repeat(width - vw);
+    return truncateToWidth(content, width);
+  }
+
+  private shortPath(path: string): string {
+    const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+    let shortened = path;
+    if (home && (path === home || path.startsWith(home))) {
+      shortened = "~" + path.slice(home.length);
+    }
+    if (shortened.length > 48) shortened = "\u2026" + shortened.slice(shortened.length - 47);
+    return shortened;
+  }
+}
