@@ -1052,7 +1052,9 @@ export class NavigatorOverlay implements Focusable {
     return this.buildInputBar(
       this.searchQuery,
       HINTS.search ?? "",
-      this.searchQuery ? `${this.searchIndex + 1}/${this.searchMatches.length} matches` : null,
+      this.searchQuery
+        ? `${this.searchMatches.length === 0 ? 0 : this.searchIndex + 1}/${this.searchMatches.length} matches`
+        : null,
       rightW,
     );
   }

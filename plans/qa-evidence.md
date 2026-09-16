@@ -29,11 +29,31 @@ Everything in this pass ran with the **real** pi-tui/pi-coding-agent packages
 
 Still open (need a live interactive session):
 
-- Driving `/navigator` at 120x36, 100x28, 80x24 and a 20-row terminal with a
-  real keyboard (the render suites cover geometry; they cannot cover terminal
-  delivery).
 - IME input in the search bar with a CJK input method.
-- `ctrl+n` delivery on Windows Terminal / VS Code terminal.
+- `ctrl+n` delivery on Windows Terminal / VS Code terminal. On Linux it works,
+  with the caveat below.
+
+### Live drive (Linux, tmux 3.7 at 120x36, nested pi 0.85.1)
+
+Drove `/navigator` in a real session against this repository itself:
+
+- Overlay opened centered with a correct frame; title showed the branch
+  (`main`), FILES 1/25, tree of the repo (dirs first, expanded top level),
+  GIT panel with `Clean` row and the real 6-commit history.
+- `j` moved the cursor (4/25 tracked in the header); Enter opened
+  `plans/pi-navigator-implementation-plan.md` with `21.7 KB · 368L` in the
+  viewer header, gutter line numbers and markdown content.
+- Search bar echoed `/Status…` with the live match counter (typing `n` while
+  still in search mode correctly appends to the query; n/N cycle after
+  commit — both covered by suites).
+- The 3 s refresh picked up an on-disk change mid-session: the title changed
+  to `main 1 changed` after an edit to `navigator.ts`.
+- `q` closed the overlay; `Ctrl+N` reopened it.
+- Finding: pi 0.85.1 registers `ctrl+n` itself (`app.session.toggleNamedFilter`),
+  so startup prints an `[Extension issues]` conflict banner and binds the
+  extension's handler anyway. Works, but the banner is noisy; recorded in the
+  README behavior notes. The plan's section 4 conflict audit said `ctrl+n` was
+  unbound — that was true for the pi version the plan was written against.
 
 ## Earlier static pass (Windows 11, no Node)
 

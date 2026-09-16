@@ -72,6 +72,8 @@ Esc precedence in one line: filter, then search, then close.
 
 ## Behavior notes
 
+- `ctrl+n` conflicts with pi's own built-in `app.session.toggleNamedFilter` shortcut on pi 0.85.1: at startup pi prints an `[Extension issues]` banner and **uses the extension's binding anyway** (verified live on Linux). The feature works; if the banner is unwanted, drop the `registerShortcut` call and keep `/navigator` (a plan section 14 follow-up for a future pi where the built-in binding may win).
+
 - Syntax highlighting uses pi's own `highlightCode` and `getLanguageFromPath`, so colors follow the active theme and no tools like `bat` are needed.
 - Tree source is hybrid: inside a repository it lists tracked plus untracked non-ignored files; without git, and in a repository with nothing to list yet (a fresh `git init`), it falls back to an async filesystem walk with a static ignore list, dot entries included but hidden by default. `.gitignore` parsing is a v2 candidate.
 - Git panel: branch or detached HEAD, ahead and behind counters, unstaged and staged lists, last 20 commits. All git calls are async with a 3 s timeout; the panel shows a single explanation row when git is missing or the cwd is not a repository, and a dim `Clean` row when nothing is staged or unstaged. Status and the tracked listing are read with `-z`, so paths containing spaces, quotes or newlines survive intact.
