@@ -1,0 +1,94 @@
+# AGENTS.md
+
+AGENTS.md is the entry point for any coding agent working in this repository. It is a README for agents: a predictable place for context, environment, testing, and contribution instructions.
+
+---
+
+## Project overview
+
+`pi-navigator` is a read-only project file navigator **overlay** for [pi](https://github.com/earendil-works/pi-coding-agent) — the AI coding agent harness. It is a pi **extension** (a `pi-package` / `pi-extension`), not a standalone app.
+
+Opened via the `/navigator` command, it renders a centered overlay with three panes:
+
+- **Files pane** — a file tree (git-tracked files when inside a repo, filesystem walk otherwise) with hidden-file toggle and fuzzy filter.
+- **Git panel** — branch, ahead/behind counters, unstaged/staged groups, and recent commit history.
+- **Viewer pane** — syntax-highlighted, read-only file viewing with caps, tab expansion, word wrap, horizontal scroll, and in-file search.
+
+The overlay is a pure TUI component; it never touches the filesystem or git directly. All async/data work lives in `index.ts`; the component (`navigator.ts`) owns UI state only.
+
+---
+
+## Dev environment tips
+
+- **Runtime:** Node ≥ 22, ESM (`"type": "module"`). TypeScript strict mode with bundler resolution (`tsconfig.json`).
+- **Peer dependencies:** `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` are peer deps — they are provided by the host pi install, not bundled. Don't add them as regular dependencies.
+- **No external runtime deps.** The viewer uses pi-native `highlightCode` + `getLanguageFromPath` for syntax highlighting. No shelling out to external binaries, no npm highlighter deps. Keep it that way.
+- **Local install for dogfooding:** this extension is registered as a local path in pi settings. To (re)install from this checkout:
+  ```bash
+  pi install .            # global (~/.pi/agent/settings.json)
+  pi install . -l         # project-local (.pi/settings.json)
+  pi list                 # confirm it appears
+  ```
+  A path install reads `package.json` live from this directory, so the version pi reports is whatever `package.json` declares — bump it when shipping fixes.
+- **Entry point:** `index.ts` is the `pi` extension entry (`package.json` `pi.extensions`). It registers the `navigator` command and wires `ctx.ui.custom` with the overlay component.
+- **Layout constants** (caps, ratios, timeouts, extension whitelists) live in `constants.ts`. Geometry math (overlay height, body rows, column split) lives in `navigator.ts` geometry helpers — change numbers in one place.
+
+---
+
+## Building & testing
+
+- **Typecheck:**
+  ```bash
+  npm run typecheck      # tsc --noEmit, strict
+  ```
+- **Tests:** Vitest, five suites (`viewer`, `tree`, `git`, `navigator`, `render`).
+  ```bash
+  npm test               # vitest run — full suite
+  npx vitest run -t "CRLF"   # focus one test by name
+  ```
+- **Before claiming work is done**, both `npm run typecheck` and `npm test` must be green. The render suite enforces width-safety at multiple terminal sizes (120×36, 100×28, 80×24, and narrow widths) — keep it that way when adding UI.
+- **Add or update tests for the code you change, even if nobody asked.** Width-safety regressions and ANSI/escape-sequence bugs are exactly the class this suite exists to catch.
+
+---
+
+## Code layout
+
+| File | Owns |
+|---|---|
+| `index.ts` | Extension entry; registers `/navigator`; owns all async work (git, tree collection, file stat) and pushes results into the overlay via setters. |
+| `navigator.ts` | `NavigatorOverlay` — the pure TUI component: frame, files pane, git panel, viewer pane, footer, help modal. UI state only; no fs/git. |
+| `tree.ts` | Tree building from entries, cursor movement, filter, flatten, expansion memory. |
+| `git.ts` | git binary detection, `readGitState` (porcelain), history, tracked-file listing, availability cache. |
+| `viewer.ts` | `loadFile` pipeline: stat, binary sniff, image tier, size caps, tab expansion, CR normalization, highlighting, search, display rows. |
+| `theme.ts` | `makeNavigatorTheme` — maps semantic tokens (accent/muted/dim/…) onto pi `Theme` tokens. No hardcoded colors. |
+| `types.ts` | Shared structural types (FileNode, GitState, ViewerFile, rows). |
+| `constants.ts` | All tuning constants (caps, ratios, timeouts, ignored names, image extensions). |
+
+**Data contract:** `setTree` / `setGitState` / `openRelPath` are the only ways data enters the component. Keep the render path pure.
+
+---
+
+## Conventions
+
+- **Single-writer for source edits.** Routine localized edits → small, targeted changes. Cross-module refactors stay coherent.
+- **No hardcoded colors.** All styling goes through `NavigatorTheme` (`theme.ts`), which delegates to the user's active pi theme. Never inline ANSI color codes in component code — the theme is the only source of color.
+- **ANSI / escape sequences are load-bearing.** The viewer composes styled strings that are sliced, wrapped, truncated, and padded. Before changing any truncation, wrapping, or padding code, read these two facts that have already caused shipped bugs:
+  - **Carriage returns break layout.** Normalize `\r\n` and lone `\r` to `\n` in `loadFile` before highlighting/splitting. A stray `\r` resets the terminal cursor to column 0 and the row's padding overwrites the gutter/border (Issue #009).
+  - **`truncateToWidth`'s default `"..."` ellipsis is wrapped in `\x1b[0m` resets.** It closes any open style and renders the ellipsis in bright default. Truncate styled strings with an **empty** ellipsis (`""`) for a clean hard-cut; for plain text you want to re-style, truncate with `""`, strip the injected reset, and append your own styled ellipsis before wrapping (Issue #010).
+- **Width-safety is mandatory.** Every rendered row must fit its pane width. Use `visibleWidth`/`truncateToWidth` for measurement; never assume a string's `.length` equals its visible width (ANSI escapes, wide chars).
+- **Memory stays bounded by the caps** (`MAX_HIGHLIGHT_BYTES`, `MAX_HIGHLIGHT_LINES`), not by the file. Oversized files read a capped head, not the whole file.
+- **Issues are tracked** in `docs/issues/` with a central `issues_index.md`. New bug → create `NNN-<slug>.md`, add to the Pending table; resolved → move to Resolved and update the overview counts. Follow the lifecycle in the index.
+
+---
+
+## PR / commit instructions
+
+- **Commit message format:** `<type>(<scope>): <subject> (#NNN)`
+  - `type`: `fix`, `feat`, `refactor`, `test`, `docs`, `chore`
+  - `scope`: `viewer`, `help`, `navigator`, `tree`, `git`, `theme`, etc.
+  - `(#NNN)`: the issue number from `docs/issues/` when applicable.
+  - Examples: `fix(viewer): normalize CRLF line endings … (#009)`, `fix(help): stop bright ellipsis leaking … (#010)`.
+- **Always run `npm run typecheck` and `npm test` before committing.** Both must be green.
+- **Reference the issue** in the commit body when one exists; create an issue doc first if the change is non-trivial.
+- **Keep diffs minimal.** Prefer one-line ellipsis-argument fixes over refactors when the root cause is localized. Don't refactor unrelated hotspots mid-bugfix.
+- **Version:** bump `package.json` `version` (patch for bugfixes, minor for features) and re-run `pi install .` so the local registration reflects it.
