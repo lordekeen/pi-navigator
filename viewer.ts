@@ -303,6 +303,14 @@ export async function loadFile(absPath: string, relPath: string): Promise<Viewer
     return errorCard(relPath, "cannot read file (permission denied)");
   }
 
+  // Normalize CRLF and lone CR to LF before any downstream processing. A
+  // stray carriage return in a rendered line resets the terminal cursor to
+  // column 0, so the row's trailing padding overwrites the gutter and border
+  // and breaks the overlay layout. Files checked out with CRLF endings (this
+  // repo's own .ts sources among them) otherwise hit this on every opened
+  // file. \r\n is folded to \n first so no line gains a spurious blank.
+  raw = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
   const expanded = expandTabs(raw);
   const allLines = expanded.split("\n");
   const overLines = allLines.length > MAX_HIGHLIGHT_LINES;

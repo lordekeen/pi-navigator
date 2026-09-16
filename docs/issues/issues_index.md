@@ -9,8 +9,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
 | **Pending / Open** | 0 | 0 | 0 | **0** |
-| **Resolved** | 1 | 1 | 6 | **8** |
-| **Total** | **1** | **1** | **6** | **8** |
+| **Resolved** | 2 | 1 | 6 | **9** |
+| **Total** | **2** | **1** | **6** | **9** |
 
 ---
 
@@ -28,6 +28,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | ID | Title | Type | Severity | Resolution Summary | Status |
 | :--- | :--- | :--- | :--- | :--- | :---: |
+| [#009](009-crlf-line-endings-break-viewer-layout.md) | CRLF Line Endings Break the Viewer Layout (Carriage Return Resets Cursor) | Bug | High | Normalize `\r\n` and lone `\r` to `\n` in `loadFile` right after the read, so carriage returns never reach the terminal and reset the cursor mid-row. Affected every CRLF file, including all `.ts` sources in this repo. | **Resolved** |
 | [#001](001-stale-content-race-when-opening-file.md) | UI Renders Stale Content and Inconsistent State When Opening a File | Bug | High | Added load sequence and target path tracking (`loadSeq`, `viewTargetRelPath`). Immediately displays loading placeholder, target path in header, and highlights row while keeping scroll intact on reload. | **Resolved** |
 | [#002](002-ctrl-n-shortcut-conflict.md) | Global `ctrl+n` Shortcut Conflicts with Pi Built-in Keybinding | Bug / Compatibility | Medium | Removed global `ctrl+n` shortcut registration from `index.ts` to prevent conflict warning banners with Pi 0.85.1+ built-in `toggleNamedFilter`. Kept `/navigator` command. | **Resolved** |
 | [#003](003-phantom-x-key-in-viewer-hints.md) | Phantom `x` Key Hint in Viewer Footer | Bug / UI Polish | Low | Removed non-functional `x` hint from `HINTS.viewer` (`h l x` -> `h l`), saving 2 character columns in narrow viewport footer budget. | **Resolved** |
@@ -42,6 +43,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 ## 📂 Issues by Category
 
 ### Bug Fixes & UI Consistency
+- [#009: CRLF Line Endings Break the Viewer Layout (Carriage Return Resets Cursor)](009-crlf-line-endings-break-viewer-layout.md)
 - [#001: UI Renders Stale Content and Inconsistent State When Opening a File](001-stale-content-race-when-opening-file.md)
 - [#002: Global `ctrl+n` Shortcut Conflicts with Pi Built-in Keybinding](002-ctrl-n-shortcut-conflict.md)
 - [#003: Phantom `x` Key Hint in Viewer Footer](003-phantom-x-key-in-viewer-hints.md)

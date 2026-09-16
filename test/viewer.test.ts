@@ -219,6 +219,22 @@ describe("loadFile", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  it("normalizes CRLF line endings so carriage returns never reach the renderer", async () => {
+    // A \r in a rendered line resets the terminal cursor to column 0 and the
+    // row's padding then overwrites the gutter/border, breaking the overlay.
+    // CRLF source files (this repo's own .ts files) hit this on every open.
+    const path = join(dir, "crlf.ts");
+    await writeFile(path, "// comment\r\nconst x = 1;"); // no trailing newline: exactly 2 lines
+    const file = await loadFile(path, "crlf.ts");
+    expect(file.kind).toBe("text");
+    for (const line of file.lines) {
+      expect(line).not.toContain("\r");
+    }
+    expect(stripAnsi(file.lines[0] ?? "")).toBe("// comment");
+    expect(stripAnsi(file.lines[1] ?? "")).toBe("const x = 1;");
+    expect(file.lineCount).toBe(2);
+  });
+
   it("loads a small text file with highlighted lines and a line count", async () => {
     const path = join(dir, "sample.ts");
     await writeFile(path, "// comment\nconst x = 1;"); // no trailing newline: exactly 2 lines
