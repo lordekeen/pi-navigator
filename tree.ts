@@ -39,11 +39,21 @@ export function entriesFromPaths(paths: string[]): TreeEntry[] {
  * Async filesystem walk. Dot entries are included (flagged hidden at render
  * time) so the "." toggle never requires a re-scan. IGNORED_NAMES directories
  * are skipped entirely. Symlink cycles are refused through a realpath
- * visited-set; the link itself is kept as an entry with symlink: true.
+ * visited-set; the link itself is kept as an entry with symlink: true. The
+ * root's realpath seeds the set so a link back to the workspace root itself
+ * is refused, not walked.
  */
 export async function collectFsEntries(cwd: string): Promise<TreeEntry[]> {
   const entries: TreeEntry[] = [];
   const visited = new Set<string>();
+  try {
+    // Without this seed, a symlink pointing at the workspace root would pass
+    // the visited check (the root is never added as a child) and re-walk the
+    // whole tree, only stopped by the depth cap.
+    visited.add(await realpath(cwd));
+  } catch {
+    // Unreachable root: the per-directory walk failures handle it.
+  }
   await walk(cwd, "", 0, entries, visited);
   return entries;
 }

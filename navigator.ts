@@ -49,9 +49,12 @@ export interface NavigatorOptions {
 }
 
 const HINTS: Record<string, string> = {
-  files: "j k move  Enter open  Tab pane  / filter  . hidden  y copy  r refresh  ? help  q close",
-  git: "j k move  Enter open file  g G jump  Tab pane  y copy  r refresh  ? help  q close",
-  viewer: "j k scroll  Ctrl+d/u page  h l scroll-x  w wrap  / search  n N match  Tab pane  r refresh  ? help  q close",
+  // Width budget: the longest hint plus the pane labels must fit the inner
+  // width at a 100-column terminal (98) so the focus indicator never gets
+  // truncated off the footer (render test enforces this at 120, 100, 80).
+  files: "j k move  Enter open  Tab  / filter  . hidden  y copy  ? help  q close",
+  git: "j k move  Enter open file  g G jump  Tab  y copy  ? help  q close",
+  viewer: "j k scroll  Ctrl+d/u  h l x  w wrap  / search  n N  Tab  ? help  q close",
   filter: "type to filter  up/down move  Enter apply  Esc clear",
   search: "type to search  up/down match  Enter apply  Esc clear",
   help: "j k scroll  q Esc ? close help",
@@ -754,11 +757,18 @@ export class NavigatorOverlay implements Focusable {
     return this.joinLeftRight(left, right, innerW);
   }
 
+  /**
+   * Left/right split with the right side guaranteed: when both cannot fit,
+   * the left (informational hint or title path) is ellipsized and the right
+   * (pane labels, counters, branch) survives. Plain padTo would truncate the
+   * tail, which for the footer is exactly the focus indicator.
+   */
   private joinLeftRight(left: string, right: string, width: number): string {
-    const leftW = visibleWidth(left);
     const rightW = visibleWidth(right);
-    const gap = Math.max(1, width - leftW - rightW);
-    const line = left + " ".repeat(gap) + right;
+    const maxLeft = Math.max(0, width - rightW - 1);
+    const leftPart = visibleWidth(left) > maxLeft ? truncateToWidth(left, maxLeft) : left;
+    const gap = Math.max(1, width - visibleWidth(leftPart) - rightW);
+    const line = leftPart + " ".repeat(gap) + right;
     return this.padTo(line, width);
   }
 
