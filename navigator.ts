@@ -795,7 +795,10 @@ export class NavigatorOverlay implements Focusable {
   private joinLeftRight(left: string, right: string, width: number): string {
     const rightW = visibleWidth(right);
     const maxLeft = Math.max(0, width - rightW - 1);
-    const leftPart = visibleWidth(left) > maxLeft ? truncateToWidth(left, maxLeft) : left;
+    // Empty ellipsis: truncateToWidth's default "..." is wrapped in \x1b[0m
+    // resets that would close the left part's style and render the ellipsis in
+    // bright default (visible against the dim footer hint / title path).
+    const leftPart = visibleWidth(left) > maxLeft ? truncateToWidth(left, maxLeft, "") : left;
     const gap = Math.max(1, width - visibleWidth(leftPart) - rightW);
     const line = leftPart + " ".repeat(gap) + right;
     return this.padTo(line, width);
@@ -1188,7 +1191,20 @@ export class NavigatorOverlay implements Focusable {
       }
       const [keys, description] = row;
       const keyCell = T.accent(keys.padEnd(16));
-      const descCell = truncateToWidth(description, boxW - 22);
+      // Row layout is " " + keyCell(16) + " " + descCell inside the boxW-2
+      // inner area, so the description gets boxW-20 columns (the prior
+      // boxW-22 cut two columns too early). truncateToWidth's default ellipsis
+      // wraps "..." in \x1b[0m resets; wrapping that in T.muted() would close
+      // the muted span before the ellipsis and render "..." in bright default,
+      // breaking the dim modal at narrow widths. Truncate with no ellipsis,
+      // strip the injected reset, and append our own ellipsis so the indicator
+      // stays inside the muted style.
+      const descWidth = boxW - 20;
+      let descCell = description;
+      if (visibleWidth(description) > descWidth) {
+        const cut = truncateToWidth(description, Math.max(1, descWidth - 1), "").replace(/\x1b\[[0-9;]*m/g, "");
+        descCell = cut + "\u2026";
+      }
       modal.push(inner(" " + keyCell + " " + T.muted(descCell)));
     }
     modal.push(T.frame("\u2514" + "\u2500".repeat(boxW - 2) + "\u2518"));
@@ -1208,7 +1224,10 @@ export class NavigatorOverlay implements Focusable {
   private padTo(content: string, width: number): string {
     const vw = visibleWidth(content);
     if (vw < width) return content + " ".repeat(width - vw);
-    return truncateToWidth(content, width);
+    // Empty ellipsis: truncateToWidth's default "..." is wrapped in \x1b[0m
+    // resets that close any open style and render the ellipsis in bright
+    // default (visible against dim text). Hard-cut with a single clean reset.
+    return truncateToWidth(content, width, "");
   }
 
   private shortPath(path: string): string {

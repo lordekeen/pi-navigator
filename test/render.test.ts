@@ -145,6 +145,27 @@ describe("render width safety", () => {
     expectWidthSafe(overlay, 120);
   });
 
+  it("help modal truncates descriptions without leaking a bright ellipsis out of the muted style", () => {
+    // At a narrow width the longest help description truncates. truncateToWidth's
+    // default "..." is wrapped in \x1b[0m resets; if those land inside the T.muted
+    // span the ellipsis renders in bright default and breaks the dim modal. The
+    // footer hint (joinLeftRight) has the same root cause. Render help at a width
+    // that forces truncation and assert no reset+three-dot artifact appears, and
+    // that the dim ellipsis indicator (…) is still shown.
+    const harness = makeHarness(18);
+    const { overlay } = harness;
+    overlay.handleInput("?");
+    const lines = overlay.render(50);
+    for (let i = 0; i < lines.length; i++) {
+      expect(lines[i], `line ${i} has bright-ellipsis artifact`).not.toMatch(/\x1b\[0m\.\.\./);
+    }
+    // The longest description ("cycle pane focus (files, git, viewer)") is 37
+    // cols; at width 50 the description column is 28, so it must truncate and
+    // show the ellipsis indicator.
+    expect(lines.some((l) => l.includes("\u2026"))).toBe(true);
+    expectWidthSafe(overlay, 50);
+  });
+
   it("renders the compact notice below the minimum height", () => {
     const harness = makeHarness(MIN_OVERLAY_HEIGHT - 1);
     const lines = expectWidthSafe(harness.overlay, 120);

@@ -9,8 +9,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
 | **Pending / Open** | 0 | 0 | 0 | **0** |
-| **Resolved** | 2 | 1 | 6 | **9** |
-| **Total** | **2** | **1** | **6** | **9** |
+| **Resolved** | 2 | 2 | 6 | **10** |
+| **Total** | **2** | **2** | **6** | **10** |
 
 ---
 
@@ -28,6 +28,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | ID | Title | Type | Severity | Resolution Summary | Status |
 | :--- | :--- | :--- | :--- | :--- | :---: |
+| [#010](010-help-modal-bright-ellipsis-leak.md) | Help Modal Leaks a Bright Ellipsis Out of the Muted Style at Narrow Widths | Bug | Medium | `truncateToWidth` injects `\x1b[0m` resets around its ellipsis; wrapping a truncated string in `T.muted`/`T.dim` closed the style early and rendered `...` in bright default. `composeHelp` now truncates with an empty ellipsis + manual dim `…`; `padTo` and `joinLeftRight` use an empty ellipsis for a clean hard-cut. | **Resolved** |
 | [#009](009-crlf-line-endings-break-viewer-layout.md) | CRLF Line Endings Break the Viewer Layout (Carriage Return Resets Cursor) | Bug | High | Normalize `\r\n` and lone `\r` to `\n` in `loadFile` right after the read, so carriage returns never reach the terminal and reset the cursor mid-row. Affected every CRLF file, including all `.ts` sources in this repo. | **Resolved** |
 | [#001](001-stale-content-race-when-opening-file.md) | UI Renders Stale Content and Inconsistent State When Opening a File | Bug | High | Added load sequence and target path tracking (`loadSeq`, `viewTargetRelPath`). Immediately displays loading placeholder, target path in header, and highlights row while keeping scroll intact on reload. | **Resolved** |
 | [#002](002-ctrl-n-shortcut-conflict.md) | Global `ctrl+n` Shortcut Conflicts with Pi Built-in Keybinding | Bug / Compatibility | Medium | Removed global `ctrl+n` shortcut registration from `index.ts` to prevent conflict warning banners with Pi 0.85.1+ built-in `toggleNamedFilter`. Kept `/navigator` command. | **Resolved** |
@@ -43,6 +44,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 ## 📂 Issues by Category
 
 ### Bug Fixes & UI Consistency
+- [#010: Help Modal Leaks a Bright Ellipsis Out of the Muted Style at Narrow Widths](010-help-modal-bright-ellipsis-leak.md)
 - [#009: CRLF Line Endings Break the Viewer Layout (Carriage Return Resets Cursor)](009-crlf-line-endings-break-viewer-layout.md)
 - [#001: UI Renders Stale Content and Inconsistent State When Opening a File](001-stale-content-race-when-opening-file.md)
 - [#002: Global `ctrl+n` Shortcut Conflicts with Pi Built-in Keybinding](002-ctrl-n-shortcut-conflict.md)
