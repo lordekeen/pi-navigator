@@ -166,6 +166,96 @@ describe("render width safety", () => {
     expectWidthSafe(overlay, 50);
   });
 
+  it("truncates file-tree, git-panel and card rows without a bright ellipsis", async () => {
+    // truncateToWidth injects \x1b[0m resets around its default "..." ellipsis
+    // (independent of theme). When a styled or soon-to-be-styled string is
+    // truncated, the reset closes the open style and "..." leaks in bright
+    // default. This exercises the file-tree row, git file row, git commit
+    // subject, and binary/image/error card body paths at a width that forces
+    // truncation, asserting no reset+three-dot artifact appears anywhere.
+    const harness = makeHarness(30);
+    const { overlay } = harness;
+    overlay.setTree(
+      buildTree(
+        "/work/repo",
+        entriesFromPaths([
+          "src/components/ReallyLongComponentNameHere.tsx",
+          "src/utils/anotherVeryLongHelperModuleName.ts",
+          "docs/nested/deeply/very-long-documentation-file.md",
+        ]),
+        new Map([["src/components/ReallyLongComponentNameHere.tsx", "M"]]),
+      ),
+      "git",
+    );
+    overlay.setGitState({
+      available: true,
+      branch: "main",
+      detached: false,
+      ahead: 0,
+      behind: 0,
+      unstaged: [
+        { relPath: "src/components/ReallyLongComponentNameHere.tsx", code: "M" },
+        { relPath: "src/utils/anotherVeryLongHelperModuleName.ts", code: "M" },
+      ],
+      staged: [{ relPath: "src/components/ReallyLongComponentNameHere.tsx", code: "A" }],
+      history: [
+        { shortHash: "a1b2c3d", dateRel: "2h ago", subject: "this is a very long commit subject line that will definitely need truncation in a narrow left pane" },
+        { shortHash: "e4f5a6b", dateRel: "yesterday", subject: "fix: another overlong subject line describing a refactor of the module system internals" },
+      ],
+      refreshedAt: 0,
+    });
+
+    // 74 cols: left column just appears (~24 wide) so file/git rows truncate.
+    const treeLines = overlay.render(74);
+    for (let i = 0; i < treeLines.length; i++) {
+      expect(treeLines[i], `tree line ${i} has bright-ellipsis artifact`).not.toMatch(/\x1b\[0m\.\.\./);
+    }
+
+    // Jump to the bottom of the git panel to surface the history rows.
+    overlay.handleInput("\t"); // files -> git
+    overlay.handleInput("G");
+    const gitLines = overlay.render(74);
+    for (let i = 0; i < gitLines.length; i++) {
+      expect(gitLines[i], `git line ${i} has bright-ellipsis artifact`).not.toMatch(/\x1b\[0m\.\.\./);
+    }
+
+    // Binary card with a long message that forces the card body to truncate.
+    const cardTheme = makeNavigatorTheme({
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+      underline: (text: string) => text,
+      inverse: (text: string) => text,
+    } as never);
+    const cardOverlay = new NavigatorOverlay({
+      cwd: "/work/repo",
+      theme: cardTheme,
+      getTerminalRows: () => 24,
+      requestRender: () => undefined,
+      onClose: () => undefined,
+      loadFile: async (relPath: string): Promise<ViewerFile> => ({
+        kind: "binary",
+        relPath,
+        sizeBytes: 999999,
+        mtimeMs: 0,
+        lines: [],
+        message: "999.9 KB \u00b7 binary content not rendered and a long extra clause to force truncation here",
+      }),
+      refresh: () => undefined,
+    });
+    cardOverlay.setTree(buildTree("/work/repo", entriesFromPaths(["src/very/long/path/to/the/binary/file.bin"]), new Map()), "git");
+    cardOverlay.setGitState({
+      available: true, branch: "main", detached: false, ahead: 0, behind: 0,
+      unstaged: [], staged: [], history: [], refreshedAt: 0,
+    });
+    await cardOverlay.openRelPath("src/very/long/path/to/the/binary/file.bin");
+    const cardLines = cardOverlay.render(60);
+    for (let i = 0; i < cardLines.length; i++) {
+      expect(cardLines[i], `card line ${i} has bright-ellipsis artifact`).not.toMatch(/\x1b\[0m\.\.\./);
+    }
+    expectWidthSafe(cardOverlay, 60);
+  });
+
   it("renders the compact notice below the minimum height", () => {
     const harness = makeHarness(MIN_OVERLAY_HEIGHT - 1);
     const lines = expectWidthSafe(harness.overlay, 120);

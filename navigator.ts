@@ -920,8 +920,12 @@ export class NavigatorOverlay implements Focusable {
     }
 
     const room = Math.max(4, leftW - 2 - visibleWidth(badge));
-    const content = arrow + truncateToWidth(body, room);
-    const gap = Math.max(0, leftW - visibleWidth(arrow) - visibleWidth(truncateToWidth(body, room)) - visibleWidth(badge));
+    // Empty ellipsis: truncateToWidth's default "..." is wrapped in \x1b[0m
+    // resets that close the styled body's open style and render "..." in bright
+    // default. Computed once so the gap math matches the rendered content.
+    const fitBody = truncateToWidth(body, room, "");
+    const content = arrow + fitBody;
+    const gap = Math.max(0, leftW - visibleWidth(arrow) - visibleWidth(fitBody) - visibleWidth(badge));
     const line = content + " ".repeat(gap) + badge;
     return isCursor ? T.selectedBg(this.padTo(line, leftW)) : this.padTo(line, leftW);
   }
@@ -953,14 +957,14 @@ export class NavigatorOverlay implements Focusable {
       const nameStyle = selected ? T.text : row.staged ? T.success : T.warning;
       const badge = " " + this.codeText(row.code);
       const room = Math.max(4, leftW - 2 - visibleWidth(badge));
-      const body = truncateToWidth(nameStyle(row.relPath), room);
+      const body = truncateToWidth(nameStyle(row.relPath), room, "");
       const gap = Math.max(0, leftW - 2 - visibleWidth(body) - visibleWidth(badge));
       line = arrow + body + " ".repeat(gap) + badge;
     } else {
       const arrow = selected ? T.accent(T.bold("\u25b6 ")) : "  ";
       const hash = T.muted(row.commit.shortHash);
       const room = Math.max(4, leftW - 2 - visibleWidth(row.commit.shortHash) - 2);
-      const subject = T.dim(truncateToWidth(row.commit.subject, room));
+      const subject = T.dim(truncateToWidth(row.commit.subject, room, ""));
       line = arrow + hash + "  " + subject;
     }
     return selected ? T.selectedBg(this.padTo(line, leftW)) : this.padTo(line, leftW);
@@ -1153,8 +1157,12 @@ export class NavigatorOverlay implements Focusable {
     const titlePad = Math.max(0, contentWidth - visibleWidth(title) - 3);
     out.push(blank(T.frame("\u2502") + " " + titleStyle(T.bold(" " + title + " ")) + " ".repeat(titlePad) + T.frame("\u2502")));
     for (const text of body) {
+      // Empty ellipsis: the default "..." is wrapped in \x1b[0m resets that
+      // would close the T.muted span and render "..." in bright default.
+      // Truncate once and reuse so the padding math matches the rendered cell.
+      const cell = truncateToWidth(text, contentWidth - 1, "");
       out.push(
-        blank(T.frame("\u2502") + " " + T.muted(truncateToWidth(text, contentWidth - 1)) + " ".repeat(Math.max(0, contentWidth - 1 - visibleWidth(truncateToWidth(text, contentWidth - 1)))) + T.frame("\u2502")),
+        blank(T.frame("\u2502") + " " + T.muted(cell) + " ".repeat(Math.max(0, contentWidth - 1 - visibleWidth(cell))) + T.frame("\u2502")),
       );
     }
     out.push(borderRow("\u2514", "\u2500", "\u2518"));
