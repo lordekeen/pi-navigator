@@ -9,8 +9,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
 | **Pending / Open** | 1 | 0 | 0 | **1** |
-| **Resolved** | 6 | 6 | 11 | **23** |
-| **Total** | **7** | **6** | **11** | **24** |
+| **Resolved** | 6 | 7 | 13 | **26** |
+| **Total** | **7** | **7** | **13** | **27** |
 
 ---
 
@@ -47,8 +47,11 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | [#004](004-search-navigation-keybindings-inconsistency.md) | Ambiguous Key Hints for Search Navigation (`n`/`N`) Between Input Modes | UX / Enhancement | Low | Clarified `n`/`N` (viewer navigation) vs arrow keys (active search typing) in `HELP_ROWS`. Added `Ctrl+n` / `Ctrl+p` match cycling in search mode. | **Resolved** |
 | [#005](005-hints-lookup-fallback-chain.md) | Fragile Fallback Chain in Footer Hint Resolution | Technical Debt | Low | Replaced loosely-typed fallback chain with exhaustively typed `FOCUS_HINTS` and `MODE_HINTS` dictionaries and an explicit `getFooterHint()` helper. | **Resolved** |
 | [#006](006-findnode-redundant-tree-traversal.md) | Redundant Child Iteration in `findNode` Tree Search | Performance | Low | Simplified `findNode` to inspect visited node directly rather than checking child arrays twice during DFS tree traversal. | **Resolved** |
-| [#007](007-git-binary-cache-invalidation.md) | Module-Level `gitBinaryPresent` Cache Cannot Be Invalidated | Reliability | Low | Exported `resetGitAvailabilityCache()` and wired it to run on manual `r` refresh and in test lifecycle hooks. | **Resolved** |
+| [#007](007-git-binary-cache-invalidation.md) | Module-Level `gitBinaryPresent` Cache Cannot Be Invalidated | Reliability | Low | Exported `resetGitAvailabilityCache()` (used by the test lifecycle hook). The manual-`r` reset was later removed by #021, leaving the export with no production caller — see #027. | **Resolved** |
 | [#008](008-fs-polling-overhead.md) | Periodic 3-Second Polling May Cause Overhead in Large Repositories | Performance | Low | Implemented Phase 1 dynamic idle backoff (3s up to 10s when idle), resetting immediately to 3s on user keystroke, on-disk changes, or manual `r` refresh. | **Resolved** |
+| [#025](025-search-current-match-highlight-off-by-occurrence.md) | Search Current-Match Highlight Targets the Wrong Occurrence on Multi-Hit Lines | Bug | Medium | Changed `markMatches`'s `currentIsFirst: boolean` to `currentOccurrence: number`; `markSearch` now computes the per-line occurrence index so the Nth match on a multi-hit line is styled as current. | **Resolved** |
+| [#026](026-git-group-dim-tone-collapses-to-muted.md) | Git Group Rows With `tone: "dim"` Render as `muted` | Bug / UI Polish | Low | Added the missing `"dim" → T.dim` branch to `buildGitRow`'s tone ternary chain so all four `GitRowTone` values map to the correct theme token. | **Resolved** |
+| [#027](027-dead-resetgitavailabilitycache-export.md) | Dead `resetGitAvailabilityCache` Export; Stale #007 Resolution Summary | Technical Debt | Low | Removed the dead `resetGitAvailabilityCache()` export and updated the git integration test to exercise the cache-hit path instead. | **Resolved** |
 
 ---
 
@@ -60,6 +63,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#001: UI Renders Stale Content and Inconsistent State When Opening a File](001-stale-content-race-when-opening-file.md)
 - [#002: Global `ctrl+n` Shortcut Conflicts with Pi Built-in Keybinding](002-ctrl-n-shortcut-conflict.md)
 - [#003: Phantom `x` Key Hint in Viewer Footer](003-phantom-x-key-in-viewer-hints.md)
+- [#025: Search Current-Match Highlight Targets the Wrong Occurrence on Multi-Hit Lines](025-search-current-match-highlight-off-by-occurrence.md) *(resolved)*
+- [#026: Git Group Rows With `tone: "dim"` Render as `muted`](026-git-group-dim-tone-collapses-to-muted.md) *(resolved)*
 
 ### Performance & Resource Optimization
 - [#020: No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread](020-no-viewer-cache-blocking-highlight.md) *(partial — cache done)*
@@ -85,6 +90,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 ### Technical Debt & Code Robustness
 - [#005: Fragile Fallback Chain in Footer Hint Resolution](005-hints-lookup-fallback-chain.md)
 - [#007: Module-Level `gitBinaryPresent` Cache Cannot Be Invalidated](007-git-binary-cache-invalidation.md)
+- [#027: Dead `resetGitAvailabilityCache` Export; Stale #007 Resolution Summary](027-dead-resetgitavailabilitycache-export.md) *(resolved)*
 
 ---
 

@@ -58,6 +58,16 @@ components:
     textColor: "{colors.dim}"
   git-row-selected:
     textColor: "{colors.text}"
+  # Group rows (section labels, `Clean`, git-unavailable) follow the tone
+  # stack: warning / success / dim / muted — see buildGitRow (Issue #026).
+  git-group-warning:
+    textColor: "{colors.warning}"
+  git-group-success:
+    textColor: "{colors.success}"
+  git-group-dim:
+    textColor: "{colors.dim}"
+  git-group-muted:
+    textColor: "{colors.muted}"
   git-badge-modified:
     textColor: "{colors.warning}"
   git-badge-added:

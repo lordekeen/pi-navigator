@@ -109,7 +109,7 @@ export function markMatches(
   query: string,
   styleMatch: (text: string) => string,
   styleCurrent: (text: string) => string,
-  currentIsFirst: boolean,
+  currentOccurrence: number,
 ): string {
   if (!query) return styled;
   const smartCase = /[A-Z]/.test(query);
@@ -126,7 +126,7 @@ export function markMatches(
     }
     out += styled.slice(from, idx);
     const slice = styled.slice(idx, idx + query.length);
-    const useCurrent = currentIsFirst && occurrence === 0;
+    const useCurrent = occurrence === currentOccurrence;
     out += useCurrent ? styleCurrent(slice) : styleMatch(slice);
     occurrence += 1;
     from = idx + Math.max(1, needle.length);

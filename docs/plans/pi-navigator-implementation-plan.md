@@ -1,6 +1,12 @@
 # pi-navigator — Implementation Plan
 
-Status: awaiting approval.
+> **Status: SUPERSEDED.** This is the original implementation plan, retained as
+> a historical reference. The shipped implementation has diverged from it; the
+> authoritative current state is the source code plus `README.md`, `AGENTS.md`,
+> `DESIGN.md`, and `docs/issues/issues_index.md`. Key divergences: the `ctrl+n`
+> shortcut was removed (issue #002), the deferred tooling in section 11 is now
+> enabled, and keymap/layout details were refined during implementation and QA.
+
 Companion documents: [`ui-standards-report.md`](ui-standards-report.md) for platform findings and rationale.
 Target: zero-runtime-dependency pi extension, read-only file navigator overlay for pi-coding-agent.
 

@@ -1032,7 +1032,14 @@ export class NavigatorOverlay implements Focusable {
     const T = this.T;
     let line: string;
     if (row.kind === "group") {
-      const tone = row.tone === "warning" ? T.warning : row.tone === "success" ? T.success : T.muted;
+      const tone =
+        row.tone === "warning"
+          ? T.warning
+          : row.tone === "success"
+            ? T.success
+            : row.tone === "dim"
+              ? T.dim
+              : T.muted;
       line = " " + tone(row.label);
     } else if (row.kind === "file") {
       const arrow = selected ? T.accent(T.bold("\u25b6 ")) : "  ";
@@ -1221,12 +1228,21 @@ export class NavigatorOverlay implements Focusable {
     if (this.markedCache && this.markedCache.file === file && this.markedCache.version === this.searchVersion) {
       return this.markedCache.marked;
     }
-    const currentLine = this.searchMatches[Math.min(this.searchIndex, this.searchMatches.length - 1)]?.line;
+    const currentMatch = this.searchMatches[Math.min(this.searchIndex, this.searchMatches.length - 1)];
     const T = this.T;
     const matchLines = this.searchMatchLines;
+    // Compute the per-line occurrence index of the current match so
+    // markMatches highlights the Nth occurrence on its line, not always
+    // the first (Issue #025).
+    const currentOccurrenceOnLine = currentMatch
+      ? this.searchMatches
+          .filter((m) => m.line === currentMatch.line && m.start < currentMatch.start)
+          .length
+      : -1;
     const marked = file.lines.map((line, index) => {
       if (!matchLines.has(index)) return line;
-      return markMatches(line, this.searchQuery, T.searchMatch, T.searchCurrent, index === currentLine);
+      const occ = index === currentMatch?.line ? currentOccurrenceOnLine : -1;
+      return markMatches(line, this.searchQuery, T.searchMatch, T.searchCurrent, occ);
     });
     const result = { ...file, lines: marked };
     this.markedCache = { file, version: this.searchVersion, marked: result };

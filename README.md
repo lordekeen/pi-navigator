@@ -2,7 +2,7 @@
 
 Read-only project file navigator for pi. Opens a centered overlay inside a running pi session with a file tree, git state, and a syntax-highlighted viewer. No file editing, no external binaries, no runtime dependencies.
 
-![status](https://img.shields.io/badge/status-v0.1%20scaffold-yellow)
+![status](https://img.shields.io/badge/status-v0.2.1-green)
 
 ## Install
 
@@ -11,7 +11,9 @@ Place the directory in a pi extension location and pi discovers it:
 - Global: `~/.pi/agent/extensions/pi-navigator/` (or any directory containing `index.ts`)
 - Project: `.pi/extensions/pi-navigator/`
 
-Then start pi and run `/navigator`, or press `Ctrl+N`.
+Then start pi and run `/navigator`.
+
+Does pi-navigator fit your setup? [Read more](./AGENTS.md) — [Dev docs](./docs/plans/pi-navigator-implementation-plan.md) — [Open issues](./docs/issues/issues_index.md)
 
 ## Usage
 
@@ -91,7 +93,7 @@ v1 always shows a metadata card (name, size, and PNG/GIF dimensions when cheaply
 
 Files: `index.ts` (entry, async data ownership), `navigator.ts` (overlay component, keymap, rendering), `tree.ts` (tree model, fs walk), `git.ts` (async git access and porcelain parsing), `viewer.ts` (load caps, highlighting, search, display rows), `theme.ts` (token mapping), `types.ts`, `constants.ts`.
 
-Planning documents live in `plans/`: `ui-standards-report.md` (platform and reference findings) and `pi-navigator-implementation-plan.md` (locked decisions, contracts, QA checklist). The throwaway visual mock is `mockups/navigator.html` — open it in a browser and drive it with the same keymap.
+Planning documents live in `docs/plans/`: `ui-standards-report.md` (platform and reference findings), `pi-navigator-implementation-plan.md` (the original plan — now superseded; see `docs/issues/issues_index.md` for current state), and `qa-evidence.md`. Issues are tracked in `docs/issues/`. The throwaway visual mock is `mockups/navigator.html` — open it in a browser and drive it with the same keymap.
 
 ### Tooling (enabled — Linux, Node 26, git 2.55)
 
@@ -104,7 +106,7 @@ runtime dependencies, ever — `node_modules` is dev-only.
   than the plan's original "NodeNext" because pi loads extensions through jiti,
   which resolves the code's intentionally extensionless relative imports;
   NodeNext would demand `.js` extensions the runtime does not need.
-- `npm test` — five vitest suites (99 cases): porcelain `-z` parsing plus a
+- `npm test` — five vitest suites (108 cases): porcelain `-z` parsing plus a
   real-git scratch-repo integration pass, tree building/fs-walk fixtures
   (ignores, dot entries, symlink cycles), viewer caps and UTF-8 head decoding,
   the keymap reducer (escape precedence, focus cycling, copy), and render

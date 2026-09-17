@@ -74,11 +74,6 @@ async function runGit(cwd: string, args: string[]): Promise<GitResult> {
   }
 }
 
-/** Invalidate the cached git binary availability check. */
-export function resetGitAvailabilityCache(): void {
-  gitBinaryPresent = null;
-}
-
 /** One-time (per process, until invalidated) check whether the git binary is reachable. */
 export async function isGitAvailable(cwd: string): Promise<boolean> {
   if (gitBinaryPresent !== null) return gitBinaryPresent;

@@ -20,7 +20,6 @@ import {
   parsePorcelain,
   readGitState,
   readTrackedFiles,
-  resetGitAvailabilityCache,
   toCwdRelative,
 } from "../git";
 
@@ -262,9 +261,11 @@ describe("git integration on a scratch repository", () => {
     }
   });
 
-  it("allows resetting git availability cache", async () => {
+  it("returns the cached git-on-path result", async () => {
+    // Two calls to isGitAvailable for the same cwd return the cached result.
+    // runGit's ENOENT self-healing (Issue #021) handles the real invalidation
+    // path; this test exercises the normal cache-hit branch.
     expect(await isGitAvailable(repo)).toBe(true);
-    resetGitAvailabilityCache();
     expect(await isGitAvailable(repo)).toBe(true);
   });
 });

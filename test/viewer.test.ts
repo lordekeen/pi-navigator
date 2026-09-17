@@ -97,18 +97,25 @@ describe("markMatches", () => {
   const match = (s: string) => `<m>${s}</m>`;
   const current = (s: string) => `<c>${s}</c>`;
 
-  it("marks all occurrences and styles the first as current", () => {
-    expect(markMatches("aXa", "a", match, current, true)).toBe("<c>a</c>X<m>a</m>");
-    expect(markMatches("aXa", "a", match, current, false)).toBe("<m>a</m>X<m>a</m>");
+  it("marks all occurrences and styles the Nth as current", () => {
+    // currentOccurrence=0 styles the first match as current (Issue #025).
+    expect(markMatches("aXa", "a", match, current, 0)).toBe("<c>a</c>X<m>a</m>");
+    // currentOccurrence=-1 means no match on this line is current.
+    expect(markMatches("aXa", "a", match, current, -1)).toBe("<m>a</m>X<m>a</m>");
+  });
+
+  it("styles the 2nd occurrence as current when currentOccurrence=1", () => {
+    // Two matches on one line: the 2nd should be current (Issue #025).
+    expect(markMatches("aaXaa", "aa", match, current, 1)).toBe("<m>aa</m>X<c>aa</c>");
   });
 
   it("is smart-case: an uppercase query matches only real case", () => {
-    expect(markMatches("fooBar", "bar", match, current, false)).toBe("foo<m>Bar</m>");
-    expect(markMatches("foobar", "Bar", match, current, false)).toBe("foobar");
+    expect(markMatches("fooBar", "bar", match, current, -1)).toBe("foo<m>Bar</m>");
+    expect(markMatches("foobar", "Bar", match, current, -1)).toBe("foobar");
   });
 
   it("returns the text unchanged for an empty query", () => {
-    expect(markMatches("abc", "", match, current, false)).toBe("abc");
+    expect(markMatches("abc", "", match, current, -1)).toBe("abc");
   });
 });
 
