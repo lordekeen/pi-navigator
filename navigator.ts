@@ -38,6 +38,21 @@ import type { NavigatorTheme } from "./theme";
 import type { FileNode, FilesRow, Focus, GitRow, GitState, InputMode, SearchMatch, ViewerFile } from "./types";
 import { computeRows, formatSize, markMatches, maxLineWidth, searchLines, type DisplayRow } from "./viewer";
 
+/**
+ * Truncate a (possibly styled) string to a visible width and return both the
+ * truncated text and its visible width. Sites that need to truncate and then
+ * pad to a column previously called `truncateToWidth` and a separate
+ * `visibleWidth` on the result — two char-by-char scans of the same string.
+ * This collapses them into one named operation (Issue #018). The empty
+ * ellipsis matches the hard-cut convention used across the overlay; pi-tui's
+ * `visibleWidth` caches repeated measurements, so the single `visibleWidth`
+ * here is cheap and the result width is exact.
+ */
+function truncateAndWidth(text: string, maxWidth: number): { text: string; width: number } {
+  const out = truncateToWidth(text, maxWidth, "");
+  return { text: out, width: visibleWidth(out) };
+}
+
 export interface NavigatorOptions {
   cwd: string;
   theme: NavigatorTheme;
@@ -989,10 +1004,10 @@ export class NavigatorOverlay implements Focusable {
     const room = Math.max(4, leftW - 2 - visibleWidth(badge));
     // Empty ellipsis: truncateToWidth's default "..." is wrapped in \x1b[0m
     // resets that close the styled body's open style and render "..." in bright
-    // default. Computed once so the gap math matches the rendered content.
-    const fitBody = truncateToWidth(body, room, "");
-    const content = arrow + fitBody;
-    const gap = Math.max(0, leftW - visibleWidth(arrow) - visibleWidth(fitBody) - visibleWidth(badge));
+    // default. truncate once, measure the result once (Issue #018).
+    const fit = truncateAndWidth(body, room);
+    const content = arrow + fit.text;
+    const gap = Math.max(0, leftW - visibleWidth(arrow) - fit.width - visibleWidth(badge));
     const line = content + " ".repeat(gap) + badge;
     return isCursor ? T.selectedBg(this.padTo(line, leftW)) : this.padTo(line, leftW);
   }
@@ -1024,9 +1039,9 @@ export class NavigatorOverlay implements Focusable {
       const nameStyle = selected ? T.text : row.staged ? T.success : T.warning;
       const badge = " " + this.codeText(row.code);
       const room = Math.max(4, leftW - 2 - visibleWidth(badge));
-      const body = truncateToWidth(nameStyle(row.relPath), room, "");
-      const gap = Math.max(0, leftW - 2 - visibleWidth(body) - visibleWidth(badge));
-      line = arrow + body + " ".repeat(gap) + badge;
+      const fit = truncateAndWidth(nameStyle(row.relPath), room);
+      const gap = Math.max(0, leftW - 2 - fit.width - visibleWidth(badge));
+      line = arrow + fit.text + " ".repeat(gap) + badge;
     } else {
       const arrow = selected ? T.accent(T.bold("\u25b6 ")) : "  ";
       const hash = T.muted(row.commit.shortHash);
@@ -1267,10 +1282,10 @@ export class NavigatorOverlay implements Focusable {
     for (const text of body) {
       // Empty ellipsis: the default "..." is wrapped in \x1b[0m resets that
       // would close the T.muted span and render "..." in bright default.
-      // Truncate once and reuse so the padding math matches the rendered cell.
-      const cell = truncateToWidth(text, contentWidth - 1, "");
+      // Truncate once and reuse the measured width so the padding matches.
+      const cell = truncateAndWidth(text, contentWidth - 1);
       out.push(
-        blank(T.frame("\u2502") + " " + T.muted(cell) + " ".repeat(Math.max(0, contentWidth - 1 - visibleWidth(cell))) + T.frame("\u2502")),
+        blank(T.frame("\u2502") + " " + T.muted(cell.text) + " ".repeat(Math.max(0, contentWidth - 1 - cell.width)) + T.frame("\u2502")),
       );
     }
     out.push(borderRow("\u2514", "\u2500", "\u2518"));

@@ -34,7 +34,16 @@ export interface RepoInfo {
 
 let gitBinaryPresent: boolean | null = null;
 
-async function runGit(cwd: string, args: string[]): Promise<string | null> {
+/**
+ * Result of a single git invocation. `"ok"` carries stdout; `"overflow"`
+ * means the output exceeded `maxBuffer` (e.g. a monorepo with enormous
+ * `status -uall`/`ls-files` output) and must be surfaced rather than silently
+ * treated as empty; `"error"` is any other failure (non-zero exit, timeout,
+ * missing binary). (Issue #024.)
+ */
+type GitResult = { status: "ok"; stdout: string } | { status: "overflow" } | { status: "error" };
+
+async function runGit(cwd: string, args: string[]): Promise<GitResult> {
   try {
     const { stdout } = await execFileAsync("git", args, {
       cwd,
@@ -43,7 +52,7 @@ async function runGit(cwd: string, args: string[]): Promise<string | null> {
       encoding: "utf8",
       maxBuffer: 4 * 1024 * 1024,
     });
-    return stdout;
+    return { status: "ok", stdout };
   } catch (error) {
     // A spawn ENOENT means the git binary itself is not on PATH: the cached
     // availability check is stale, so clear it and let the next `isGitAvailable`
@@ -53,7 +62,15 @@ async function runGit(cwd: string, args: string[]): Promise<string | null> {
     if (error && typeof error === "object" && (error as { code?: unknown }).code === "ENOENT") {
       gitBinaryPresent = null;
     }
-    return null;
+    // maxBuffer overflow is signaled by Node as code "ERR_CHILD_PROCESS_STDIO_MAXBUFFER".
+    if (
+      error &&
+      typeof error === "object" &&
+      (error as { code?: unknown }).code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
+    ) {
+      return { status: "overflow" };
+    }
+    return { status: "error" };
   }
 }
 
@@ -65,7 +82,8 @@ export function resetGitAvailabilityCache(): void {
 /** One-time (per process, until invalidated) check whether the git binary is reachable. */
 export async function isGitAvailable(cwd: string): Promise<boolean> {
   if (gitBinaryPresent !== null) return gitBinaryPresent;
-  gitBinaryPresent = (await runGit(cwd, ["--version"])) !== null;
+  const result = await runGit(cwd, ["--version"]);
+  gitBinaryPresent = result.status === "ok";
   return gitBinaryPresent;
 }
 
@@ -75,13 +93,13 @@ export async function detectRepo(cwd: string): Promise<RepoInfo> {
   }
   // `--show-toplevel` and `--show-prefix` are independent of the other state
   // commands; fetch both in a single spawn. Output is "<toplevel>\n<prefix>\n"
-  // (prefix may be empty at the repo root). Fails (returns null) outside a
-  // repo, which maps to the "not a git repository" case.
-  const out = await runGit(cwd, ["rev-parse", "--show-toplevel", "--show-prefix"]);
-  if (out === null) {
+  // (prefix may be empty at the repo root). Fails outside a repo, which maps
+  // to the "not a git repository" case.
+  const result = await runGit(cwd, ["rev-parse", "--show-toplevel", "--show-prefix"]);
+  if (result.status !== "ok") {
     return { available: false, prefix: "", error: "not a git repository" };
   }
-  const prefix = (out.split("\n")[1] ?? "").trim();
+  const prefix = (result.stdout.split("\n")[1] ?? "").trim();
   return { available: true, prefix };
 }
 
@@ -91,9 +109,11 @@ function stripPrefix(filePath: string, prefix: string): string | null {
 }
 
 /**
- * Split `git status --porcelain -uall -z` output into staged (index) and
+ * Split `git status --porcelain -unormal -z` output into staged (index) and
  * unstaged (worktree) lists, translated from repository-root-relative paths to
  * cwd-relative paths. Untracked entries land in the unstaged list as "??".
+ * `-unormal` lists untracked files and directories without recursing into
+ * every file under an untracked directory, keeping the output bounded (Issue #024).
  */
 export function parsePorcelain(
   text: string,
@@ -152,29 +172,45 @@ export async function readGitState(cwd: string, repo?: RepoInfo): Promise<GitSta
 
   // branch / ahead-behind counts / status / log are mutually independent —
   // run them concurrently so a single tick waits one round, not four.
-  const [branchOut, counts, statusOut, logOut] = await Promise.all([
+  // `-unormal` bounds untracked listing so a monorepo with huge untracked
+  // trees does not overflow maxBuffer (Issue #024).
+  const [branchRes, countsRes, statusRes, logRes] = await Promise.all([
     runGit(cwd, ["branch", "--show-current"]),
     runGit(cwd, ["rev-list", "--left-right", "--count", "@{u}...HEAD"]),
-    runGit(cwd, ["status", "--porcelain", "-uall", "-z"]),
+    runGit(cwd, ["status", "--porcelain", "-unormal", "-z"]),
     runGit(cwd, ["log", `-n${GIT_HISTORY_COUNT}`, "--date=relative", `--pretty=format:%h%x1f%ad%x1f%s`]),
   ]);
 
-  const branchName = (branchOut ?? "").trim();
+  // Surface maxBuffer overflow instead of silently rendering an empty panel.
+  // Status overflow is the most user-visible (lost change list); log overflow
+  // is less likely given the -n cap but handled the same way. Reported as
+  // unavailable with an explanatory error so the git panel surfaces it as its
+  // single explanation row rather than showing empty lists.
+  if (statusRes.status === "overflow" || logRes.status === "overflow") {
+    return {
+      ...unavailable,
+      error: "git output exceeded the 4 MB buffer — untracked tree too large; re-run after cleaning or narrowing the worktree",
+    };
+  }
+
+  const branchName = branchRes.status === "ok" ? branchRes.stdout.trim() : "";
   const detached = branchName === "";
 
   // left count = upstream-only commits (behind), right = HEAD-only (ahead).
   let ahead = 0;
   let behind = 0;
-  if (counts) {
-    const parts = counts.trim().split(/\s+/);
+  if (countsRes.status === "ok") {
+    const parts = countsRes.stdout.trim().split(/\s+/);
     behind = Number.parseInt(parts[0] ?? "0", 10) || 0;
     ahead = Number.parseInt(parts[1] ?? "0", 10) || 0;
   }
 
-  const { unstaged, staged } = parsePorcelain(statusOut ?? "", detected.prefix);
+  const statusText = statusRes.status === "ok" ? statusRes.stdout : "";
+  const { unstaged, staged } = parsePorcelain(statusText, detected.prefix);
 
   const history: GitCommit[] = [];
-  for (const line of (logOut ?? "").split("\n")) {
+  const logText = logRes.status === "ok" ? logRes.stdout : "";
+  for (const line of logText.split("\n")) {
     if (!line) continue;
     const [shortHash, dateRel, subject] = line.split(UNIT_SEPARATOR);
     if (!shortHash) continue;
@@ -208,8 +244,9 @@ export function gitTreeProbe(state: GitState): string {
 
 /** Tracked files (repository-root-relative) via `git ls-files -z`. */
 export async function readTrackedFiles(cwd: string): Promise<string[]> {
-  const out = (await runGit(cwd, ["ls-files", "-z"])) ?? "";
-  return out.split(NUL).filter((line) => line.length > 0);
+  const result = await runGit(cwd, ["ls-files", "-z"]);
+  if (result.status !== "ok") return [];
+  return result.stdout.split(NUL).filter((line) => line.length > 0);
 }
 
 /** Translate repository-root-relative paths to cwd-relative, dropping outsiders. */

@@ -1,6 +1,6 @@
 # Issue #024: Unbounded Inputs at the Git Boundary
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Enhancement / Robustness
 - **Severity**: Low
 - **Component**: [`git.ts`](file:///home/jhonny/Sources/pi-navigator/git.ts) / [`runGit`](file:///home/jhonny/Sources/pi-navigator/git.ts#L37)
@@ -24,6 +24,16 @@
 
 ## Acceptance Criteria
 
-- [ ] A decision is made and documented on untracked-file listing mode.
-- [ ] Overflow is surfaced rather than silently empty.
-- [ ] `npm run typecheck` and `npm test` are green.
+- [x] A decision is made and documented on untracked-file listing mode.
+- [x] Overflow is surfaced rather than silently empty.
+- [x] `npm run typecheck` and `npm test` are green.
+
+## Resolution
+
+Two changes:
+
+1. **Surfacing overflow.** `runGit` now returns a discriminated `GitResult` (`"ok" | "overflow" | "error"`) instead of `string | null`. Node signals a maxBuffer overflow as `code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"`; `runGit` maps that to `"overflow"` distinct from ordinary failures. `readGitState` returns an unavailable state with an explanatory `error` ("git output exceeded the 4 MB buffer …") when the status or log command overflows, so the git panel renders the message as its explanation row instead of silently showing empty lists. All `runGit` call sites (`detectRepo`, `isGitAvailable`, `readGitState`, `readTrackedFiles`) were updated for the new return type.
+
+2. **Bounding untracked listing.** Switched `git status --porcelain -uall -z` to `-unormal -z`. `-uall` recurses into every file under untracked directories, which is what can blow past the 4 MB buffer on a monorepo with large untracked trees; `-unormal` lists untracked files and directories without that recursion, keeping output bounded. The existing untracked-file integration test (`untracked.txt` → `??`) still passes because a single top-level untracked file is listed identically under both modes. The porcelain parsing unit tests parse raw output directly and are unaffected.
+
+All 107 tests green.

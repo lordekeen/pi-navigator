@@ -1,6 +1,6 @@
 # Issue #018: Redundant `visibleWidth` / `truncateToWidth` Scans Over the Same Strings
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Enhancement / Performance
 - **Severity**: Low
 - **Component**: [`navigator.ts`](file:///home/jhonny/Sources/pi-navigator/navigator.ts)
@@ -21,6 +21,10 @@ Add a width-returning truncate variant (e.g. `truncateToWidthW(...) : { text: st
 
 ## Acceptance Criteria
 
-- [ ] Affected render sites use a single measurement+truncate call.
-- [ ] Layout and padding are unchanged at all tested terminal widths.
-- [ ] `npm run typecheck` and `npm test` are green (render width-safety suite included).
+- [x] Affected render sites use a single measurement+truncate call.
+- [x] Layout and padding are unchanged at all tested terminal widths.
+- [x] `npm run typecheck` and `npm test` are green (render width-safety suite included).
+
+## Resolution
+
+Added a module-local `truncateAndWidth(text, maxWidth)` helper that calls `truncateToWidth` once and `visibleWidth` once on the result, returning `{ text, width }`, and applied it at the three render sites that previously truncated and then measured the result separately to compute padding: `buildFileRow` (file/match row gap), `buildGitRow` (file row gap), and `buildCard` (card cell padding). Each now does one truncate + one measure instead of truncate + separate `visibleWidth(result)`. The empty-ellipsis hard-cut convention is preserved. All 107 tests green, incl. render width-safety at 120×36/100×28/80×24/narrow.

@@ -34,6 +34,9 @@ export interface FileNode {
   expanded: boolean;
   /** Worktree status code when present; index-only changes use the index code. */
   gitCode?: GitCode;
+  /** True when this node or any descendant carries a gitCode. Set during tree
+   *  build and recomputed in applyGitCodes so directory row styling is O(1). */
+  subtreeChanged: boolean;
   parent?: FileNode;
   children: FileNode[];
 }

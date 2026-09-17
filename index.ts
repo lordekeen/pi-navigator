@@ -68,6 +68,10 @@ async function runNavigator(ctx: ExtensionContext | ExtensionCommandContext): Pr
       let treeSource: "git" | "fs" | null = null;
       let signature = "";
       let treeProbe: string | null = null;
+      // Last git status probe that was actually stamped onto the tree via
+      // applyGitCodes. When an idle tick's probe matches this, the codes are
+      // unchanged and the full-tree walk can be skipped (Issue #022).
+      let lastStampedProbe: string | null = null;
       let pollTimer: ReturnType<typeof setTimeout> | null = null;
       let currentPollDelay = REFRESH_INTERVAL_MS;
       let closed = false;
@@ -204,13 +208,22 @@ async function runNavigator(ctx: ExtensionContext | ExtensionCommandContext): Pr
               reapplyExpansion(nextRoot, expandedBefore, firstBuild ? 0 : -1);
               root = nextRoot;
               signature = nextSignature;
+              lastStampedProbe = probe;
             } else if (root) {
-              applyGitCodes(root, gitCodeMap(git));
+              // Tree shape unchanged; only re-stamp git codes if the status
+              // probe actually changed since the last stamp.
+              if (probe !== lastStampedProbe) {
+                applyGitCodes(root, gitCodeMap(git));
+                lastStampedProbe = probe;
+              }
             }
             treeSource = nextSource;
             treeProbe = probe;
           } else if (root) {
-            applyGitCodes(root, gitCodeMap(git));
+            if (probe !== lastStampedProbe) {
+              applyGitCodes(root, gitCodeMap(git));
+              lastStampedProbe = probe;
+            }
           }
 
           if (root && treeSource) overlay.setTree(root, treeSource);

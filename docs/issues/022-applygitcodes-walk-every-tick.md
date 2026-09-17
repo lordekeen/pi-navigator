@@ -1,6 +1,6 @@
 # Issue #022: Full-Tree `applyGitCodes` Walk Every Tick Even When Status Unchanged
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Enhancement / Performance
 - **Severity**: Low
 - **Component**: [`index.ts`](file:///home/jhonny/Sources/pi-navigator/index.ts) / [`tree.ts`](file:///home/jhonny/Sources/pi-navigator/tree.ts)
@@ -22,6 +22,10 @@ Skip the walk when the git status probe equals the previous probe (status unchan
 
 ## Acceptance Criteria
 
-- [ ] `applyGitCodes` is not re-run on idle ticks when git status is unchanged.
-- [ ] Status changes still propagate to row styling promptly.
-- [ ] `npm run typecheck` and `npm test` are green.
+- [x] `applyGitCodes` is not re-run on idle ticks when git status is unchanged.
+- [x] Status changes still propagate to row styling promptly.
+- [x] `npm run typecheck` and `npm test` are green.
+
+## Resolution
+
+Added a `lastStampedProbe` variable tracking the last git status probe actually stamped onto the tree. `gitTreeProbe` encodes `${code} ${relPath}` for every staged+unstaged file — exactly the inputs to `gitCodeMap` — so `probe === lastStampedProbe` implies the codes are identical and the full-tree `applyGitCodes` walk can be skipped. Both idle-tick call sites (the `treeChanged`/signature-unchanged branch and the `else if (root)` branch) are now gated on `probe !== lastStampedProbe`, and `lastStampedProbe` is updated whenever codes are stamped (including after a `buildTree` rebuild, which bakes codes in directly). Status changes still propagate because a changed probe re-stamps. All 107 tests green.

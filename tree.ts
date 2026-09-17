@@ -72,6 +72,12 @@ async function walk(
     return;
   }
 
+  // Collect this level's entries and the subdirectory descents to launch.
+  // Descents run concurrently per level (Promise.all) so the walk is no longer
+  // serialized one child directory at a time (Issue #023). All `visited` adds
+  // happen synchronously here, before any descent starts, so the set is a safe
+  // cycle guard under the fan-out. Depth cap and IGNORED_NAMES are unchanged.
+  const descents: Promise<void>[] = [];
   for (const dirent of dirents) {
     const name = dirent.name;
     if (IGNORED_NAMES.has(name)) continue;
@@ -103,8 +109,9 @@ async function walk(
     } catch {
       continue;
     }
-    await walk(fullPath, relPath, depth + 1, entries, visited);
+    descents.push(walk(fullPath, relPath, depth + 1, entries, visited));
   }
+  await Promise.all(descents);
 }
 
 /**
@@ -150,6 +157,7 @@ function makeNode(
     expanded: depth < 1,
     parent: parent ?? undefined,
     children: [],
+    subtreeChanged: false,
   };
 }
 
@@ -237,6 +245,7 @@ export function buildTree(cwd: string, entries: TreeEntry[], gitCodes: Map<strin
   }
 
   sortTree(root);
+  recomputeSubtreeChanged(root);
   return root;
 }
 
@@ -251,6 +260,23 @@ export function applyGitCodes(root: FileNode, codes: Map<string, string>): void 
   walkTree(root, (node) => {
     if (!node.isDir && node.relPath) node.gitCode = codes.get(node.relPath);
   });
+  recomputeSubtreeChanged(root);
+}
+
+/**
+ * Bottom-up recompute of the `subtreeChanged` flag (true when this node or any
+ * descendant carries a gitCode). Called after buildTree sorts and after
+ * applyGitCodes re-stamps codes, so directory row styling is an O(1) field
+ * read instead of a recursive scan per dir row per render (Issue #017).
+ */
+function recomputeSubtreeChanged(node: FileNode): boolean {
+  if (!node.isDir) return (node.subtreeChanged = Boolean(node.gitCode));
+  let any = Boolean(node.gitCode);
+  for (const child of node.children) {
+    if (recomputeSubtreeChanged(child)) any = true;
+  }
+  node.subtreeChanged = any;
+  return any;
 }
 
 // ── Traversal ──
@@ -328,8 +354,10 @@ export function findNode(root: FileNode, relPath: string): FileNode | null {
 }
 
 export function hasChanges(node: FileNode): boolean {
-  if (node.gitCode) return true;
-  return node.children.some(hasChanges);
+  // O(1) field read; the flag is maintained by recomputeSubtreeChanged()
+  // during buildTree and applyGitCodes. Kept as a function for call-site
+  // readability and so tests exercise the same path the render uses.
+  return node.subtreeChanged;
 }
 
 /** Visible rows for the files pane (expansion aware, hidden aware). */
