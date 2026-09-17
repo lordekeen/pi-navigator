@@ -9,8 +9,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
 | **Pending / Open** | 1 | 0 | 0 | **1** |
-| **Resolved** | 6 | 7 | 13 | **26** |
-| **Total** | **7** | **7** | **13** | **27** |
+| **Resolved** | 6 | 8 | 15 | **29** |
+| **Total** | **7** | **8** | **15** | **30** |
 
 ---
 
@@ -52,6 +52,9 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | [#025](025-search-current-match-highlight-off-by-occurrence.md) | Search Current-Match Highlight Targets the Wrong Occurrence on Multi-Hit Lines | Bug | Medium | Changed `markMatches`'s `currentIsFirst: boolean` to `currentOccurrence: number`; `markSearch` now computes the per-line occurrence index so the Nth match on a multi-hit line is styled as current. | **Resolved** |
 | [#026](026-git-group-dim-tone-collapses-to-muted.md) | Git Group Rows With `tone: "dim"` Render as `muted` | Bug / UI Polish | Low | Added the missing `"dim" → T.dim` branch to `buildGitRow`'s tone ternary chain so all four `GitRowTone` values map to the correct theme token. | **Resolved** |
 | [#027](027-dead-resetgitavailabilitycache-export.md) | Dead `resetGitAvailabilityCache` Export; Stale #007 Resolution Summary | Technical Debt | Low | Removed the dead `resetGitAvailabilityCache()` export and updated the git integration test to exercise the cache-hit path instead. | **Resolved** |
+| [#028](028-nerd-font-icons.md) | Nerd Font Filetype Icons, Env-Gated | Feature | Medium | New `icons.ts`; `PI_NAV_ICONS=1` opts into a one-cell Nerd Font icon column in the file tree (default plain glyphs). Env is read once in `index.ts`; width-safe at all sizes; one-time tofu hint when on. | **Resolved** |
+| [#029](029-git-pane-dynamic-rows.md) | Git Pane Dynamic Rows + Richer Badges | Feature | Low | `gitRows` skips empty `Unstaged (N)`/`Staged (N)` groups (both empty → `Clean`); `codeText` maps `R→warning`, `C→success`. Header summary always-on. | **Resolved** |
+| [#030](030-commit-family-tree.md) | Expandable Commit Family Tree | Feature | Low | `Enter` on a commit expands its ancestor family as indented rows (log `--parents`, `GitCommit.parents?`, `commit-child` kind), capped by `FAMILY_MAX_DEPTH`/`FAMILY_MAX_ROWS`, cache-keyed on `gitTreeVersion`. | **Resolved** |
 
 ---
 
@@ -65,6 +68,9 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#003: Phantom `x` Key Hint in Viewer Footer](003-phantom-x-key-in-viewer-hints.md)
 - [#025: Search Current-Match Highlight Targets the Wrong Occurrence on Multi-Hit Lines](025-search-current-match-highlight-off-by-occurrence.md) *(resolved)*
 - [#026: Git Group Rows With `tone: "dim"` Render as `muted`](026-git-group-dim-tone-collapses-to-muted.md) *(resolved)*
+- [#028: Nerd Font Filetype Icons, Env-Gated](028-nerd-font-icons.md) *(resolved)*
+- [#029: Git Pane Dynamic Rows + Richer Badges](029-git-pane-dynamic-rows.md) *(resolved)*
+- [#030: Expandable Commit Family Tree](030-commit-family-tree.md) *(resolved)*
 
 ### Performance & Resource Optimization
 - [#020: No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread](020-no-viewer-cache-blocking-highlight.md) *(partial — cache done)*

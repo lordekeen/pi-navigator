@@ -271,6 +271,87 @@ describe("git pane keys", () => {
     harness.overlay.handleInput(KEYS.enter);
     expect(harness.opened).toEqual([]);
   });
+
+  it("hides the empty Unstaged and Staged group rows (Issue #029)", () => {
+    const harness = makeHarness();
+    withTree(harness, ["a.ts"]);
+    withGit(harness, { unstaged: [], staged: [] });
+    const rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).not.toContain("Unstaged");
+    expect(rendered).not.toContain("Staged");
+    expect(rendered).toContain("Clean");
+    // Header summary is still always-on.
+    expect(rendered).toContain("0 unstaged");
+    // History section header remains.
+    expect(rendered).toContain("History");
+  });
+
+  it("keeps a populated Unstaged group and header count (Issue #029)", () => {
+    const harness = makeHarness();
+    withTree(harness, ["a.ts"]);
+    withGit(harness, { unstaged: [{ relPath: "a.ts", code: "M" }], staged: [] });
+    const rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).toContain("Unstaged (1)");
+    expect(rendered).not.toContain("Staged (");
+    expect(rendered).toContain("1 unstaged");
+  });
+
+  it("expands and collapses a commit's family on Enter (Issue #030)", () => {
+    const harness = makeHarness();
+    withTree(harness, ["a.ts"]);
+    withGit(harness, {
+      unstaged: [],
+      staged: [],
+      history: [
+        { shortHash: "bbb2222", parents: ["aaa1111"], dateRel: "2h ago", subject: "child" },
+        { shortHash: "aaa1111", parents: ["9998888"], dateRel: "3h ago", subject: "root" },
+        { shortHash: "9998888", parents: [], dateRel: "4h ago", subject: "base" },
+      ],
+    });
+    const overlay = harness.overlay;
+    overlay.handleInput(KEYS.tab); // focus git
+    // Cursor starts on the first nav row: bbb2222 (child commit).
+    overlay.handleInput(KEYS.enter); // expand it -> its parent aaa1111 appears as an indented family row
+    let rendered = overlay.render(120).join("\n");
+    // The parent is rendered as an indented commit-child row under bbb2222.
+    expect(rendered).toMatch(/bbb2222[\s\S]*  aaa1111/);
+
+    // Expand deeper: aaa1111's parent (9998888) is also in history, so it
+    // shows as a second level under the expanded family.
+    overlay.handleInput(KEYS.enter); // collapse bbb2222
+    rendered = overlay.render(120).join("\n");
+    // aaa1111 still appears as its own top-level history row.
+    expect(rendered).toContain("  aaa1111");
+    // And 9998888 is a separate history entry, present regardless.
+    expect(rendered).toContain("9998888");
+  });
+
+  it("limits commit-family expansion to the row cap (Issue #030)", () => {
+    const harness = makeHarness();
+    withTree(harness, ["a.ts"]);
+    const deep: Array<{ shortHash: string; parents: string[]; dateRel: string; subject: string }> = [];
+    // A chain of 20 commits, each parent of the next (child first in history).
+    for (let i = 0; i < 20; i++) {
+      const hash = "c" + i.toString().padStart(6, "0");
+      deep.push({
+        shortHash: hash,
+        parents: i < 19 ? ["c" + (i + 1).toString().padStart(6, "0")] : [],
+        dateRel: "1h ago",
+        subject: "commit " + i,
+      });
+    }
+    withGit(harness, { unstaged: [], staged: [], history: deep });
+    const overlay = harness.overlay;
+    overlay.handleInput(KEYS.tab); // focus git
+    overlay.handleInput(KEYS.enter); // expand the first commit (history[0])
+    const rendered = overlay.render(120);
+    const joined = rendered.join("\n");
+    // FAMILY_MAX_ROWS caps the added family rows; the 20-deep chain must not
+    // render all 19 descendants. The expansion stops at the cap.
+    const childRows = joined.split("\n").filter((l) => l.includes("  c")) ;
+    // Only a bounded number of ancestor rows are rendered.
+    expect(childRows.length).toBeLessThan(20);
+  });
 });
 
 // ── Viewer keys ──

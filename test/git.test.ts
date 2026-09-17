@@ -248,6 +248,27 @@ describe("git integration on a scratch repository", () => {
     }
   });
 
+  it("carries parent hashes for the commit family tree (Issue #030)", async () => {
+    // A merge commit has two parents and the parser must surface both.
+    await writeFile(join(repo, "main.txt"), "main\n");
+    await commit(repo, "root");
+    await git(repo, ["checkout", "-q", "-b", "feature"]);
+    await writeFile(join(repo, "feat.txt"), "feat\n");
+    await commit(repo, "feature work");
+    await git(repo, ["checkout", "-q", "main"]);
+    await git(repo, ["merge", "-q", "--no-ff", "feature"]);
+
+    const state = await readGitState(repo);
+    const merge = state.history.find((c) => c.subject === "Merge branch 'feature'");
+    expect(merge).toBeTruthy();
+    // history[0] is the merge; short parents look like 7-hex ids.
+    expect(state.history[0]?.parents?.length).toBe(2);
+    for (const p of state.history[0]?.parents ?? []) expect(p).toMatch(/^[0-9a-f]{7}$/);
+    // Root commit has no parents.
+    const root = state.history.find((c) => c.subject === "root");
+    expect(root?.parents).toEqual([]);
+  });
+
   it("degrades cleanly outside a repository", async () => {
     const outside = await mkdtemp(join(tmpdir(), "pi-nav-no-git-"));
     try {

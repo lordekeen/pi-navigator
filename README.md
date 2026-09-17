@@ -2,7 +2,7 @@
 
 Read-only project file navigator for pi. Opens a centered overlay inside a running pi session with a file tree, git state, and a syntax-highlighted viewer. No file editing, no external binaries, no runtime dependencies.
 
-![status](https://img.shields.io/badge/status-v0.2.1-green)
+![status](https://img.shields.io/badge/status-v0.3.0-green)
 
 ## Install
 
@@ -14,6 +14,18 @@ Place the directory in a pi extension location and pi discovers it:
 Then start pi and run `/navigator`.
 
 Does pi-navigator fit your setup? [Read more](./AGENTS.md) — [Dev docs](./docs/plans/pi-navigator-implementation-plan.md) — [Open issues](./docs/issues/issues_index.md)
+
+## Config
+
+Nerd Font filetype icons are opt-in via an environment variable (the default is plain-text glyphs):
+
+| Variable | Effect |
+| --- | --- |
+| `PI_NAV_ICONS=1` | Render a Nerd Font filetype icon column in the file tree (`1`/`true`/`yes`/`on` all enable) |
+
+Set it in your shell profile (e.g. `export PI_NAV_ICONS=1` in `~/.zshrc`) before launching pi, or pass it inline: `PI_NAV_ICONS=1 pi`.
+
+Icons depend on a terminal Nerd Font — without one, glyphs render as placeholder boxes (tofu). The overlay shows a one-time, non-blocking hint when icons are on. No other configuration: the git pane, commit-family view, and viewer follow the active pi theme with no hardcoded colors.
 
 ## Usage
 
@@ -61,7 +73,7 @@ Layout: files tree on the left, git panel below it, file viewer on the right, co
 | Files | `/` | Incremental fuzzy filter (name matches rank first) |
 | Files | `.` | Toggle hidden dot entries |
 | Git | `j` `k` / arrows | Move through changed files and history |
-| Git | `Enter` | Open the file (expands the tree to it); commit rows are informational in v1 |
+| Git | `Enter` | Open the file (expands the tree to it); on a commit row, expand/collapse its ancestor family |
 | Viewer | `j` `k` / arrows | Scroll |
 | Viewer | `Ctrl+d` `Ctrl+u`, `g` `G` | Half page, top, bottom |
 | Viewer | `/` | Search (smart case, incremental) |

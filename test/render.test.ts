@@ -26,7 +26,7 @@ interface Harness {
   rows: number;
 }
 
-function makeHarness(rows: number): Harness {
+function makeHarness(rows: number, enableIcons = false): Harness {
   const theme = makeNavigatorTheme({
     fg: (_color: string, text: string) => text,
     bg: (_color: string, text: string) => text,
@@ -41,6 +41,7 @@ function makeHarness(rows: number): Harness {
     getTerminalRows: () => rows,
     requestRender: () => undefined,
     onClose: () => undefined,
+    enableIcons,
     loadFile: async (relPath: string): Promise<ViewerFile> => ({
       kind: "text",
       relPath,
@@ -143,6 +144,85 @@ describe("render width safety", () => {
     overlay.handleInput("/");
     overlay.handleInput("const");
     expectWidthSafe(overlay, 120);
+  });
+
+  it("hides empty git group rows and stays width-safe (Issue #029)", () => {
+    const harness = makeHarness(24);
+    const { overlay } = harness;
+    overlay.setGitState({
+      available: true,
+      branch: "main",
+      detached: false,
+      ahead: 0,
+      behind: 0,
+      unstaged: [],
+      staged: [],
+      history: [
+        { shortHash: "a1b2c3d", dateRel: "2h ago", subject: "a commit subject that is long enough to need truncation in the left pane" },
+      ],
+      refreshedAt: 0,
+    });
+
+    const lines = expectWidthSafe(overlay, 80);
+    const joined = lines.join("\n");
+    expect(joined).not.toContain("Unstaged");
+    expect(joined).not.toContain("Staged");
+    expect(joined).toContain("Clean");
+    expect(joined).toContain("History");
+
+    // Populated lists restore the group rows and stay width-safe.
+    overlay.setGitState({
+      available: true,
+      branch: "main",
+      detached: false,
+      ahead: 0,
+      behind: 0,
+      unstaged: [{ relPath: "src/a.ts", code: "M" }],
+      staged: [{ relPath: "src/b.ts", code: "A" }],
+      history: [],
+      refreshedAt: 0,
+    });
+    const populated = expectWidthSafe(overlay, 80);
+    const joinedP = populated.join("\n");
+    expect(joinedP).toContain("Unstaged (1)");
+    expect(joinedP).toContain("Staged (1)");
+    expect(joinedP).not.toContain("Clean");
+  });
+
+  it("stays width-safe with an expanded commit family (Issue #030)", () => {
+    const harness = makeHarness(30);
+    const { overlay } = harness;
+    overlay.setGitState({
+      available: true,
+      branch: "main",
+      detached: false,
+      ahead: 0,
+      behind: 0,
+      unstaged: [],
+      staged: [],
+      history: [
+        { shortHash: "bbb2222", parents: ["aaa1111", "ccc3333"], dateRel: "2h ago", subject: "merge the feature into main with a long subject" },
+        { shortHash: "aaa1111", parents: ["9998888"], dateRel: "3h ago", subject: "ancestor one with yet another long subject line" },
+        { shortHash: "ccc3333", parents: [], dateRel: "4h ago", subject: "feature root" },
+        { shortHash: "9998888", parents: [], dateRel: "5h ago", subject: "base" },
+      ],
+      refreshedAt: 0,
+    });
+    overlay.handleInput("\t"); // focus git
+    overlay.handleInput(KEYS.enter); // expand the first (merge) commit
+    expectWidthSafe(overlay, 80);
+  });
+
+  it("stays width-safe with the Nerd Font icon column on (Issue #028)", () => {
+    const harness = makeHarness(24, true);
+    const { overlay } = harness;
+    const lines = expectWidthSafe(overlay, 80);
+    // With icons on, the icon column + the one-time tofu notice both appear;
+    // the whole frame must remain width-safe at all sizes.
+    expect(lines.join("\n")).toContain("nerd icons on");
+
+    expectWidthSafe(overlay, 120);
+    expectWidthSafe(overlay, 100);
   });
 
   it("help modal truncates descriptions without leaking a bright ellipsis out of the muted style", () => {

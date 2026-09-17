@@ -73,6 +73,12 @@ export const GIT_TIMEOUT_MS = 3000;
 /** Commits pulled for the history section. */
 export const GIT_HISTORY_COUNT = 20;
 
+/** Maximum ancestor depth when a commit's family tree is expanded. */
+export const FAMILY_MAX_DEPTH = 3;
+
+/** Maximum rows rendered by one expanded commit family. */
+export const FAMILY_MAX_ROWS = 16;
+
 // ── Layout ──
 
 /** Overlay options passed to ctx.ui.custom. */

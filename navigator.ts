@@ -24,6 +24,8 @@ import {
 } from "@earendil-works/pi-tui";
 
 import {
+  FAMILY_MAX_DEPTH,
+  FAMILY_MAX_ROWS,
   GIT_MIN_ROWS,
   HALF_PAGE_DIVISOR,
   LEFT_COLUMN_HIDE_BELOW,
@@ -33,9 +35,10 @@ import {
   MIN_OVERLAY_HEIGHT,
   MIN_OVERLAY_WIDTH,
 } from "./constants";
+import { mapExtensionToIcon } from "./icons";
 import { expandAncestors, filterRows, findNode, flattenVisible, hasChanges, moveCursor, pageJump } from "./tree";
 import type { NavigatorTheme } from "./theme";
-import type { FileNode, FilesRow, Focus, GitRow, GitState, InputMode, SearchMatch, ViewerFile } from "./types";
+import type { FileNode, FilesRow, Focus, GitCommit, GitRow, GitState, InputMode, SearchMatch, ViewerFile } from "./types";
 import { computeRows, formatSize, markMatches, maxLineWidth, searchLines, type DisplayRow } from "./viewer";
 
 /**
@@ -61,6 +64,8 @@ export interface NavigatorOptions {
   onClose: () => void;
   loadFile: (relPath: string) => Promise<ViewerFile>;
   refresh: () => void;
+  /** Opt into the Nerd Font icon column (Issue #028). Defaults to false. */
+  enableIcons?: boolean;
 }
 
 const FOCUS_HINTS: Record<Focus, string> = {
@@ -179,8 +184,13 @@ export class NavigatorOverlay implements Focusable {
   // Bumped on any in-place tree mutation (expand/collapse, expandAncestors) so
   // the filesRowsCache signature catches changes that don't swap the root ref.
   private treeVersion = 0;
-  private gitRowsCache: { git: GitState | null; rows: GitRow[] } | null = null;
-  private gitNavRowsCache: { git: GitState | null; rows: GitRow[] } | null = null;
+  private gitRowsCache: { git: GitState | null; version: number; rows: GitRow[] } | null = null;
+  // Bumped on any commit-family expansion toggle so gitRowsCache catches the
+  // mutation without a GitState ref swap.
+  private gitTreeVersion = 0;
+  // shortHash of commits whose family is expanded.
+  private gitExpanded = new Set<string>();
+  private gitNavRowsCache: { git: GitState | null; version: number; rows: GitRow[] } | null = null;
 
   private helpScroll = 0;
   private notice: string | null = null;
@@ -190,6 +200,10 @@ export class NavigatorOverlay implements Focusable {
   private cachedWidth: number | undefined;
   private cachedLines: string[] | undefined;
 
+  /** Nerd Font icon column enabled; never read from env here (Issue #028). */
+  private enableIcons: boolean;
+  private iconsNoticeShown = false;
+
   constructor(options: NavigatorOptions) {
     this.cwd = options.cwd;
     this.T = options.theme;
@@ -198,6 +212,7 @@ export class NavigatorOverlay implements Focusable {
     this.onClose = options.onClose;
     this.loadFile = options.loadFile;
     this.refresh = options.refresh;
+    this.enableIcons = options.enableIcons ?? false;
   }
 
   // ── Public API ──
@@ -322,42 +337,94 @@ export class NavigatorOverlay implements Focusable {
   private gitRows(): GitRow[] {
     const git = this.git;
     const c = this.gitRowsCache;
-    if (c && c.git === git) return c.rows;
+    if (c && c.git === git && c.version === this.gitTreeVersion) return c.rows;
     const rows: GitRow[] = [];
     if (!git || !git.available) {
       rows.push({ kind: "group", label: git?.error ?? "git unavailable", tone: "dim" });
-      this.gitRowsCache = { git, rows };
+      this.gitRowsCache = { git, version: this.gitTreeVersion, rows };
       return rows;
     }
-    rows.push({
-      kind: "group",
-      label: `Unstaged (${git.unstaged.length})`,
-      tone: git.unstaged.length > 0 ? "warning" : "dim",
-    });
-    for (const file of git.unstaged) rows.push({ kind: "file", relPath: file.relPath, code: file.code, staged: false });
-    rows.push({
-      kind: "group",
-      label: `Staged (${git.staged.length})`,
-      tone: git.staged.length > 0 ? "success" : "dim",
-    });
-    for (const file of git.staged) rows.push({ kind: "file", relPath: file.relPath, code: file.code, staged: true });
+    if (git.unstaged.length > 0) {
+      // Group rows only render when their list is non-empty (Issue #029).
+      rows.push({
+        kind: "group",
+        label: `Unstaged (${git.unstaged.length})`,
+        tone: "warning",
+      });
+      for (const file of git.unstaged) rows.push({ kind: "file", relPath: file.relPath, code: file.code, staged: false });
+    }
+    if (git.staged.length > 0) {
+      rows.push({
+        kind: "group",
+        label: `Staged (${git.staged.length})`,
+        tone: "success",
+      });
+      for (const file of git.staged) rows.push({ kind: "file", relPath: file.relPath, code: file.code, staged: true });
+    }
     if (git.unstaged.length === 0 && git.staged.length === 0) {
       // Plan section 5 item 5: a dim Clean row when both lists are empty.
       rows.push({ kind: "group", label: "Clean \u2014 nothing staged or unstaged", tone: "dim" });
     }
+    // A root-commit search over history builds child sets from each commit's
+    // parents: parent -> list of its children (shortHash). Ancestor rows are
+    // the commits in history whose shortHash is an ancestor of an expanded
+    // commit (merge parents included), collected from the actual history so
+    // off-screen parents are skipped.
+    let familyRows: GitRow[] = [];
+    if (this.gitExpanded.size > 0) {
+      const byHash = new Map<string, GitCommit>();
+      for (const commit of git.history) byHash.set(commit.shortHash, commit);
+      const added = new Set<string>();
+      let count = 0;
+      // DFS over history commits that are ancestors of an expanded commit.
+      const visit = (commit: GitCommit, depth: number): void => {
+        if (count >= FAMILY_MAX_ROWS) return;
+        for (const parentHash of commit.parents ?? []) {
+          if (count >= FAMILY_MAX_ROWS) return;
+          const parent = byHash.get(parentHash);
+          if (!parent || added.has(parent.shortHash)) continue;
+          added.add(parent.shortHash);
+          count += 1;
+          familyRows.push({ kind: "commit-child", commit: parent, depth });
+          if (depth < FAMILY_MAX_DEPTH) visit(parent, depth + 1);
+        }
+      };
+      for (const commit of git.history) {
+        if (count >= FAMILY_MAX_ROWS) break;
+        if (this.gitExpanded.has(commit.shortHash)) visit(commit, 1);
+      }
+    }
     rows.push({ kind: "group", label: `History (${git.history.length})`, tone: "muted" });
-    for (const commit of git.history) rows.push({ kind: "commit", commit });
-    this.gitRowsCache = { git, rows };
+    for (const commit of git.history) {
+      rows.push({ kind: "commit", commit });
+      rows.push(...familyRows.filter((r) => r.kind === "commit-child" && r.commit.shortHash === commit.shortHash));
+    }
+    rows.push(...familyRows.filter((r) => r.kind === "commit-child" && !git.history.some((c) => c.shortHash === r.commit.shortHash)));
+    this.gitRowsCache = { git, version: this.gitTreeVersion, rows };
     return rows;
   }
 
   private gitNavRows(): GitRow[] {
     const git = this.git;
     const c = this.gitNavRowsCache;
-    if (c && c.git === git) return c.rows;
+    if (c && c.git === git && c.version === this.gitTreeVersion) return c.rows;
     const rows = this.gitRows().filter((row) => row.kind !== "group");
-    this.gitNavRowsCache = { git, rows };
+    this.gitNavRowsCache = { git, version: this.gitTreeVersion, rows };
     return rows;
+  }
+
+  /**
+   * Toggle whether a commit's ancestor family is expanded in the git pane.
+   * Expansion is capped by FAMILY_MAX_DEPTH / FAMILY_MAX_ROWS so a wide or
+   * deep history cannot fan the pane out. Keyed solely on the commit's
+   * shortHash (stable across refreshes); the cache version bumps so gitRows()
+   * re-derives without a GitState ref swap.
+   */
+  private toggleCommitFamily(shortHash: string): void {
+    if (this.gitExpanded.has(shortHash)) this.gitExpanded.delete(shortHash);
+    else this.gitExpanded.add(shortHash);
+    this.gitTreeVersion++;
+    this.touch();
   }
 
   // ── Input ──
@@ -581,7 +648,7 @@ export class NavigatorOverlay implements Focusable {
         this.focus = "viewer";
         void this.openRelPath(row.relPath);
       } else if (row.kind === "commit") {
-        this.showNotice("commit detail view is deferred to v2 (plan section 1)");
+        this.toggleCommitFamily(row.commit.shortHash);
       }
     } else {
       return;
@@ -757,6 +824,15 @@ export class NavigatorOverlay implements Focusable {
     const T = this.T;
     const overlayH = this.overlayHeight();
     const innerW = Math.max(0, width - 2);
+
+    // One-time, non-blocking hint when the user opted into Nerd Font icons
+    // (Issue #028): glyphs depend on a terminal Nerd Font, which pi cannot
+    // detect. Fire before building lines so the footer picks it up; the
+    // iconsNoticeShown guard makes it run exactly once.
+    if (this.enableIcons && !this.iconsNoticeShown) {
+      this.iconsNoticeShown = true;
+      this.showNotice("nerd icons on \u2014 glyphs may not render without a Nerd Font");
+    }
 
     if (width < MIN_OVERLAY_WIDTH || overlayH < MIN_OVERLAY_HEIGHT) {
       // Compact notice for terminals that cannot host the frame. Every line is
@@ -968,6 +1044,10 @@ export class NavigatorOverlay implements Focusable {
     const arrow = isCursor ? T.accent(T.bold("\u25b6 ")) : "  ";
     let body: string;
     let badge = "";
+    // Icon column (Issue #028): one cell when PI_NAV_ICONS is on, zero
+    // otherwise. The glyph inherits the name color it sits next to.
+    const iconW = this.enableIcons ? 1 : 0;
+    const icon = (nameStyle: (t: string) => string) => (iconW ? nameStyle(mapExtensionToIcon(row.node.relPath, row.node.isDir)) + " " : "");
 
     if (row.kind === "match") {
       const prefixRaw = row.prefix.length > 18 ? "\u2026" + row.prefix.slice(-18) : row.prefix;
@@ -977,9 +1057,9 @@ export class NavigatorOverlay implements Focusable {
         const before = name.slice(0, row.nameIndex);
         const hit = name.slice(row.nameIndex, row.nameIndex + this.filterQuery.length);
         const after = name.slice(row.nameIndex + this.filterQuery.length);
-        body = prefix + T.text(before) + T.warning(T.bold(hit)) + T.text(after);
+        body = icon(T.dim) + prefix + T.text(before) + T.warning(T.bold(hit)) + T.text(after);
       } else {
-        body = prefix + T.text(name);
+        body = icon(T.dim) + prefix + T.text(name);
       }
       if (row.node.gitCode) badge = " " + this.codeText(row.node.gitCode);
     } else if (row.node.isDir) {
@@ -987,7 +1067,7 @@ export class NavigatorOverlay implements Focusable {
       const indent = "  ".repeat(Math.max(0, row.node.depth));
       const nameStyle = hasChanges(row.node) ? T.warning : row.node.hidden ? T.dim : T.muted;
       const label = row.node.name + (row.node.isSymlink ? T.dim(" \u2197") : "");
-      body = T.dim(indent + marker) + nameStyle(label);
+      body = icon(nameStyle) + T.dim(indent + marker) + nameStyle(label);
     } else {
       const indent = "  ".repeat(Math.max(0, row.node.depth));
       const openPath = this.viewTargetRelPath ?? this.viewFile?.relPath;
@@ -997,17 +1077,17 @@ export class NavigatorOverlay implements Focusable {
       else if (row.node.hidden) nameStyle = (text: string) => T.dim(text);
       else if (row.node.gitCode === "??" || row.node.gitCode === "!!") nameStyle = (text: string) => T.dim(text);
       const label = row.node.name + (row.node.isSymlink ? T.dim(" \u2197") : "");
-      body = T.dim(indent) + nameStyle(label);
+      body = icon(nameStyle) + T.dim(indent) + nameStyle(label);
       if (row.node.gitCode) badge = " " + this.codeText(row.node.gitCode);
     }
 
-    const room = Math.max(4, leftW - 2 - visibleWidth(badge));
+    const room = Math.max(4, leftW - 2 - iconW - visibleWidth(badge));
     // Empty ellipsis: truncateToWidth's default "..." is wrapped in \x1b[0m
     // resets that close the styled body's open style and render "..." in bright
     // default. truncate once, measure the result once (Issue #018).
     const fit = truncateAndWidth(body, room);
     const content = arrow + fit.text;
-    const gap = Math.max(0, leftW - visibleWidth(arrow) - fit.width - visibleWidth(badge));
+    const gap = Math.max(0, leftW - visibleWidth(arrow) - iconW - fit.width - visibleWidth(badge));
     const line = content + " ".repeat(gap) + badge;
     return isCursor ? T.selectedBg(this.padTo(line, leftW)) : this.padTo(line, leftW);
   }
@@ -1049,6 +1129,12 @@ export class NavigatorOverlay implements Focusable {
       const fit = truncateAndWidth(nameStyle(row.relPath), room);
       const gap = Math.max(0, leftW - 2 - fit.width - visibleWidth(badge));
       line = arrow + fit.text + " ".repeat(gap) + badge;
+    } else if (row.kind === "commit-child") {
+      const arrow = selected ? T.accent(T.bold("\u25b6 ")) : "  ";
+      const hash = T.muted(row.commit.shortHash);
+      const room = Math.max(4, leftW - 2 - visibleWidth(row.commit.shortHash) - 2 - 2 * row.depth);
+      const subject = T.dim(truncateToWidth(row.commit.subject, room, ""));
+      line = arrow + "  ".repeat(row.depth) + hash + "  " + subject;
     } else {
       const arrow = selected ? T.accent(T.bold("\u25b6 ")) : "  ";
       const hash = T.muted(row.commit.shortHash);
@@ -1064,6 +1150,8 @@ export class NavigatorOverlay implements Focusable {
     if (code === "M") return T.warning(code);
     if (code === "A") return T.success(code);
     if (code === "D") return T.error(code);
+    if (code === "R") return T.warning(code);
+    if (code === "C") return T.success(code);
     if (code === "??") return T.dim("?");
     if (code === "!!") return T.dim("!");
     return T.muted(code);

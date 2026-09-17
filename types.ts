@@ -66,6 +66,8 @@ export interface GitChangedFile {
 
 export interface GitCommit {
   shortHash: string;
+  /** Short hashes of the parent(s); empty for a root commit. */
+  parents?: string[];
   dateRel: string;
   subject: string;
 }
@@ -90,7 +92,8 @@ export type GitRowTone = "warning" | "success" | "muted" | "dim";
 export type GitRow =
   | { kind: "group"; label: string; tone: GitRowTone }
   | { kind: "file"; relPath: string; code: GitCode; staged: boolean }
-  | { kind: "commit"; commit: GitCommit };
+  | { kind: "commit"; commit: GitCommit }
+  | { kind: "commit-child"; commit: GitCommit; depth: number };
 
 // ── Viewer ──
 

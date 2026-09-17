@@ -31,6 +31,7 @@ import {
   readTrackedFiles,
   toCwdRelative,
 } from "./git";
+import { ICONS_ENV, parseEnableIcons } from "./icons";
 import { NavigatorOverlay } from "./navigator";
 import { makeNavigatorTheme } from "./theme";
 import {
@@ -157,6 +158,9 @@ async function runNavigator(ctx: ExtensionContext | ExtensionCommandContext): Pr
             scheduleNextPoll();
           });
         },
+        // Env read happens here, once, at overlay open; the component never
+        // touches process.env (Issue #028).
+        enableIcons: parseEnableIcons(process.env[ICONS_ENV]),
       });
 
       const refreshData = async (): Promise<void> => {

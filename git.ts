@@ -173,7 +173,7 @@ export async function readGitState(cwd: string, repo?: RepoInfo): Promise<GitSta
     runGit(cwd, ["branch", "--show-current"]),
     runGit(cwd, ["rev-list", "--left-right", "--count", "@{u}...HEAD"]),
     runGit(cwd, ["status", "--porcelain", "-unormal", "-z"]),
-    runGit(cwd, ["log", `-n${GIT_HISTORY_COUNT}`, "--date=relative", `--pretty=format:%h%x1f%ad%x1f%s`]),
+    runGit(cwd, ["log", `-n${GIT_HISTORY_COUNT}`, "--date=relative", "--parents", `--pretty=format:%h%x1f%p%x1f%ad%x1f%s`]),
   ]);
 
   // Surface maxBuffer overflow instead of silently rendering an empty panel.
@@ -207,9 +207,14 @@ export async function readGitState(cwd: string, repo?: RepoInfo): Promise<GitSta
   const logText = logRes.status === "ok" ? logRes.stdout : "";
   for (const line of logText.split("\n")) {
     if (!line) continue;
-    const [shortHash, dateRel, subject] = line.split(UNIT_SEPARATOR);
+    const [shortHash, parentsRaw, dateRel, subject] = line.split(UNIT_SEPARATOR);
     if (!shortHash) continue;
-    history.push({ shortHash, dateRel: dateRel ?? "", subject: subject ?? "" });
+    history.push({
+      shortHash,
+      parents: parentsRaw ? parentsRaw.split(" ") : [],
+      dateRel: dateRel ?? "",
+      subject: subject ?? "",
+    });
   }
 
   return {

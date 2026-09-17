@@ -74,6 +74,14 @@ components:
     textColor: "{colors.success}"
   git-badge-deleted:
     textColor: "{colors.error}"
+  # Commit family tree (Issue #030): indented ancestor rows under an expanded
+  # commit; they use the same hash/subject styling as plain commit rows.
+  git-family-row:
+    textColor: "{colors.text}"
+  # Nerd Font filetype icon column (Issue #028) — one cell between the cursor
+  # arrow and the label; the glyph inherits the row name color, no color here.
+  file-row-icon:
+    textColor: "{colors.text}"
   viewer-gutter:
     textColor: "{colors.dim}"
   viewer-notice:

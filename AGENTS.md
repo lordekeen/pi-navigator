@@ -61,6 +61,7 @@ The overlay is a pure TUI component; it never touches the filesystem or git dire
 | `tree.ts` | Tree building from entries, cursor movement, filter, flatten, expansion memory. |
 | `git.ts` | git binary detection, `readGitState` (porcelain), history, tracked-file listing, availability cache. |
 | `viewer.ts` | `loadFile` pipeline: stat, binary sniff, image tier, size caps, tab expansion, CR normalization, highlighting, search, display rows. |
+| `icons.ts` | Nerd Font glyph map + `parseEnableIcons`; the icon column is env-gated (`PI_NAV_ICONS`) and never auto-detected. |
 | `theme.ts` | `makeNavigatorTheme` — maps semantic tokens (accent/muted/dim/…) onto pi `Theme` tokens. No hardcoded colors. |
 | `types.ts` | Shared structural types (FileNode, GitState, ViewerFile, rows). |
 | `constants.ts` | All tuning constants (caps, ratios, timeouts, ignored names, image extensions). |
@@ -78,6 +79,7 @@ The overlay is a pure TUI component; it never touches the filesystem or git dire
   - **`truncateToWidth`'s default `"..."` ellipsis is wrapped in `\x1b[0m` resets.** It closes any open style and renders the ellipsis in bright default. Truncate styled strings with an **empty** ellipsis (`""`) for a clean hard-cut; for plain text you want to re-style, truncate with `""`, strip the injected reset, and append your own styled ellipsis before wrapping (Issue #010).
 - **Width-safety is mandatory.** Every rendered row must fit its pane width. Use `visibleWidth`/`truncateToWidth` for measurement; never assume a string's `.length` equals its visible width (ANSI escapes, wide chars).
 - **Memory stays bounded by the caps** (`MAX_HIGHLIGHT_BYTES`, `MAX_HIGHLIGHT_LINES`), not by the file. Oversized files read a capped head, not the whole file.
+- **Icons are env-gated, not auto-detected.** `PI_NAV_ICONS=1` opts into the Nerd Font column; index.ts reads it once and passes `enableIcons` into the ctor. The component never touches `process.env`, and there is no capability probe (pi-tui has none for fonts). Keep it that way — a user who didn't opt in keeps plain glyphs always.
 - **Issues are tracked** in `docs/issues/` with a central `issues_index.md`. New bug → create `NNN-<slug>.md`, add to the Pending table; resolved → move to Resolved and update the overview counts. Follow the lifecycle in the index.
 
 ---
