@@ -18,10 +18,14 @@ export type GitCode = string;
 
 export interface FileNode {
   name: string;
+  /** Lowercased `name`, precomputed for filter matching. */
+  lowerName: string;
   /** Absolute path on disk. */
   path: string;
   /** Path relative to the workspace root, posix separators, "" for the root. */
   relPath: string;
+  /** Lowercased `relPath`, precomputed for filter matching. */
+  lowerRelPath: string;
   isDir: boolean;
   isSymlink: boolean;
   /** Hidden when the name starts with a dot. */

@@ -139,7 +139,9 @@ function makeNode(
 ): FileNode {
   return {
     name,
+    lowerName: name.toLowerCase(),
     relPath,
+    lowerRelPath: relPath.toLowerCase(),
     path,
     isDir,
     isSymlink: false,
@@ -360,13 +362,12 @@ export function filterRows(root: FileNode, query: string, showHidden: boolean): 
         continue;
       }
       if (!showHidden && child.hidden) continue;
-      const lowerPath = child.relPath.toLowerCase();
-      if (!lowerPath.includes(q)) continue;
+      if (!child.lowerRelPath.includes(q)) continue;
       matches.push({
         kind: "match",
         node: child,
         prefix: child.relPath.slice(0, child.relPath.length - child.name.length),
-        nameIndex: child.name.toLowerCase().indexOf(q),
+        nameIndex: child.lowerName.indexOf(q),
       });
     }
   };

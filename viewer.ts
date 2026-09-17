@@ -69,21 +69,25 @@ export function visibleTextWidth(text: string): number {
  * preserved as encountered; the result is reset-terminated when any styling
  * was included. Wide characters count as one cell (v1 approximation).
  */
+// Sticky CSI matcher reused by sliceStyled; `lastIndex` is set per call site so
+// it scans the full string without allocating a suffix copy per character.
+const CSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/y;
+
 export function sliceStyled(styled: string, start: number, end: number): string {
   let out = "";
   let column = 0;
   let styledOut = false;
   let i = 0;
   while (i < styled.length) {
-    const rest = styled.slice(i);
-    const esc = rest.match(/^\x1b\[[0-9;?]*[ -/]*[@-~]/);
+    CSI_RE.lastIndex = i;
+    const esc = CSI_RE.exec(styled);
     if (esc) {
       out += esc[0];
       styledOut = true;
       i += esc[0].length;
       continue;
     }
-    const ch = rest[0];
+    const ch = styled[i]!;
     if (column >= start && column < end) out += ch;
     column += 1;
     i += 1;

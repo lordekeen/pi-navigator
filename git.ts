@@ -44,7 +44,15 @@ async function runGit(cwd: string, args: string[]): Promise<string | null> {
       maxBuffer: 4 * 1024 * 1024,
     });
     return stdout;
-  } catch {
+  } catch (error) {
+    // A spawn ENOENT means the git binary itself is not on PATH: the cached
+    // availability check is stale, so clear it and let the next `isGitAvailable`
+    // re-detect (e.g. git was installed after the overlay opened). Non-zero
+    // exits and timeouts have a numeric `code`, not "ENOENT", so this only
+    // resets on a genuinely missing binary.
+    if (error && typeof error === "object" && (error as { code?: unknown }).code === "ENOENT") {
+      gitBinaryPresent = null;
+    }
     return null;
   }
 }
@@ -65,11 +73,15 @@ export async function detectRepo(cwd: string): Promise<RepoInfo> {
   if (!(await isGitAvailable(cwd))) {
     return { available: false, prefix: "", error: "git not found on PATH" };
   }
-  const root = await runGit(cwd, ["rev-parse", "--show-toplevel"]);
-  if (root === null) {
+  // `--show-toplevel` and `--show-prefix` are independent of the other state
+  // commands; fetch both in a single spawn. Output is "<toplevel>\n<prefix>\n"
+  // (prefix may be empty at the repo root). Fails (returns null) outside a
+  // repo, which maps to the "not a git repository" case.
+  const out = await runGit(cwd, ["rev-parse", "--show-toplevel", "--show-prefix"]);
+  if (out === null) {
     return { available: false, prefix: "", error: "not a git repository" };
   }
-  const prefix = (await runGit(cwd, ["rev-parse", "--show-prefix"]))?.trim() ?? "";
+  const prefix = (out.split("\n")[1] ?? "").trim();
   return { available: true, prefix };
 }
 
@@ -138,27 +150,31 @@ export async function readGitState(cwd: string, repo?: RepoInfo): Promise<GitSta
     return { ...unavailable, error: detected.error };
   }
 
-  const branchOut = (await runGit(cwd, ["branch", "--show-current"])) ?? "";
-  const branchName = branchOut.trim();
+  // branch / ahead-behind counts / status / log are mutually independent —
+  // run them concurrently so a single tick waits one round, not four.
+  const [branchOut, counts, statusOut, logOut] = await Promise.all([
+    runGit(cwd, ["branch", "--show-current"]),
+    runGit(cwd, ["rev-list", "--left-right", "--count", "@{u}...HEAD"]),
+    runGit(cwd, ["status", "--porcelain", "-uall", "-z"]),
+    runGit(cwd, ["log", `-n${GIT_HISTORY_COUNT}`, "--date=relative", `--pretty=format:%h%x1f%ad%x1f%s`]),
+  ]);
+
+  const branchName = (branchOut ?? "").trim();
   const detached = branchName === "";
 
   // left count = upstream-only commits (behind), right = HEAD-only (ahead).
   let ahead = 0;
   let behind = 0;
-  const counts = await runGit(cwd, ["rev-list", "--left-right", "--count", "@{u}...HEAD"]);
   if (counts) {
     const parts = counts.trim().split(/\s+/);
     behind = Number.parseInt(parts[0] ?? "0", 10) || 0;
     ahead = Number.parseInt(parts[1] ?? "0", 10) || 0;
   }
 
-  const statusOut = (await runGit(cwd, ["status", "--porcelain", "-uall", "-z"])) ?? "";
-  const { unstaged, staged } = parsePorcelain(statusOut, detected.prefix);
+  const { unstaged, staged } = parsePorcelain(statusOut ?? "", detected.prefix);
 
   const history: GitCommit[] = [];
-  const logOut =
-    (await runGit(cwd, ["log", `-n${GIT_HISTORY_COUNT}`, "--date=relative", `--pretty=format:%h%x1f%ad%x1f%s`])) ?? "";
-  for (const line of logOut.split("\n")) {
+  for (const line of (logOut ?? "").split("\n")) {
     if (!line) continue;
     const [shortHash, dateRel, subject] = line.split(UNIT_SEPARATOR);
     if (!shortHash) continue;

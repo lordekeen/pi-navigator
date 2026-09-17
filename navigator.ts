@@ -36,7 +36,7 @@ import {
 import { expandAncestors, filterRows, findNode, flattenVisible, hasChanges, moveCursor, pageJump } from "./tree";
 import type { NavigatorTheme } from "./theme";
 import type { FileNode, FilesRow, Focus, GitRow, GitState, InputMode, SearchMatch, ViewerFile } from "./types";
-import { computeRows, formatSize, markMatches, maxLineWidth, searchLines } from "./viewer";
+import { computeRows, formatSize, markMatches, maxLineWidth, searchLines, type DisplayRow } from "./viewer";
 
 export interface NavigatorOptions {
   cwd: string;
@@ -134,6 +134,38 @@ export class NavigatorOverlay implements Focusable {
   private searchMatches: SearchMatch[] = [];
   private searchIndex = 0;
   private searchJump = false;
+  // Search matches are recomputed lazily: `searchDirty` is set when the open
+  // file's content changes under an active query; `recomputeSearchIfNeeded`
+  // then (and only then) reruns `searchLines`. `searchMatchLines` backs the
+  // O(1) per-line membership test in `markSearch` (was O(lines×matches)).
+  private searchDirty = false;
+  private searchMatchLines: Set<number> = new Set();
+  // Bumped whenever the marked-lines output changes (matches or current
+  // match index), so the `marked` and `computeRows` caches can key off it.
+  private searchVersion = 0;
+
+  // Viewer render caches. The top-level `render()` cache is wiped by every
+  // `touch()` (every keystroke), so without these the viewer path re-derives
+  // the whole file's marked rows, max line width, and wrapped display rows on
+  // every keypress. Each cache is keyed on the stable `viewFile` reference
+  // (which only changes when a file is (re)opened) plus the inputs that
+  // actually affect its output.
+  private markedCache: { file: ViewerFile; version: number; marked: ViewerFile } | null = null;
+  private maxLineWidthCache: { file: ViewerFile; value: number } | null = null;
+  private rowsCache: { marked: ViewerFile; width: number; wrap: boolean; hscroll: number; rows: DisplayRow[] } | null =
+    null;
+  // Row-model memos. Each is keyed on exactly the inputs that affect its
+  // output (object references + primitives), so a single render pass that
+  // calls filesRows()/gitRows()/gitNavRows() several times builds each array
+  // once. The signature approach is robust to intermediate mutations between
+  // touch() calls. (Issue #015.)
+  private filesRowsCache: { root: FileNode | null; query: string; hidden: boolean; version: number; rows: FilesRow[] } | null =
+    null;
+  // Bumped on any in-place tree mutation (expand/collapse, expandAncestors) so
+  // the filesRowsCache signature catches changes that don't swap the root ref.
+  private treeVersion = 0;
+  private gitRowsCache: { git: GitState | null; rows: GitRow[] } | null = null;
+  private gitNavRowsCache: { git: GitState | null; rows: GitRow[] } | null = null;
 
   private helpScroll = 0;
   private notice: string | null = null;
@@ -219,6 +251,10 @@ export class NavigatorOverlay implements Focusable {
       const file = await this.loadFile(relPath);
       if (this.disposed || this.loadSeq !== seq) return;
       this.viewFile = file;
+      // New file content: an active query must be re-scanned on next render.
+      // The marked/maxLineWidth/rows caches key on the `viewFile` reference,
+      // so the new object invalidates them automatically.
+      this.searchDirty = true;
       this.diskChanged = false;
       if (!keepScroll || !sameFile) {
         this.viewScroll = 0;
@@ -227,6 +263,7 @@ export class NavigatorOverlay implements Focusable {
     } catch {
       if (this.disposed || this.loadSeq !== seq) return;
       this.viewFile = { kind: "error", relPath, lines: [], message: "unexpected read failure" };
+      this.searchDirty = true;
     } finally {
       if (!this.disposed && this.loadSeq === seq) {
         this.viewLoading = false;
@@ -253,16 +290,28 @@ export class NavigatorOverlay implements Focusable {
   // ── Row models ──
 
   private filesRows(): FilesRow[] {
-    if (!this.root) return [];
-    if (this.filterQuery) return filterRows(this.root, this.filterQuery, this.showHidden);
-    return flattenVisible(this.root, this.showHidden);
+    const root = this.root;
+    const query = this.filterQuery;
+    const hidden = this.showHidden;
+    const c = this.filesRowsCache;
+    if (c && c.root === root && c.query === query && c.hidden === hidden && c.version === this.treeVersion) return c.rows;
+    const rows: FilesRow[] = !root
+      ? []
+      : query
+        ? filterRows(root, query, hidden)
+        : flattenVisible(root, hidden);
+    this.filesRowsCache = { root, query, hidden, version: this.treeVersion, rows };
+    return rows;
   }
 
   private gitRows(): GitRow[] {
-    const rows: GitRow[] = [];
     const git = this.git;
+    const c = this.gitRowsCache;
+    if (c && c.git === git) return c.rows;
+    const rows: GitRow[] = [];
     if (!git || !git.available) {
       rows.push({ kind: "group", label: git?.error ?? "git unavailable", tone: "dim" });
+      this.gitRowsCache = { git, rows };
       return rows;
     }
     rows.push({
@@ -283,11 +332,17 @@ export class NavigatorOverlay implements Focusable {
     }
     rows.push({ kind: "group", label: `History (${git.history.length})`, tone: "muted" });
     for (const commit of git.history) rows.push({ kind: "commit", commit });
+    this.gitRowsCache = { git, rows };
     return rows;
   }
 
   private gitNavRows(): GitRow[] {
-    return this.gitRows().filter((row) => row.kind !== "group");
+    const git = this.git;
+    const c = this.gitNavRowsCache;
+    if (c && c.git === git) return c.rows;
+    const rows = this.gitRows().filter((row) => row.kind !== "group");
+    this.gitNavRowsCache = { git, rows };
+    return rows;
   }
 
   // ── Input ──
@@ -456,14 +511,21 @@ export class NavigatorOverlay implements Focusable {
     } else if (matchesKey(data, Key.enter)) {
       if (current?.node.isDir) {
         current.node.expanded = !current.node.expanded;
+        this.treeVersion++;
       } else if (current && current.kind !== "dir") {
         this.focus = "viewer";
         void this.openRelPath(current.node.relPath);
       }
     } else if (matchesKey(data, Key.right) || data === "l") {
-      if (current?.node.isDir) current.node.expanded = true;
+      if (current?.node.isDir) {
+        current.node.expanded = true;
+        this.treeVersion++;
+      }
     } else if (matchesKey(data, Key.left) || data === "h") {
-      if (current?.node.isDir) current.node.expanded = false;
+      if (current?.node.isDir) {
+        current.node.expanded = false;
+        this.treeVersion++;
+      }
     } else if (data === "/") {
       this.mode = "filter";
       this.filterQuery = "";
@@ -497,6 +559,7 @@ export class NavigatorOverlay implements Focusable {
         if (this.root) {
           const node = findNode(this.root, row.relPath);
           if (node) expandAncestors(node);
+          this.treeVersion++;
         }
         this.filterQuery = "";
         this.alignFilesCursor(row.relPath);
@@ -553,13 +616,17 @@ export class NavigatorOverlay implements Focusable {
   private recomputeSearch(): void {
     const lines = this.viewFile?.lines ?? [];
     this.searchMatches = searchLines(lines, this.searchQuery);
+    this.searchMatchLines = new Set(this.searchMatches.map((m) => m.line));
     if (this.searchMatches.length === 0) this.searchIndex = 0;
+    this.searchVersion++;
+    this.searchDirty = false;
   }
 
   private cycleSearch(delta: number): void {
     if (this.searchMatches.length === 0) return;
     const count = this.searchMatches.length;
     this.searchIndex = (this.searchIndex + delta + count) % count;
+    this.searchVersion++;
     this.searchJump = true;
   }
 
@@ -1027,11 +1094,15 @@ export class NavigatorOverlay implements Focusable {
     this.recomputeSearchIfNeeded();
     const marked = this.markSearch(file);
 
-    // Clamp horizontal scroll and scroll position.
-    const maxH = Math.max(0, maxLineWidth(marked) - contentW);
+    // Clamp horizontal scroll and scroll position. `maxLineWidth` depends only
+    // on visible width, which search marking does not change, so it is cached
+    // on the stable `file` reference; `computeRows` is cached on the cached
+    // `marked` reference plus width/wrap/hscroll, so vertical scrolling no
+    // longer re-wraps the whole file each keystroke.
+    const maxH = Math.max(0, this.cachedMaxLineWidth(file) - contentW);
     this.viewHscroll = Math.max(0, Math.min(this.viewHscroll, maxH));
 
-    const display = computeRows(marked, contentW, this.viewWrap, this.viewHscroll);
+    const display = this.cachedComputeRows(marked, contentW, this.viewWrap, this.viewHscroll);
     if (this.searchJump && this.searchMatches.length > 0) {
       const currentMatch = this.searchMatches[this.searchIndex];
       const target = display.findIndex((row) => row.line === currentMatch?.line);
@@ -1113,21 +1184,58 @@ export class NavigatorOverlay implements Focusable {
 
   private recomputeSearchIfNeeded(): void {
     if (!this.searchQuery) {
-      this.searchMatches = [];
+      if (this.searchMatches.length > 0) {
+        this.searchMatches = [];
+        this.searchMatchLines = new Set();
+        this.searchVersion++;
+      }
+      this.searchDirty = false;
       return;
     }
-    this.recomputeSearch();
+    // Only rerun the full-file scan when the result may be stale (file content
+    // changed under an active query). Keystrokes that change the query call
+    // `recomputeSearch` directly and clear the dirty flag, so a plain render —
+    // e.g. scrolling or moving the cursor — no longer re-scans the file.
+    if (this.searchDirty) this.recomputeSearch();
   }
 
   private markSearch(file: ViewerFile): ViewerFile {
     if (!this.searchQuery || this.searchMatches.length === 0) return file;
+    // Cache the marked file: it only changes when the file content or the
+    // search version (matches / current index) changes.
+    if (this.markedCache && this.markedCache.file === file && this.markedCache.version === this.searchVersion) {
+      return this.markedCache.marked;
+    }
     const currentLine = this.searchMatches[Math.min(this.searchIndex, this.searchMatches.length - 1)]?.line;
     const T = this.T;
+    const matchLines = this.searchMatchLines;
     const marked = file.lines.map((line, index) => {
-      if (!this.searchMatches.some((match) => match.line === index)) return line;
+      if (!matchLines.has(index)) return line;
       return markMatches(line, this.searchQuery, T.searchMatch, T.searchCurrent, index === currentLine);
     });
-    return { ...file, lines: marked };
+    const result = { ...file, lines: marked };
+    this.markedCache = { file, version: this.searchVersion, marked: result };
+    return result;
+  }
+
+  private cachedMaxLineWidth(file: ViewerFile): number {
+    if (this.maxLineWidthCache && this.maxLineWidthCache.file === file) return this.maxLineWidthCache.value;
+    const value = maxLineWidth(file);
+    this.maxLineWidthCache = { file, value };
+    return value;
+  }
+
+  private cachedComputeRows(
+    marked: ViewerFile,
+    width: number,
+    wrap: boolean,
+    hscroll: number,
+  ): DisplayRow[] {
+    const c = this.rowsCache;
+    if (c && c.marked === marked && c.width === width && c.wrap === wrap && c.hscroll === hscroll) return c.rows;
+    const rows = computeRows(marked, width, wrap, hscroll);
+    this.rowsCache = { marked, width, wrap, hscroll, rows };
+    return rows;
   }
 
   private buildCard(file: ViewerFile, rightW: number, area: number): string[] {

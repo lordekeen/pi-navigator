@@ -22,14 +22,13 @@ import type {
   Theme,
 } from "@earendil-works/pi-coding-agent";
 
-import { MAX_POLL_INTERVAL_MS, OVERLAY_OPTIONS, REFRESH_INTERVAL_MS } from "./constants";
+import { MAX_POLL_INTERVAL_MS, MAX_VIEWER_CACHE_ENTRIES, OVERLAY_OPTIONS, REFRESH_INTERVAL_MS } from "./constants";
 import {
   detectRepo,
   gitCodeMap,
   gitTreeProbe,
   readGitState,
   readTrackedFiles,
-  resetGitAvailabilityCache,
   toCwdRelative,
 } from "./git";
 import { NavigatorOverlay } from "./navigator";
@@ -44,7 +43,7 @@ import {
   reapplyExpansion,
   type TreeEntry,
 } from "./tree";
-import type { FileNode, GitState } from "./types";
+import type { FileNode, GitState, ViewerFile } from "./types";
 import { loadFile } from "./viewer";
 
 type TuiLike = { terminal: { rows: number }; requestRender: () => void };
@@ -106,15 +105,48 @@ async function runNavigator(ctx: ExtensionContext | ExtensionCommandContext): Pr
         }, currentPollDelay);
       };
 
+      // Per-file viewer cache (Issue #020): re-opening a file whose mtime is
+      // unchanged reuses the cached highlighted lines instead of re-running
+      // the stat → sniff → read → normalize → expandTabs → highlight pipeline.
+      // A cheap stat decides validity; the full loadFile only runs on a real
+      // change. Bounded by MAX_VIEWER_CACHE_ENTRIES (oldest insertion evicted).
+      const viewerCache = new Map<string, { mtimeMs: number; file: ViewerFile }>();
+      const loadFileCached = async (relPath: string): Promise<ViewerFile> => {
+        const absPath = join(cwd, relPath);
+        let mtimeMs: number;
+        try {
+          mtimeMs = (await stat(absPath)).mtimeMs;
+        } catch {
+          // Stat failed (deleted/permissions): let loadFile produce the error
+          // card; drop any stale cache entry for this path.
+          viewerCache.delete(relPath);
+          return loadFile(absPath, relPath);
+        }
+        const cached = viewerCache.get(relPath);
+        if (cached && Math.abs(cached.mtimeMs - mtimeMs) <= 1) {
+          return cached.file;
+        }
+        const file = await loadFile(absPath, relPath);
+        // Cache only results that carry an mtime (text/binary/image/truncated);
+        // error cards have none and are cheap to rebuild.
+        if (file.mtimeMs !== undefined) {
+          if (viewerCache.size >= MAX_VIEWER_CACHE_ENTRIES) {
+            const oldest = viewerCache.keys().next();
+            if (!oldest.done) viewerCache.delete(oldest.value);
+          }
+          viewerCache.set(relPath, { mtimeMs: file.mtimeMs, file });
+        }
+        return file;
+      };
+
       const overlay = new NavigatorOverlay({
         cwd,
         theme,
         getTerminalRows: () => tui.terminal.rows,
         requestRender: () => tui.requestRender(),
         onClose: close,
-        loadFile: (relPath: string) => loadFile(join(cwd, relPath), relPath),
+        loadFile: loadFileCached,
         refresh: () => {
-          resetGitAvailabilityCache();
           currentPollDelay = REFRESH_INTERVAL_MS;
           void refreshData().then(() => {
             scheduleRender();

@@ -25,6 +25,13 @@ export const MAX_HIGHLIGHT_LINES = 5000;
 /** Line counting is skipped above this size. */
 export const MAX_LINE_COUNT_BYTES = 256 * 1024;
 
+/**
+ * Maximum number of parsed ViewerFile entries kept in the per-file viewer
+ * cache in index.ts. Re-opening a file whose mtime is unchanged reuses the
+ * cached highlighted lines instead of re-running the loadFile pipeline.
+ */
+export const MAX_VIEWER_CACHE_ENTRIES = 16;
+
 /** Bytes read for binary sniffing (NUL byte detection). */
 export const BINARY_SNIFF_BYTES = 4096;
 
