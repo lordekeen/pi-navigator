@@ -40,6 +40,13 @@ describe("mapExtensionToIcon", () => {
     expect(mapExtensionToIcon("main.py", false)).toBe("\ue606");
   });
 
+  it("maps special filenames and dotfiles by exact name (Issue #045)", () => {
+    expect(mapExtensionToIcon(".gitignore", false)).toBe("\uf1d3");
+    expect(mapExtensionToIcon("nested/.editorconfig", false)).toBe("\uf461");
+    expect(mapExtensionToIcon("Dockerfile", false)).toBe("\uf308");
+    expect(mapExtensionToIcon("LICENSE", false)).toBe("\uf718");
+  });
+
   it("maps by lowercase extension, case-insensitively", () => {
     expect(mapExtensionToIcon("Readme.MD", false)).toBe("\uf48a");
     expect(mapExtensionToIcon("Main.TS", false)).toBe("\ue628");

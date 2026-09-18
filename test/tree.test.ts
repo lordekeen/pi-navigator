@@ -53,6 +53,19 @@ describe("buildTree", () => {
     expect(tree.children.map((n) => n.name)).toEqual(["aaa", "mid", "a-file.txt", "z-file.txt"]);
   });
 
+  it("sorts files with numeric suffixes naturally (Issue #044)", () => {
+    const tree = buildTree(
+      CWD,
+      [
+        { relPath: "file10.ts", isDir: false, symlink: false },
+        { relPath: "file2.ts", isDir: false, symlink: false },
+        { relPath: "file1.ts", isDir: false, symlink: false },
+      ],
+      new Map(),
+    );
+    expect(tree.children.map((n) => n.name)).toEqual(["file1.ts", "file2.ts", "file10.ts"]);
+  });
+
   it("creates intermediate directories on demand and keeps declared-empty ones", () => {
     const tree = buildTree(
       CWD,
@@ -386,5 +399,24 @@ describe("navigation helpers", () => {
       expect(hasChanges(tree.children[0])).toBe(true);
     }
     expect(hasChanges(buildTree(CWD, entries(["a/b.ts"]), new Map()))).toBe(false);
+  });
+});
+
+describe("walkTree", () => {
+  it("visits siblings in forward order (Issue #046)", () => {
+    const tree = buildTree(
+      CWD,
+      [
+        { relPath: "a.ts", isDir: false, symlink: false },
+        { relPath: "b.ts", isDir: false, symlink: false },
+        { relPath: "c.ts", isDir: false, symlink: false },
+      ],
+      new Map(),
+    );
+    const visited: string[] = [];
+    walkTree(tree, (n) => {
+      visited.push(n.name);
+    });
+    expect(visited).toEqual([".", "a.ts", "b.ts", "c.ts"]);
   });
 });

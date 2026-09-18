@@ -385,6 +385,9 @@ describe("render width safety", () => {
     await overlay.openRelPath("broken.ts");
     const lines = expectWidthSafe(overlay, 120);
     expect(lines.join("\n")).toContain("Cannot read");
+    expectWidthSafe(overlay, 100);
+    expectWidthSafe(overlay, 80);
+    expectWidthSafe(overlay, 60);
   });
 
   it("keeps a highlighted viewer file inside the pane with wrap on and off", async () => {

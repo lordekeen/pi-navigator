@@ -41,7 +41,11 @@ let gitBinaryPresent: boolean | null = null;
  * treated as empty; `"error"` is any other failure (non-zero exit, timeout,
  * missing binary). (Issue #024.)
  */
-type GitResult = { status: "ok"; stdout: string } | { status: "overflow" } | { status: "error" };
+type GitResult =
+  | { status: "ok"; stdout: string }
+  | { status: "overflow" }
+  | { status: "missing" }
+  | { status: "error" };
 
 async function runGit(cwd: string, args: string[]): Promise<GitResult> {
   try {
@@ -54,13 +58,11 @@ async function runGit(cwd: string, args: string[]): Promise<GitResult> {
     });
     return { status: "ok", stdout };
   } catch (error) {
-    // A spawn ENOENT means the git binary itself is not on PATH: the cached
-    // availability check is stale, so clear it and let the next `isGitAvailable`
-    // re-detect (e.g. git was installed after the overlay opened). Non-zero
-    // exits and timeouts have a numeric `code`, not "ENOENT", so this only
-    // resets on a genuinely missing binary.
+    // A spawn ENOENT means the git binary itself is not on PATH.
+    // Cache false to avoid spawning every tick (Issue #047).
     if (error && typeof error === "object" && (error as { code?: unknown }).code === "ENOENT") {
-      gitBinaryPresent = null;
+      gitBinaryPresent = false;
+      return { status: "missing" };
     }
     // maxBuffer overflow is signaled by Node as code "ERR_CHILD_PROCESS_STDIO_MAXBUFFER".
     if (
@@ -78,8 +80,17 @@ async function runGit(cwd: string, args: string[]): Promise<GitResult> {
 export async function isGitAvailable(cwd: string): Promise<boolean> {
   if (gitBinaryPresent !== null) return gitBinaryPresent;
   const result = await runGit(cwd, ["--version"]);
-  gitBinaryPresent = result.status === "ok";
-  return gitBinaryPresent;
+  if (result.status === "ok") {
+    gitBinaryPresent = true;
+    return true;
+  }
+  if (result.status === "missing") {
+    gitBinaryPresent = false;
+    return false;
+  }
+  // Transient failure (timeout, permissions): do not cache false permanently (Issue #047).
+  gitBinaryPresent = null;
+  return false;
 }
 
 export async function detectRepo(cwd: string): Promise<RepoInfo> {
@@ -207,8 +218,12 @@ export async function readGitState(cwd: string, repo?: RepoInfo): Promise<GitSta
   const logText = logRes.status === "ok" ? logRes.stdout : "";
   for (const line of logText.split("\n")) {
     if (!line) continue;
-    const [shortHash, parentsRaw, dateRel, subject] = line.split(UNIT_SEPARATOR);
+    const parts = line.split(UNIT_SEPARATOR);
+    const shortHash = parts[0];
     if (!shortHash) continue;
+    const parentsRaw = parts[1];
+    const dateRel = parts[2];
+    const subject = parts.slice(3).join(UNIT_SEPARATOR);
     history.push({
       shortHash,
       parents: parentsRaw ? parentsRaw.split(" ") : [],
@@ -350,10 +365,6 @@ export async function readCommitDiff(cwd: string, shortHash: string): Promise<Co
   // more than the viewer caps (same boundedness as loadFile).
   let body = bodyRes.status === "ok" ? bodyRes.stdout : "";
   let truncated = false;
-  if (body.length > MAX_HIGHLIGHT_BYTES || body.split("\n").length > MAX_HIGHLIGHT_LINES) {
-    body = body.slice(0, MAX_HIGHLIGHT_BYTES);
-    truncated = true;
-  }
   // A binary diff body would render as garbage (control bytes); degrade to a
   // notice instead (Issue #024 spirit).
   if (body.includes("\0")) {
@@ -361,7 +372,17 @@ export async function readCommitDiff(cwd: string, shortHash: string): Promise<Co
     truncated = false;
   }
 
-  const lines = body.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  body = body.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  if (body.length > MAX_HIGHLIGHT_BYTES) {
+    body = body.slice(0, MAX_HIGHLIGHT_BYTES);
+    truncated = true;
+  }
+
+  let lines = body.split("\n");
+  if (lines.length > MAX_HIGHLIGHT_LINES) {
+    lines = lines.slice(0, MAX_HIGHLIGHT_LINES);
+    truncated = true;
+  }
   if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
 
   const filesLabel =

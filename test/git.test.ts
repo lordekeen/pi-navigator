@@ -352,6 +352,23 @@ describe("git integration on a scratch repository", () => {
     expect(diff.notice).toMatch(/1 file/);
   });
 
+  it("preserves commit subject containing unit separator (Issue #043)", async () => {
+    await writeFile(join(repo, "unit.txt"), "unit");
+    await commit(repo, "feat\x1fwith\x1fseparator");
+    const state = await readGitState(repo);
+    expect(state.history[0]?.subject).toBe("feat\x1fwith\x1fseparator");
+  });
+
+  it("truncates commit diff exceeding MAX_HIGHLIGHT_LINES (Issue #036)", async () => {
+    const manyLines = Array.from({ length: 5050 }, (_, i) => `${i}`).join("\n");
+    await writeFile(join(repo, "many.txt"), manyLines);
+    await commit(repo, "many lines");
+    const state = await readGitState(repo);
+    const diff = await readCommitDiff(repo, state.history[0]!.shortHash);
+    expect(diff.lines.length).toBeLessThanOrEqual(5000);
+    expect(diff.notice).toContain("diff truncated");
+  });
+
   it("never throws on a bogus hash and degrades cleanly (v3)", async () => {
     const diff = await readCommitDiff(repo, "deadbeef");
     expect(diff.lines).toEqual([]);

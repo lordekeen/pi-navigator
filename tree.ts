@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { HALF_PAGE_DIVISOR, IGNORED_NAMES, MAX_TREE_DEPTH } from "./constants";
 import type { FileNode, MatchRow, TreeRow } from "./types";
 
-const collator = new Intl.Collator(undefined, { sensitivity: "base" });
+const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 
 // ── Entry collection ──
 
@@ -122,15 +122,17 @@ async function walk(
  * are deliberately not probed, matching the plan.
  */
 export async function collectFsProbe(cwd: string, dirs: Set<string>): Promise<string> {
-  const parts: string[] = [];
-  for (const relDir of ["", ...dirs]) {
-    try {
-      const info = await stat(join(cwd, relDir));
-      parts.push(`${relDir}:${Math.floor(info.mtimeMs)}`);
-    } catch {
-      parts.push(`${relDir}:missing`);
-    }
-  }
+  const entries = ["", ...dirs];
+  const parts = await Promise.all(
+    entries.map(async (relDir) => {
+      try {
+        const info = await stat(join(cwd, relDir));
+        return `${relDir}:${Math.floor(info.mtimeMs)}`;
+      } catch {
+        return `${relDir}:missing`;
+      }
+    }),
+  );
   return parts.join("|");
 }
 
@@ -291,7 +293,10 @@ export function walkTree(root: FileNode, visit: (node: FileNode) => boolean | vo
     const node = stack.pop();
     if (!node) continue;
     if (visit(node) === false) return;
-    for (const child of node.children) stack.push(child);
+    for (let i = node.children.length - 1; i >= 0; i--) {
+      const child = node.children[i];
+      if (child) stack.push(child);
+    }
   }
 }
 

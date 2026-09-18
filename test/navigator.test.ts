@@ -873,3 +873,43 @@ describe("Issue #001: stale content race when opening file", () => {
     expect(harness.overlay.getOpenRelPath()).toBe("b.ts");
   });
 });
+
+describe("makeNavigatorTheme", () => {
+  it("guards underline defensively when theme.underline is undefined (Issue #042)", () => {
+    const minimalTheme = makeNavigatorTheme({
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+    } as never);
+    expect(minimalTheme.searchCurrent("match")).toBe("match");
+  });
+
+  it("applies underline when theme.underline is provided", () => {
+    const themeWithUnderline = makeNavigatorTheme({
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+      underline: (text: string) => `<u>${text}</u>`,
+    } as never);
+    expect(themeWithUnderline.searchCurrent("match")).toBe("<u>match</u>");
+  });
+});
+
+describe("shortPath", () => {
+  it("shortens home directory prefix using injected home option (Issue #039)", () => {
+    const theme = makeNavigatorTheme({
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+    } as never);
+    const overlay = new NavigatorOverlay({
+      cwd: "/Users/testuser/project",
+      theme,
+      home: "/Users/testuser",
+      getTerminalRows: () => 24,
+      requestRender: () => undefined,
+      onClose: () => undefined,
+      loadFile: async () => ({ kind: "text", relPath: "a.txt", lines: [] }),
+      refresh: () => undefined,
+    });
+    const rendered = overlay.render(80).join("\n");
+    expect(rendered).toContain("~/project");
+  });
+});

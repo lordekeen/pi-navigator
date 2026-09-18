@@ -178,9 +178,10 @@ async function runNavigator(ctx: ExtensionContext | ExtensionCommandContext): Pr
             scheduleNextPoll();
           });
         },
-        // Env read happens here, once, at overlay open; the component never
-        // touches process.env (Issue #028).
+        // Env reads happen here, once, at overlay open; the component never
+        // touches process.env (Issues #028, #039).
         enableIcons: parseEnableIcons(process.env[ICONS_ENV]),
+        home: process.env.HOME ?? process.env.USERPROFILE ?? "",
       });
 
       const refreshData = async (): Promise<void> => {
@@ -263,13 +264,17 @@ async function runNavigator(ctx: ExtensionContext | ExtensionCommandContext): Pr
             if (!openRel.startsWith("commit:")) {
               try {
                 const info = await stat(join(cwd, openRel));
-                const known = overlay.getOpenMtime();
-                const changed = known !== undefined && Math.abs(info.mtimeMs - known) > 1;
-                overlay.setDiskChanged(changed);
-                fileMtimeChanged = changed;
+                if (overlay.getOpenRelPath() === openRel) {
+                  const known = overlay.getOpenMtime();
+                  const changed = known !== undefined && Math.abs(info.mtimeMs - known) > 1;
+                  overlay.setDiskChanged(changed);
+                  fileMtimeChanged = changed;
+                }
               } catch {
-                overlay.setDiskChanged(true);
-                fileMtimeChanged = true;
+                if (overlay.getOpenRelPath() === openRel) {
+                  overlay.setDiskChanged(true);
+                  fileMtimeChanged = true;
+                }
               }
             }
           }

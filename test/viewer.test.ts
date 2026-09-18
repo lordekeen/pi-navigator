@@ -114,6 +114,11 @@ describe("markMatches", () => {
     expect(markMatches("foobar", "Bar", match, current, -1)).toBe("foobar");
   });
 
+  it("uses needle.length when lowercased query has different length (Issue #035)", () => {
+    // Turkish dotted capital I (\u0130, length 1) lowercases to i + combining dot (\u0069\u0307, length 2)
+    expect(markMatches("a\u0069\u0307b", "\u0130", match, current, -1)).toBe("a<m>\u0069\u0307</m>b");
+  });
+
   it("returns the text unchanged for an empty query", () => {
     expect(markMatches("abc", "", match, current, -1)).toBe("abc");
   });
@@ -146,6 +151,9 @@ describe("extOf / formatSize / imageDimensions", () => {
     expect(extOf("A.TXT")).toBe("txt");
     expect(extOf("dir/a.tar.gz")).toBe("gz");
     expect(extOf("noext")).toBe("");
+    expect(extOf(".gitignore")).toBe("");
+    expect(extOf("dir/.editorconfig")).toBe("");
+    expect(extOf(".hidden.txt")).toBe("txt");
   });
 
   it("formats byte sizes", () => {

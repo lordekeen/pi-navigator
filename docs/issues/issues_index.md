@@ -8,9 +8,9 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
-| **Pending / Open** | 1 | 0 | 0 | **1** |
-| **Resolved** | 6 | 10 | 17 | **33** |
-| **Total** | **7** | **10** | **17** | **34** |
+| **Pending / Open** | 2 | 1 | 2 | **5** |
+| **Resolved** | 7 | 14 | 25 | **46** |
+| **Total** | **9** | **15** | **27** | **51** |
 
 ---
 
@@ -19,6 +19,10 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | ID | Title | Type | Severity | Component | Status |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | [#020](020-no-viewer-cache-blocking-highlight.md) | No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread | Bug / Performance | High | `viewer.ts` | Open (partial — cache done; event-loop yielding deferred: blocked by pi's bundled-runtime virtual-module boundary, needs a pi-side API) |
+| [#048](048-reload-open-file-crashes-commit-diff.md) | `reloadOpenFile` Routes Commit Diffs to Filesystem Loader, Crashing the Viewer | Bug | High | `navigator.ts` | Open |
+| [#049](049-copy-context-raw-commit-scheme.md) | `copyContext` Copies Raw `commit:<hash>` Identity String in Viewer Pane | Bug / UX Consistency | Medium | `navigator.ts` | Open |
+| [#050](050-viewer-header-commit-transition-flicker.md) | Viewer Header Flickers Raw `commit:<hash>` Identity During Commit Transitions | Bug / UI Polish | Low | `navigator.ts` | Open |
+| [#051](051-redundant-ext-icons-entries.md) | Dead Extension Entries in `EXT_ICONS` Superseded by `FILENAME_ICONS` | Technical Debt / Code Hygiene | Low | `icons.ts` | Open |
 
 ---
 
@@ -59,6 +63,19 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | [#032](032-commit-family-duplicate-rows.md) | Expanded Commit Family Duplicates Ancestor Rows and Mis-Nests | Bug | Medium | `gitRows` keyed family insertion on each child's own hash, so an ancestor that was both a top-level history row and a family child rendered twice and nested under the wrong anchor. Rebuilt as a per-anchor DFS block emitted once directly under the expanded commit. | **Resolved** |
 | [#033](033-solidity-icon-impersonates-typescript.md) | Solidity Icon Impersonates the TypeScript Glyph | Bug | Low | `EXT_ICONS` had `sol: "\ue628"` (the TypeScript codepoint) by copy-paste. Removed so `.sol` falls back to `GENERIC_ICON` like other unmapped languages. | **Resolved** |
 | [#034](034-commit-diff-view.md) | Commit Detail/Diff View + v3 Family-Tree Drift Fix | Feature | Medium | Enter on a commit opens its diff in the viewer (`readCommitDiff` + `styleDiffLines` + `ViewerKind "diff"`); family expansion moved to `l`/`h` (one level per expand, `▸`/`▾` markers, actionable `commit-child`, depth/row-cap notices instead of silent truncation). Optional `loadCommit` injection; fallback keeps v2 Enter semantics. version 0.4.0. | **Resolved** |
+| [#035](035-markmatches-query-length-vs-needle-length.md) | `markMatches` Uses `query.length` Instead of `needle.length` — Unicode Case-Folding Mismatch | Bug | Medium | Changed `query.length` to `needle.length` in `viewer.ts` slice extraction, aligning with search stride for Unicode characters whose lowercasing changes byte length. | **Resolved** |
+| [#036](036-readcommitdiff-line-cap-not-enforced.md) | `readCommitDiff` Line Cap Not Enforced — Only Byte Cap Applied | Bug | Medium | Enforced `MAX_HIGHLIGHT_LINES` capping on diff lines in `git.ts:readCommitDiff`, byte-slicing for byte overflow and line-slicing for line overflow. | **Resolved** |
+| [#037](037-diff-icons-missing-from-package-files.md) | `diff.ts` and `icons.ts` Missing From `package.json` `"files"` and `tsconfig.json` `"include"` | Bug | High | Added `diff.ts` and `icons.ts` to `package.json` `"files"` and `tsconfig.json` `"include"`, ensuring npm package builds include both runtime modules. | **Resolved** |
+| [#038](038-buildcard-width-overflow-narrow-panes.md) | `buildCard` Width Overflow at Narrow Panes | Enhancement | Medium | Clamped `contentWidth` to `rightW - 6` at narrow widths and mapped all `buildCard` output rows through `this.padTo(row, rightW)`. | **Resolved** |
+| [#039](039-shortpath-reads-process-env-in-component.md) | `shortPath` Reads `process.env` Inside the Component | Enhancement / Technical Debt | Low | Added optional `home?: string` to `NavigatorOptions`, read once in `index.ts` at startup, and removed direct `process.env` reads from `navigator.ts`. | **Resolved** |
+| [#040](040-mtime-race-in-refreshdata-poll.md) | Mtime Race Condition in `refreshData` Polling | Enhancement / Robustness | Low | Added active path check (`overlay.getOpenRelPath() === openRel`) after async `stat()` in `refreshData` before calling `setDiskChanged`. | **Resolved** |
+| [#041](041-collectfsprobe-serial-stat-calls.md) | `collectFsProbe` Serializes Stat Calls | Enhancement / Performance | Low | Converted `collectFsProbe` directory stat loop to `Promise.all` concurrent execution, preserving order and string format. | **Resolved** |
+| [#042](042-theme-underline-not-guarded.md) | `theme.underline` Called Without a Safety Guard | Enhancement / Robustness | Medium | Added defensive `typeof theme.underline === "function"` guard to `searchCurrent` in `theme.ts`, degrading gracefully when undefined. | **Resolved** |
+| [#043](043-commit-subject-truncation-on-unit-separator.md) | Commit Subject Truncated if Message Contains Unit Separator | Bug | Low | Rejoined split parts with `parts.slice(3).join(UNIT_SEPARATOR)` in `readGitState` log parser so subjects containing `\x1f` are preserved. | **Resolved** |
+| [#044](044-collator-missing-numeric-sorting.md) | Tree Sort Collator Lacks `numeric: true` — `file10` Sorts Before `file2` | Enhancement | Low | Added `numeric: true` to `Intl.Collator` in `tree.ts` for natural numeric sorting of file and directory names. | **Resolved** |
+| [#045](045-extof-dotfile-returns-name-as-extension.md) | `extOf` Returns Dotfile Name as Extension | Enhancement | Low | Updated `extOf` in `viewer.ts` to return `""` when `dot <= 0`. Added explicit `FILENAME_ICONS` map in `icons.ts` for exact dotfile and filename matching. | **Resolved** |
+| [#046](046-walktree-reverse-sibling-order.md) | `walkTree` Visits Siblings in Reverse Order | Enhancement / Technical Debt | Low | Reversed push order in `walkTree` (`node.children.length - 1` down to 0) so LIFO stack pops visit siblings in forward DFS order. | **Resolved** |
+| [#047](047-git-binary-negative-cache-permanent.md) | `gitBinaryPresent` Negative Cache Is Permanent for Non-ENOENT Failures | Enhancement / Robustness | Low | Introduced `{ status: "missing" }` on spawn `ENOENT`; `isGitAvailable` caches negative result only for genuine missing binary, leaving transient errors uncached. | **Resolved** |
 
 ---
 
@@ -79,6 +96,13 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#034: Commit Detail/Diff View + v3 Family-Tree Drift Fix](034-commit-diff-view.md) *(resolved)*
 - [#029: Git Pane Dynamic Rows + Richer Badges](029-git-pane-dynamic-rows.md) *(resolved)*
 - [#030: Expandable Commit Family Tree](030-commit-family-tree.md) *(resolved, keys superseded by v3 [#034] — `l`/`h` expand/collapse, Enter opens diff)*
+- [#035: `markMatches` Uses `query.length` Instead of `needle.length` — Unicode Case-Folding Mismatch](035-markmatches-query-length-vs-needle-length.md) *(resolved)*
+- [#036: `readCommitDiff` Line Cap Not Enforced — Only Byte Cap Applied](036-readcommitdiff-line-cap-not-enforced.md) *(resolved)*
+- [#037: `diff.ts` and `icons.ts` Missing From `package.json` `"files"` and `tsconfig.json` `"include"`](037-diff-icons-missing-from-package-files.md) *(resolved)*
+- [#038: `buildCard` Width Overflow at Narrow Panes](038-buildcard-width-overflow-narrow-panes.md) *(resolved)*
+- [#043: Commit Subject Truncated if Message Contains Unit Separator](043-commit-subject-truncation-on-unit-separator.md) *(resolved)*
+- [#048: `reloadOpenFile` Routes Commit Diffs to Filesystem Loader, Crashing the Viewer](048-reload-open-file-crashes-commit-diff.md)
+- [#050: Viewer Header Flickers Raw `commit:<hash>` Identity During Commit Transitions](050-viewer-header-commit-transition-flicker.md)
 
 ### Performance & Resource Optimization
 - [#020: No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread](020-no-viewer-cache-blocking-highlight.md) *(partial — cache done)*
@@ -97,14 +121,24 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#024: Unbounded Inputs at the Git Boundary](024-unbounded-git-boundary.md) *(resolved)*
 - [#006: Redundant Child Iteration in `findNode` Tree Search](006-findnode-redundant-tree-traversal.md) *(resolved)*
 - [#008: Periodic 3-Second Polling May Cause Overhead in Large Repositories](008-fs-polling-overhead.md) *(resolved)*
+- [#041: `collectFsProbe` Serializes Stat Calls](041-collectfsprobe-serial-stat-calls.md) *(resolved)*
 
 ### User Experience & Keyboard Navigation
 - [#004: Ambiguous Key Hints for Search Navigation (`n`/`N`) Between Input Modes](004-search-navigation-keybindings-inconsistency.md)
+- [#044: Tree Sort Collator Lacks `numeric: true` — `file10` Sorts Before `file2`](044-collator-missing-numeric-sorting.md) *(resolved)*
+- [#049: `copyContext` Copies Raw `commit:<hash>` Identity String in Viewer Pane](049-copy-context-raw-commit-scheme.md)
 
 ### Technical Debt & Code Robustness
 - [#005: Fragile Fallback Chain in Footer Hint Resolution](005-hints-lookup-fallback-chain.md)
 - [#007: Module-Level `gitBinaryPresent` Cache Cannot Be Invalidated](007-git-binary-cache-invalidation.md)
 - [#027: Dead `resetGitAvailabilityCache` Export; Stale #007 Resolution Summary](027-dead-resetgitavailabilitycache-export.md) *(resolved)*
+- [#039: `shortPath` Reads `process.env` Inside the Component](039-shortpath-reads-process-env-in-component.md) *(resolved)*
+- [#040: Mtime Race Condition in `refreshData` Polling](040-mtime-race-in-refreshdata-poll.md) *(resolved)*
+- [#042: `theme.underline` Called Without a Safety Guard](042-theme-underline-not-guarded.md) *(resolved)*
+- [#045: `extOf` Returns Dotfile Name as Extension](045-extof-dotfile-returns-name-as-extension.md) *(resolved)*
+- [#046: `walkTree` Visits Siblings in Reverse Order](046-walktree-reverse-sibling-order.md) *(resolved)*
+- [#047: `gitBinaryPresent` Negative Cache Is Permanent for Non-ENOENT Failures](047-git-binary-negative-cache-permanent.md) *(resolved)*
+- [#051: Dead Extension Entries in `EXT_ICONS` Superseded by `FILENAME_ICONS`](051-redundant-ext-icons-entries.md)
 
 ---
 

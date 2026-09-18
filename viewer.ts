@@ -125,7 +125,7 @@ export function markMatches(
       break;
     }
     out += styled.slice(from, idx);
-    const slice = styled.slice(idx, idx + query.length);
+    const slice = styled.slice(idx, idx + needle.length);
     const useCurrent = occurrence === currentOccurrence;
     out += useCurrent ? styleCurrent(slice) : styleMatch(slice);
     occurrence += 1;
@@ -137,9 +137,11 @@ export function markMatches(
 // ── Detection ──
 
 export function extOf(relPath: string): string {
-  const dot = relPath.lastIndexOf(".");
-  if (dot < 0) return "";
-  return relPath.slice(dot + 1).toLowerCase();
+  const slash = relPath.lastIndexOf("/");
+  const basename = slash >= 0 ? relPath.slice(slash + 1) : relPath;
+  const dot = basename.lastIndexOf(".");
+  if (dot <= 0) return "";
+  return basename.slice(dot + 1).toLowerCase();
 }
 
 async function sniffBinary(absPath: string): Promise<boolean> {

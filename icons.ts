@@ -75,11 +75,15 @@ const EXT_ICONS: Record<string, string> = {
   txt: "\uf15c", //  file-text
   log: "\uf15c",
   pdf: "\uf1c1", //  pdf
+};
+
+/** Exact filename glyph map for dotfiles and special filenames without standard extensions. */
+const FILENAME_ICONS: Record<string, string> = {
   dockerfile: "\uf308", //  docker
-  gitignore: "\uf1d3", //  git
-  gitattributes: "\uf1d3",
-  editorconfig: "\uf461",
   license: "\uf718",
+  ".gitignore": "\uf1d3", //  git
+  ".gitattributes": "\uf1d3",
+  ".editorconfig": "\uf461",
 };
 
 /** Folder glyph for directories. */
@@ -87,13 +91,17 @@ const DIR_ICON = "\uf4d3"; //  folder
 
 /**
  * Resolve the Nerd Font glyph for a tree entry. Directories always get the
- * folder glyph; files map by extension with a generic fallback.
+ * folder glyph; exact filenames match first, then extension with a generic fallback.
  */
 export function mapExtensionToIcon(relPath: string, isDir: boolean): string {
   if (isDir) return DIR_ICON;
-  const dot = relPath.lastIndexOf(".");
-  if (dot < 0) return GENERIC_ICON;
-  const ext = relPath.slice(dot + 1).toLowerCase();
+  const slash = relPath.lastIndexOf("/");
+  const basename = (slash >= 0 ? relPath.slice(slash + 1) : relPath).toLowerCase();
+  const fileIcon = FILENAME_ICONS[basename];
+  if (fileIcon) return fileIcon;
+  const dot = basename.lastIndexOf(".");
+  if (dot <= 0) return GENERIC_ICON;
+  const ext = basename.slice(dot + 1);
   return EXT_ICONS[ext] ?? GENERIC_ICON;
 }
 

@@ -69,6 +69,8 @@ export interface NavigatorOptions {
   refresh: () => void;
   /** Opt into the Nerd Font icon column (Issue #028). Defaults to false. */
   enableIcons?: boolean;
+  /** Home directory for tilde shortening (Issue #039). Defaults to empty string. */
+  home?: string;
 }
 
 const FOCUS_HINTS: Record<Focus, string> = {
@@ -207,6 +209,8 @@ export class NavigatorOverlay implements Focusable {
   /** Nerd Font icon column enabled; never read from env here (Issue #028). */
   private enableIcons: boolean;
   private iconsNoticeShown = false;
+  /** Home directory for path shortening; never read from env here (Issue #039). */
+  private home: string;
 
   constructor(options: NavigatorOptions) {
     this.cwd = options.cwd;
@@ -218,6 +222,7 @@ export class NavigatorOverlay implements Focusable {
     this.loadCommit = options.loadCommit;
     this.refresh = options.refresh;
     this.enableIcons = options.enableIcons ?? false;
+    this.home = options.home ?? "";
   }
 
   // ── Public API ──
@@ -1534,7 +1539,10 @@ export class NavigatorOverlay implements Focusable {
     if (file.kind === "image") body.push("rendering is the plan section 8 spike");
     if (file.kind === "error") body.push("press Tab, then pick another file");
 
-    const contentWidth = Math.max(24, Math.min(rightW - 6, Math.max(...[title, ...body].map((text) => visibleWidth(text))) + 4));
+    const contentWidth = Math.max(
+      4,
+      Math.min(Math.max(4, rightW - 6), Math.max(24, Math.max(...[title, ...body].map((text) => visibleWidth(text))) + 4)),
+    );
     const boxW = contentWidth + 2;
     const boxH = body.length + 2;
     const topPad = Math.max(0, Math.floor((area - boxH) / 2));
@@ -1542,7 +1550,8 @@ export class NavigatorOverlay implements Focusable {
 
     const out: string[] = [];
     const blank = (text: string) => " ".repeat(leftPad) + text + " ".repeat(Math.max(0, rightW - leftPad - visibleWidth(text)));
-    const borderRow = (left: string, fill: string, right: string) => blank(T.frame(left + fill.repeat(boxW - 2) + right));
+    const borderRow = (left: string, fill: string, right: string) =>
+      blank(T.frame(left + fill.repeat(Math.max(0, boxW - 2)) + right));
     for (let i = 0; i < topPad; i++) out.push(blank(""));
     out.push(borderRow("\u250c", "\u2500", "\u2510"));
     // Interior = 1 space + " title " + padding = contentWidth, so the title row
@@ -1553,14 +1562,14 @@ export class NavigatorOverlay implements Focusable {
       // Empty ellipsis: the default "..." is wrapped in \x1b[0m resets that
       // would close the T.muted span and render "..." in bright default.
       // Truncate once and reuse the measured width so the padding matches.
-      const cell = truncateAndWidth(text, contentWidth - 1);
+      const cell = truncateAndWidth(text, Math.max(0, contentWidth - 1));
       out.push(
         blank(T.frame("\u2502") + " " + T.muted(cell.text) + " ".repeat(Math.max(0, contentWidth - 1 - cell.width)) + T.frame("\u2502")),
       );
     }
     out.push(borderRow("\u2514", "\u2500", "\u2518"));
     while (out.length < area) out.push(this.padTo("", rightW));
-    return out.slice(0, area);
+    return out.slice(0, area).map((row) => this.padTo(row, rightW));
   }
 
   // ── Help modal ──
@@ -1632,7 +1641,7 @@ export class NavigatorOverlay implements Focusable {
   }
 
   private shortPath(path: string): string {
-    const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+    const home = this.home;
     let shortened = path;
     if (home && (path === home || path.startsWith(home))) {
       shortened = "~" + path.slice(home.length);

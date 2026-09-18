@@ -41,7 +41,10 @@ export function makeNavigatorTheme(theme: Theme): NavigatorTheme {
     // Current match: same pair plus underline, mirroring pi's own tui-renderer.
     // A token-inverted pair would pass a ThemeColor name to theme.bg(), which
     // throws at runtime (theme.bg rejects unknown keys) and fails typecheck.
-    searchCurrent: (t) => theme.underline(theme.bg("searchMatchBg", theme.fg("searchMatchText", t))),
+    searchCurrent: (t) => {
+      const match = theme.bg("searchMatchBg", theme.fg("searchMatchText", t));
+      return typeof theme.underline === "function" ? theme.underline(match) : match;
+    },
     frame: (t) => theme.fg("dim", t),
   };
 }
