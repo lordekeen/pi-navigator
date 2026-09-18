@@ -27,11 +27,13 @@ import {
   detectRepo,
   gitCodeMap,
   gitTreeProbe,
+  readCommitDiff,
   readGitState,
   readTrackedFiles,
   toCwdRelative,
 } from "./git";
 import { ICONS_ENV, parseEnableIcons } from "./icons";
+import { styleDiffLines } from "./diff";
 import { NavigatorOverlay } from "./navigator";
 import { makeNavigatorTheme } from "./theme";
 import {
@@ -144,6 +146,23 @@ async function runNavigator(ctx: ExtensionContext | ExtensionCommandContext): Pr
         return file;
       };
 
+      // v3 commit-diff loader: readCommitDiff returns *plain* diff lines plus
+      // a stat; the theme is applied here (styleDiffLines) so git.ts stays
+      // theme-free. Commits are immutable, so no cache for v1 — a bounded
+      // `git show` per open is cheap.
+      const loadCommit = async (shortHash: string): Promise<ViewerFile> => {
+        const diff = await readCommitDiff(cwd, shortHash);
+        return {
+          kind: "diff",
+          relPath: `commit:${diff.shortHash}`,
+          commitHash: diff.shortHash,
+          parents: diff.parents,
+          lineCount: diff.lines.length,
+          lines: styleDiffLines(diff.lines, theme),
+          notice: diff.notice,
+        };
+      };
+
       const overlay = new NavigatorOverlay({
         cwd,
         theme,
@@ -151,6 +170,7 @@ async function runNavigator(ctx: ExtensionContext | ExtensionCommandContext): Pr
         requestRender: () => tui.requestRender(),
         onClose: close,
         loadFile: loadFileCached,
+        loadCommit,
         refresh: () => {
           currentPollDelay = REFRESH_INTERVAL_MS;
           void refreshData().then(() => {
@@ -237,15 +257,20 @@ async function runNavigator(ctx: ExtensionContext | ExtensionCommandContext): Pr
           const openRel = overlay.getOpenRelPath();
           let fileMtimeChanged = false;
           if (openRel) {
-            try {
-              const info = await stat(join(cwd, openRel));
-              const known = overlay.getOpenMtime();
-              const changed = known !== undefined && Math.abs(info.mtimeMs - known) > 1;
-              overlay.setDiskChanged(changed);
-              fileMtimeChanged = changed;
-            } catch {
-              overlay.setDiskChanged(true);
-              fileMtimeChanged = true;
+            // v3: a commit:<hash> viewer path is not a filesystem path — skip
+            // the mtime poll (stat(join(cwd, "commit:abc1234")) would fail and
+            // set a spurious diskChanged every tick).
+            if (!openRel.startsWith("commit:")) {
+              try {
+                const info = await stat(join(cwd, openRel));
+                const known = overlay.getOpenMtime();
+                const changed = known !== undefined && Math.abs(info.mtimeMs - known) > 1;
+                overlay.setDiskChanged(changed);
+                fileMtimeChanged = changed;
+              } catch {
+                overlay.setDiskChanged(true);
+                fileMtimeChanged = true;
+              }
             }
           }
 

@@ -9,6 +9,7 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 
+import { mapExtensionToIcon } from "../icons";
 import { MIN_OVERLAY_HEIGHT, MIN_OVERLAY_WIDTH } from "../constants";
 import { makeNavigatorTheme } from "../theme";
 import { buildTree, entriesFromPaths } from "../tree";
@@ -209,7 +210,14 @@ describe("render width safety", () => {
       refreshedAt: 0,
     });
     overlay.handleInput("\t"); // focus git
-    overlay.handleInput(KEYS.enter); // expand the first (merge) commit
+    overlay.handleInput(KEYS.enter); // open the first (merge) commit's diff in the viewer
+    // Family expansion is on l (v3). Tab back to git (cursor stays on the
+    // first nav row: bbb2222), expand its family, then expand the in-history
+    // parent aaa1111 to get a depth-2 row.
+    overlay.handleInput(KEYS.tab);
+    overlay.handleInput("l"); // expand bbb2222 -> aaa1111, ccc3333 at depth 1
+    overlay.handleInput("j"); // bbb -> aaa1111 (commit-child)
+    overlay.handleInput("l"); // expand aaa1111 -> 9998888 at depth 2
     expectWidthSafe(overlay, 80);
   });
 
@@ -387,5 +395,135 @@ describe("render width safety", () => {
     expectWidthSafe(harness.overlay, 100);
     harness.overlay.handleInput("w"); // wrap off
     expectWidthSafe(harness.overlay, 100);
+  });
+
+  it("renders a commit diff viewer file width-safe at all suite sizes (v3)", async () => {
+    const theme = makeNavigatorTheme({
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+      underline: (text: string) => text,
+      inverse: (text: string) => text,
+    } as never);
+    // Diff ViewerFile with styled +/-, a hunk header, and a very long added
+    // line that must truncate without leaking a bright ellipsis.
+    const styledDiff: ViewerFile = {
+      kind: "diff",
+      relPath: "commit:a1b2c3d",
+      commitHash: "a1b2c3d",
+      parents: ["e4f5a6b"],
+      lineCount: 8,
+      lines: [
+        "diff --git a/src/main.ts b/src/main.ts",
+        "index 0000000..1111111 100644",
+        "--- a/src/main.ts",
+        "+++ b/src/main.ts",
+        "@@ -1,1 +1,2 @@",
+        "-const value = 'old'",
+        "+const value = 'a very very very long new line that needs to truncate cleanly" +
+          " and stay inside the pane without a bright ellipsis artifact'",
+        " context line",
+      ],
+      notice: "commit a1b2c3d \u00b7 1 file \u00b7 +4 \u22122",
+    };
+    const overlay = new NavigatorOverlay({
+      cwd: "/work/repo",
+      theme,
+      getTerminalRows: () => 36,
+      requestRender: () => undefined,
+      onClose: () => undefined,
+      loadFile: async (relPath: string): Promise<ViewerFile> => ({ kind: "text", relPath, lines: [] }),
+      loadCommit: async (_shortHash: string): Promise<ViewerFile> => styledDiff,
+      refresh: () => undefined,
+    });
+    overlay.setTree(buildTree("/work/repo", entriesFromPaths(["src/main.ts"]), new Map()), "git");
+    overlay.setGitState({
+      available: true, branch: "main", detached: false, ahead: 0, behind: 0,
+      unstaged: [], staged: [], history: [], refreshedAt: 0,
+    });
+
+    // Open the diff via the same injection the loader uses.
+    await overlay.openCommit("a1b2c3d");
+    const lines = expectWidthSafe(overlay, 120);
+    const joined = lines.join("\n");
+    expect(joined).toContain("commit a1b2c3d");
+    expect(joined).toContain("\u00b7 1 file");
+    // The notice row renders (T.dim summary, no bright-ellipsis artifact).
+    expect(joined).toContain("+4 \u22122");
+
+    expectWidthSafe(overlay, 100);
+    expectWidthSafe(overlay, 80);
+
+    // No reset+three-dot leak on the long styled + line.
+    for (let i = 0; i < lines.length; i++) {
+      expect(lines[i], `diff line ${i} leaks bright ellipsis`).not.toMatch(/\x1b\[0m\.\.\./);
+    }
+  });
+
+  it("glues the Nerd Font icon to the label at every depth (Issue #031)", () => {
+    // Regression: the icon used to sit at a fixed column right after the
+    // cursor arrow, so nested entries showed their glyph on the left edge
+    // while the indented name/marker floated to the right — visually
+    // disconnected. The icon must now sit immediately before the marker/name,
+    // moving with the indent so it always belongs to its row.
+    const harness = makeHarness(36, true);
+    const { overlay } = harness;
+    overlay.setTree(
+      buildTree(
+        "/work/repo",
+        entriesFromPaths(["src/components/Button.tsx", "README.md"]),
+        new Map(),
+      ),
+      "git",
+    );
+    // `src` is depth-0 so it is expanded by default; `components` is depth-1
+    // and collapsed (marker ▸). That depth-1 collapsed row is enough to catch
+    // the fixed-column regression — no key input needed.
+    const lines = expectWidthSafe(overlay, 120);
+    const dirGlyph = mapExtensionToIcon("", true);
+    const fileGlyph = mapExtensionToIcon("src/components/Button.tsx", false);
+
+    // Strip ANSI escapes to reason about plain column positions.
+    const strip = (s: string) => s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
+
+    const srcRow = lines.find((l) => /src/.test(l) && l.includes(dirGlyph));
+    const componentsRow = lines.find((l) => /components/.test(l) && l.includes(dirGlyph));
+    expect(srcRow, "src dir row not found").toBeDefined();
+    expect(componentsRow, "components dir row not found").toBeDefined();
+
+    const plainSrc = strip(srcRow!);
+    const plainComponents = strip(componentsRow!);
+    // `src` (depth 0): glyph sits after the cursor gap and before the marker.
+    const glyphInSrc = plainSrc.indexOf(dirGlyph);
+    const markerInSrc = plainSrc.indexOf("\u25be");
+    expect(glyphInSrc, "src glyph must precede the marker").toBeLessThan(markerInSrc);
+    expect(glyphInSrc, "src glyph must sit after the cursor gap").toBeGreaterThan(1);
+
+    // `components` (depth 1): the glyph must sit AFTER the 2-space indent, not
+    // at the fixed left column it used to occupy. border(1) + cursor/gap(2) +
+    // indent(2) = column 5 is the earliest the glyph may appear.
+    const glyphInComponents = plainComponents.indexOf(dirGlyph);
+    expect(
+      glyphInComponents,
+      "components (depth 1) glyph must sit after the 2-space indent, not at the fixed left column",
+    ).toBeGreaterThanOrEqual(5);
+    // The collapsed marker (▸) must follow the glyph, proving the icon is
+    // glued to the label rather than floating at the left edge.
+    const markerInComponents = plainComponents.indexOf("\u25b8");
+    expect(markerInComponents, "components collapsed marker not found").toBeGreaterThan(-1);
+    expect(glyphInComponents, "components glyph must precede the marker").toBeLessThan(markerInComponents);
+
+    // Sanity: once `components` is expanded, the nested file glyph also renders
+    // glued to its name at depth 2 (after the 4-space indent).
+    overlay.handleInput(KEYS.down); // src -> components
+    overlay.handleInput(KEYS.enter); // expand components
+    const expanded = expectWidthSafe(overlay, 120);
+    const fileRow = expanded.find((l) => /Button\.tsx/.test(l) && l.includes(fileGlyph));
+    expect(fileRow, "Button.tsx file row not found").toBeDefined();
+    const plainFile = strip(fileRow!);
+    const glyphInFile = plainFile.indexOf(fileGlyph);
+    const nameInFile = plainFile.indexOf("Button.tsx");
+    expect(glyphInFile, "file glyph must precede the name").toBeLessThan(nameInFile);
+    expect(glyphInFile, "file glyph (depth 2) must sit after the 4-space indent").toBeGreaterThanOrEqual(7);
   });
 });

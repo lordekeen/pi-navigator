@@ -97,7 +97,7 @@ export type GitRow =
 
 // ── Viewer ──
 
-export type ViewerKind = "empty" | "text" | "truncated" | "binary" | "image" | "error";
+export type ViewerKind = "empty" | "text" | "truncated" | "binary" | "image" | "error" | "diff";
 
 export interface ViewerFile {
   kind: ViewerKind;
@@ -115,6 +115,10 @@ export interface ViewerFile {
   message?: string;
   /** Image tier ladder outcome; reserved for the plan section 8 spike. */
   imageTier?: "metadata" | "native" | "chafa";
+  /** Diff-only: short hash the diff is for (v3 commit detail view). */
+  commitHash?: string;
+  /** Diff-only: parent short hashes, for the notice line. */
+  parents?: string[];
 }
 
 export interface SearchMatch {

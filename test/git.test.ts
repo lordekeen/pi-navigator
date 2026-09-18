@@ -18,6 +18,7 @@ import {
   gitTreeProbe,
   isGitAvailable,
   parsePorcelain,
+  readCommitDiff,
   readGitState,
   readTrackedFiles,
   toCwdRelative,
@@ -288,5 +289,73 @@ describe("git integration on a scratch repository", () => {
     // path; this test exercises the normal cache-hit branch.
     expect(await isGitAvailable(repo)).toBe(true);
     expect(await isGitAvailable(repo)).toBe(true);
+  });
+
+  // ── readCommitDiff (v3 commit-detail view) ──
+
+  it("reads a single-file commit diff with correct stats (v3)", async () => {
+    await writeFile(join(repo, "base.txt"), "line1\n");
+    await commit(repo, "first");
+    await writeFile(join(repo, "base.txt"), "line1\nline2\n");
+    await writeFile(join(repo, "new.txt"), "hello\n");
+    await commit(repo, "second");
+
+    const state = await readGitState(repo);
+    const second = state.history[0];
+    expect(second?.shortHash).toBeDefined();
+    const diff = await readCommitDiff(repo, second!.shortHash);
+
+    expect(diff.shortHash).toBe(second!.shortHash);
+    expect(diff.parents).toHaveLength(1);
+    expect(diff.filesChanged).toBe(2);
+    expect(diff.insertions).toBe(2); // 1 added line in base.txt + 1 new file
+    expect(diff.deletions).toBe(0);
+    // The body carries the per-file diff headers and hunks.
+    expect(diff.lines.some((l) => l.startsWith("diff --git"))).toBe(true);
+    expect(diff.lines.some((l) => l.startsWith("+hello"))).toBe(true);
+    expect(diff.lines.some((l) => l.startsWith("+++ b/new.txt"))).toBe(true);
+    expect(diff.notice).toContain(second!.shortHash);
+    expect(diff.notice).toContain("+2");
+  });
+
+  it("reads a root commit diff (everything added) (v3)", async () => {
+    await writeFile(join(repo, "a.txt"), "x\n");
+    await writeFile(join(repo, "b.txt"), "y\n");
+    await commit(repo, "root");
+
+    const state = await readGitState(repo);
+    const root = state.history[0];
+    const diff = await readCommitDiff(repo, root!.shortHash);
+    expect(diff.parents).toEqual([]);
+    expect(diff.filesChanged).toBe(2);
+    expect(diff.lines.some((l) => l.startsWith("new file mode"))).toBe(true);
+    expect(diff.notice).toMatch(/2 files \u00b7 \+2/);
+  });
+
+  it("reads a merge commit diff against its first parent (v3)", async () => {
+    await writeFile(join(repo, "main.txt"), "main\n");
+    await commit(repo, "root");
+    await git(repo, ["checkout", "-q", "-b", "feature"]);
+    await writeFile(join(repo, "feat.txt"), "feat\n");
+    await commit(repo, "feature work");
+    await git(repo, ["checkout", "-q", "main"]);
+    await git(repo, ["merge", "-q", "--no-ff", "feature"]);
+
+    const state = await readGitState(repo);
+    const merge = state.history[0];
+    expect(merge?.parents?.length).toBe(2);
+    const diff = await readCommitDiff(repo, merge!.shortHash);
+    // The merge's own delta is shown against its first parent: feat.txt added.
+    expect(diff.parents).toHaveLength(2);
+    expect(diff.filesChanged).toBe(1);
+    expect(diff.lines.some((l) => l.startsWith("+feat line") || l.startsWith("+feat"))).toBe(true);
+    expect(diff.notice).toMatch(/1 file/);
+  });
+
+  it("never throws on a bogus hash and degrades cleanly (v3)", async () => {
+    const diff = await readCommitDiff(repo, "deadbeef");
+    expect(diff.lines).toEqual([]);
+    expect(diff.filesChanged).toBe(0);
+    expect(diff.notice).toContain("cannot read commit");
   });
 });

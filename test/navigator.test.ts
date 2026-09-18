@@ -47,6 +47,7 @@ function makeHarness(
   rows = 36,
   customLoadFile?: (relPath: string) => Promise<ViewerFile>,
   customTheme?: (color: string, text: string) => string,
+  loadCommit?: (shortHash: string) => Promise<ViewerFile>,
 ): Harness {
   const opened: string[] = [];
   const state = { closed: 0, refreshed: 0, renders: 0 };
@@ -81,6 +82,7 @@ function makeHarness(
           lines: ["alpha", "beta", "gamma"],
         };
       }),
+    ...(loadCommit ? { loadCommit } : {}),
     refresh: () => {
       state.refreshed += 1;
     },
@@ -296,7 +298,7 @@ describe("git pane keys", () => {
     expect(rendered).toContain("1 unstaged");
   });
 
-  it("expands and collapses a commit's family on Enter (Issue #030)", () => {
+  it("expands and collapses a commit's family on l (Issue #030, v3)", () => {
     const harness = makeHarness();
     withTree(harness, ["a.ts"]);
     withGit(harness, {
@@ -311,19 +313,81 @@ describe("git pane keys", () => {
     const overlay = harness.overlay;
     overlay.handleInput(KEYS.tab); // focus git
     // Cursor starts on the first nav row: bbb2222 (child commit).
-    overlay.handleInput(KEYS.enter); // expand it -> its parent aaa1111 appears as an indented family row
+    overlay.handleInput("l"); // expand it -> its parent aaa1111 appears as an indented family row
     let rendered = overlay.render(120).join("\n");
-    // The parent is rendered as an indented commit-child row under bbb2222.
-    expect(rendered).toMatch(/bbb2222[\s\S]*  aaa1111/);
+    // The parent is rendered as an indented commit-child row under bbb2222
+    // (v3 expands one level only — aaa1111's own parent does NOT auto-expand).
+    // The row carries a ▸ marker between the indent and the hash.
+    expect(rendered).toMatch(/bbb2222[\s\S]*\u25b8 aaa1111/);
 
-    // Expand deeper: aaa1111's parent (9998888) is also in history, so it
-    // shows as a second level under the expanded family.
-    overlay.handleInput(KEYS.enter); // collapse bbb2222
+    // Collapse with h: aaa1111 (depth-1 family child of the expanded bbb2222)
+    // is no longer nested; it still appears as its own top-level history row
+    // (with the ▸ marker any commit with in-history parents carries).
+    overlay.handleInput("h"); // collapse bbb2222
     rendered = overlay.render(120).join("\n");
-    // aaa1111 still appears as its own top-level history row.
-    expect(rendered).toContain("  aaa1111");
-    // And 9998888 is a separate history entry, present regardless.
-    expect(rendered).toContain("9998888");
+    expect(rendered).toMatch(/\u25b8 aaa1111/); // top-level history row, unindented marker
+    expect(rendered).toContain("9998888"); // separate history entry, present regardless
+
+    // v3 one-level semantics: expanding bbb2222 again must NOT recursively
+    // reveal aaa1111's parent (9998888) — that requires expanding aaa1111 too.
+    overlay.handleInput("l"); // expand bbb2222 again
+    overlay.handleInput("j"); // bbb -> aaa1111 (commit-child)
+    overlay.handleInput("l"); // expand aaa1111 -> its parent 9998888 at depth 2
+    rendered = overlay.render(120).join("\n");
+    expect(rendered).toMatch(/bbb2222[\s\S]*aaa1111[\s\S]*9998888/);
+  });
+
+  it("nests the ancestor family under the expanded commit without duplicating rows (Issue #030, v3)", () => {
+    // Regression: the family block used to be emitted after *each* commit that
+    // shared a child's hash, so an ancestor that was both a top-level history
+    // entry and a family child rendered twice, and the nesting landed under the
+    // wrong anchor. The block must now emit once, directly beneath the expanded
+    // commit, in depth order — with the top-level history list still complete
+    // and duplicate-free. v3 (one level per expand): expanding bbb reveals only
+    // its direct parent aaa; 999 stays flat until aaa is expanded too.
+    const harness = makeHarness();
+    withTree(harness, ["a.ts"]);
+    withGit(harness, {
+      unstaged: [],
+      staged: [],
+      history: [
+        { shortHash: "bbb2222", parents: ["aaa1111"], dateRel: "2h ago", subject: "child" },
+        { shortHash: "aaa1111", parents: ["9998888"], dateRel: "3h ago", subject: "mid" },
+        { shortHash: "9998888", parents: [], dateRel: "4h ago", subject: "base" },
+      ],
+    });
+    const overlay = harness.overlay;
+    overlay.handleInput(KEYS.tab); // focus git
+    overlay.handleInput("l"); // expand bbb2222
+
+    // Collect the git-pane commit hashes in render order. A hash is 7 hex
+    // chars; each commit/commit-child row carries exactly one. Stripping ANSI
+    // and matching the short hashes preserves order without depending on the
+    // exact left-column width.
+    const strip = (s: string) => s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
+    const hashes: string[] = [];
+    for (const line of overlay.render(120)) {
+      const plain = strip(line);
+      // Each git-pane row carries exactly one commit hash; take the first match
+      // per line so a hash accidentally echoed in the viewer pane cannot
+      // double-count.
+      for (const h of ["bbb2222", "aaa1111", "9998888"]) {
+        if (plain.includes(h)) {
+          hashes.push(h);
+          break;
+        }
+      }
+    }
+    // Expected: bbb (top-level), aaa (depth-1 child), then aaa and 999 as
+    // their own top-level history rows. bbb's expansion reveals only its
+    // *direct* parent — 999 is not nested until aaa is expanded (v3). No hash
+    // appears more than twice (once nested, once flat); the nested chain
+    // comes immediately after bbb in depth order.
+    expect(hashes).toEqual(["bbb2222", "aaa1111", "aaa1111", "9998888"]);
+    // aaa appears exactly twice (nested + flat), never three times; 999 is
+    // flat-only at this point (not yet expanded).
+    expect(hashes.filter((x) => x === "aaa1111").length, "aaa1111 duplicated").toBe(2);
+    expect(hashes.filter((x) => x === "9998888").length, "9998888 appeared unexpectedly nested").toBe(1);
   });
 
   it("limits commit-family expansion to the row cap (Issue #030)", () => {
@@ -351,6 +415,176 @@ describe("git pane keys", () => {
     const childRows = joined.split("\n").filter((l) => l.includes("  c")) ;
     // Only a bounded number of ancestor rows are rendered.
     expect(childRows.length).toBeLessThan(20);
+  });
+
+  // ── v3: commit diff view + family on l/h (plan commit-detail-family-tree) ──
+
+  it("Enter on a commit opens its diff in the viewer (v3)", async () => {
+    const loadCommit = vi.fn(async (shortHash: string): Promise<ViewerFile> => ({
+      kind: "diff",
+      relPath: `commit:${shortHash}`,
+      commitHash: shortHash,
+      parents: ["aaa1111"],
+      lines: ["+added", "-removed", " context"],
+      notice: `commit ${shortHash} \u00b7 1 file \u00b7 +1 \u22121`,
+    }));
+    const harness = makeHarness(36, undefined, undefined, loadCommit);
+    withTree(harness, ["a.ts"]);
+    withGit(harness);
+    harness.overlay.handleInput(KEYS.tab); // focus git
+    harness.overlay.handleInput("G"); // bottom: the abc1234 commit row (row 0 is the unstaged file)
+
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+    expect(loadCommit).toHaveBeenCalledWith("abc1234");
+    // Focus moved to the viewer and the diff renders there.
+    const rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).toContain("commit abc1234");
+    expect(rendered).toContain("+added");
+    expect(rendered).toContain("\u22121");
+    expect(harness.overlay.getOpenRelPath()).toBe("commit:abc1234");
+  });
+
+  it("Enter on a commit-child opens its diff too (v3)", async () => {
+    const loadCommit = vi.fn(async (shortHash: string): Promise<ViewerFile> => ({
+      kind: "diff",
+      relPath: `commit:${shortHash}`,
+      commitHash: shortHash,
+      parents: [],
+      lines: ["diff --git a/x b/x"],
+      notice: `commit ${shortHash} \u00b7 1 file`,
+    }));
+    const harness = makeHarness(36, undefined, undefined, loadCommit);
+    withTree(harness, ["a.ts"]);
+    withGit(harness, {
+      unstaged: [],
+      staged: [],
+      history: [
+        { shortHash: "bbb2222", parents: ["aaa1111"], dateRel: "2h ago", subject: "child" },
+        { shortHash: "aaa1111", parents: [], dateRel: "3h ago", subject: "root" },
+      ],
+    });
+    const overlay = harness.overlay;
+    overlay.handleInput(KEYS.tab); // focus git
+    overlay.handleInput("l"); // expand bbb2222 -> aaa1111 at depth 1
+    overlay.handleInput("j"); // bbb -> aaa1111 (commit-child)
+    overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+    expect(loadCommit).toHaveBeenCalledWith("aaa1111");
+    expect(overlay.getOpenRelPath()).toBe("commit:aaa1111");
+    expect(overlay.render(120).join("\n")).toContain("commit aaa1111");
+  });
+
+  it("l expands one level, h collapses and steps out to the anchor (v3)", () => {
+    const harness = makeHarness();
+    withTree(harness, ["a.ts"]);
+    withGit(harness, {
+      unstaged: [],
+      staged: [],
+      history: [
+        { shortHash: "bbb2222", parents: ["aaa1111"], dateRel: "2h ago", subject: "child" },
+        { shortHash: "aaa1111", parents: ["9998888"], dateRel: "3h ago", subject: "mid" },
+        { shortHash: "9998888", parents: [], dateRel: "4h ago", subject: "base" },
+      ],
+    });
+    const overlay = harness.overlay;
+    overlay.handleInput(KEYS.tab); // focus git
+    overlay.handleInput("l"); // expand bbb2222 -> aaa1111 (depth 1)
+    const strip = (s: string) => s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
+    // Drop all frame-box characters (left border, pane separator, right
+    // border) and trailing padding — keep the interior whitespace so a
+    // depth-1 child row stays distinguishable from its flat top-level copy.
+    const plain = (s: string) => strip(s).replace(/\u2502/g, "").replace(/\s+$/, "");
+    const hashLines = () =>
+      overlay
+        .render(120)
+        .map(plain)
+        .filter((l) => /bbb2222|aaa1111|9998888/.test(l));
+    // One level per expand: after bbb, aaa (depth-1 child, 4-space indent), aaa
+    // (flat), 999 (flat root, no marker).
+    expect(hashLines()).toEqual([
+      "\u25b6 \u25be bbb2222  child",
+      "    \u25b8 aaa1111  mid",
+      "  \u25b8 aaa1111  mid",
+      "    9998888  base",
+    ]);
+
+    overlay.handleInput("j"); // bbb -> aaa1111 (commit-child)
+    overlay.handleInput("l"); // expand aaa1111 -> 9998888 at depth 2
+    const twoLevel = hashLines();
+    // bbb (expanded ▾), aaa depth-1 child (now expanded ▾), aaa flat (▾), 999
+    // depth-2 child (root: no marker, 8-space indent), 999 flat (root: no
+    // marker) — ordered, no dup, one level per expand.
+    expect(twoLevel.join("|")).toMatch(
+      /bbb2222.*\u25be aaa1111.*\u25be aaa1111.*        9998888.*    9998888/,
+    );
+
+    // h on the depth-1 child collapses its subtree and steps the cursor out to
+    // the expanded anchor (bbb2222).
+    overlay.handleInput("h"); // aaa1111 is the cursor; collapse its subtree
+    const after = overlay.render(120).map(plain).join("\n");
+    expect(after).toContain("\u25b6 \u25be bbb2222"); // cursor stepped out to the anchor
+    expect(after).not.toContain("\u25be aaa1111"); // aaa's subtree collapsed (marker back to ▸)
+  });
+
+  it("shows the depth-cap notice instead of expanding past the ceiling (v3)", () => {
+    const harness = makeHarness();
+    withTree(harness, ["a.ts"]);
+    // Chain of FAMILY_MAX_DEPTH+2 commits, all in history.
+    const deep = [
+      { shortHash: "c000000", parents: ["c111111"], dateRel: "1h ago", subject: "depth0" },
+      { shortHash: "c111111", parents: ["c222222"], dateRel: "1h ago", subject: "depth1" },
+      { shortHash: "c222222", parents: ["c333333"], dateRel: "1h ago", subject: "depth2" },
+      { shortHash: "c333333", parents: ["c444444"], dateRel: "1h ago", subject: "depth3" },
+      { shortHash: "c444444", parents: [], dateRel: "1h ago", subject: "depth4" },
+    ];
+    withGit(harness, { unstaged: [], staged: [], history: deep });
+    const overlay = harness.overlay;
+    overlay.handleInput(KEYS.tab); // focus git
+    // Expand down the chain, descending past each flat anchor row: a chain of
+    // an expanded anchor followed by its indented child, its flat copy, and so
+    // on. Rows: [c0, c1(d1), c1, c2(d2), c2, c3(d3), c3, c4]. From the c1 child
+    // (index 1) two downs land on the c2 child (index 3), skipping the flat c1.
+    overlay.handleInput("l"); // c0 + c1 (child)
+    overlay.handleInput("j"); // -> c1 child
+    overlay.handleInput("l"); // expand c1 -> c2 (child)
+    overlay.handleInput("j"); // -> flat c1
+    overlay.handleInput("j"); // -> c2 child
+    overlay.handleInput("l"); // expand c2 -> c3 (child)
+    overlay.handleInput("j"); // -> flat c2
+    overlay.handleInput("j"); // -> c3 child (depth 3 = FAMILY_MAX_DEPTH)
+    // Expanding at the cap is refused: notice, no new rows.
+    overlay.handleInput("l");
+    const rendered = overlay.render(120).join("\n");
+    expect(rendered).toContain("max depth reached");
+    // c4 is not nested anywhere, so it only ever appears as its flat row.
+    const strip = (s: string) => s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
+    const c4Rows = overlay.render(120).map(strip).filter((l) => l.includes("c444444"));
+    expect(c4Rows).toHaveLength(1);
+  });
+
+  it("falls back to toggling the family when loadCommit is absent (v3)", () => {
+    // Harness without loadCommit: Enter on a commit must expand its family
+    // (v2 behavior) so existing suites stay green.
+    const harness = makeHarness();
+    withTree(harness, ["a.ts"]);
+    withGit(harness, {
+      unstaged: [],
+      staged: [],
+      history: [
+        { shortHash: "bbb2222", parents: ["aaa1111"], dateRel: "2h ago", subject: "child" },
+        { shortHash: "aaa1111", parents: ["9998888"], dateRel: "3h ago", subject: "root" },
+        { shortHash: "9998888", parents: [], dateRel: "4h ago", subject: "base" },
+      ],
+    });
+    const overlay = harness.overlay;
+    overlay.handleInput(KEYS.tab); // focus git
+    overlay.handleInput("G"); // bottom: the last row is 9998888 (flat); row 0 is the unstaged file
+    overlay.handleInput("k"); // -> aaa1111 (flat)
+    overlay.handleInput("k"); // -> bbb2222 (the child commit)
+    overlay.handleInput(KEYS.enter); // no loadCommit -> toggle bbb's family
+    expect(overlay.render(120).join("\n")).toMatch(/bbb2222[\s\S]*\u25b8 aaa1111/);
+    expect(overlay.getOpenRelPath()).toBeNull(); // viewer untouched
   });
 });
 

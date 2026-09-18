@@ -59,6 +59,15 @@ Small, fully bounded by `gitRows()` (`navigator.ts:322-350`) and `codeText` (`na
 
 ## §2 — Feature #030: Expandable commit family tree
 
+> **Superseded by [`commit-detail-family-tree-v3-plan.md`](commit-detail-family-tree-v3-plan.md)**
+> (implemented as [#034](../issues/034-commit-diff-view.md)): Enter on a commit
+> now opens its diff in the viewer, family expansion moved to `l`/`h` (one
+> level per expand with `▸`/`▾` markers and actionable `commit-child` rows),
+> and `FAMILY_MAX_DEPTH` / `FAMILY_MAX_ROWS` truncation is surfaced as
+> notices instead of silent cuts. The data groundwork described here
+> (`--parents`, `GitCommit.parents?`, `commit-child` kind) remains the v3
+> implementation's data contract.
+
 ### Data (near-free)
 
 Extend the **existing** log fetch in `readGitState` (`git.ts`) with `--parents`:

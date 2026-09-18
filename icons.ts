@@ -56,7 +56,6 @@ const EXT_ICONS: Record<string, string> = {
   cs: "\uf81a", //  csharp
   swift: "\ue755", //  swift
   kt: "\ue634", //  kotlin
-  sol: "\ue628",
   yml: "\ue60b",
   yaml: "\ue60b",
   toml: "\ue615", //  toml

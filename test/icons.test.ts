@@ -51,6 +51,14 @@ describe("mapExtensionToIcon", () => {
     expect(mapExtensionToIcon(".env", false)).toBe(GENERIC_ICON);
   });
 
+  it("does not impersonate another language's glyph for unmapped languages (Issue #031)", () => {
+    // `sol` (Solidity) previously mapped to the TypeScript codepoint by
+    // copy-paste; unmapped languages must fall back to the generic glyph
+    // rather than borrowing another language's icon.
+    expect(mapExtensionToIcon("Token.sol", false)).toBe(GENERIC_ICON);
+    expect(mapExtensionToIcon("contract.sol", false)).toBe(GENERIC_ICON);
+  });
+
   it("returns the folder glyph for directories regardless of name", () => {
     expect(mapExtensionToIcon("src", true)).toBe("\uf4d3");
     expect(mapExtensionToIcon("node_modules.tar.gz", true)).toBe("\uf4d3");

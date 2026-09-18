@@ -63,6 +63,9 @@ export interface NavigatorOptions {
   requestRender: () => void;
   onClose: () => void;
   loadFile: (relPath: string) => Promise<ViewerFile>;
+  /** v3: open a commit's diff in the viewer. Optional — when absent, Enter on
+   *  a commit falls back to toggling its family (keeps harnesses green). */
+  loadCommit?: (shortHash: string) => Promise<ViewerFile>;
   refresh: () => void;
   /** Opt into the Nerd Font icon column (Issue #028). Defaults to false. */
   enableIcons?: boolean;
@@ -73,7 +76,7 @@ const FOCUS_HINTS: Record<Focus, string> = {
   // width at a 100-column terminal (98) so the focus indicator never gets
   // truncated off the footer (render test enforces this at 120, 100, 80).
   files: "j k move  Enter open  Tab  / filter  . hidden  y copy  ? help  q close",
-  git: "j k move  Enter open file  g G jump  Tab  y copy  ? help  q close",
+  git: "j k move  Enter open file / diff  l h family  g G jump  Tab  y copy  ? help  q close",
   viewer: "j k scroll  Ctrl+d/u  h l  w wrap  / search  n N  Tab  ? help  q close",
 };
 
@@ -89,8 +92,8 @@ const HELP_ROWS: Array<[string, string]> = [
   ["j k / arrows", "move the cursor or scroll"],
   ["g G", "jump to top or bottom"],
   ["Ctrl+d Ctrl+u", "half page"],
-  ["Enter", "open file, or toggle a directory"],
-  ["l h / arrows", "expand or collapse a directory"],
+  ["Enter", "open file / commit diff, or toggle a directory / commit family"],
+  ["l h / arrows", "expand or collapse a directory / commit family"],
   ["/", "filter the tree, search the file"],
   ["n N", "next/prev match (viewer)"],
   ["up/down, ^n/^p", "cycle matches (searching)"],
@@ -123,6 +126,7 @@ export class NavigatorOverlay implements Focusable {
   private requestRender: () => void;
   private onClose: () => void;
   private loadFile: (relPath: string) => Promise<ViewerFile>;
+  private loadCommit: ((shortHash: string) => Promise<ViewerFile>) | undefined;
   private refresh: () => void;
 
   private root: FileNode | null = null;
@@ -211,6 +215,7 @@ export class NavigatorOverlay implements Focusable {
     this.requestRender = options.requestRender;
     this.onClose = options.onClose;
     this.loadFile = options.loadFile;
+    this.loadCommit = options.loadCommit;
     this.refresh = options.refresh;
     this.enableIcons = options.enableIcons ?? false;
   }
@@ -304,6 +309,53 @@ export class NavigatorOverlay implements Focusable {
     }
   }
 
+  /**
+   * Open a commit's diff in the viewer (v3). Parallel to openRelPath: reuses
+   * the same loadSeq race guard, viewTargetRelPath, viewLoading and search
+   * state so a diff load can never race a file load. `relPath` is set to
+   * `commit:<shortHash>` — distinct from any file path — so the viewer
+   * header / caches key on it and index.ts can skip the mtime poll for it.
+   */
+  async openCommit(shortHash: string): Promise<void> {
+    if (!this.loadCommit) {
+      this.toggleCommitFamily(shortHash);
+      return;
+    }
+    const seq = ++this.loadSeq;
+    this.viewLoading = true;
+    this.viewTargetRelPath = `commit:${shortHash}`;
+    this.viewScroll = 0;
+    this.viewHscroll = 0;
+    this.searchQuery = "";
+    this.searchMatches = [];
+    this.searchIndex = 0;
+    this.touch();
+    this.requestRender();
+    try {
+      const file = await this.loadCommit(shortHash);
+      if (this.disposed || this.loadSeq !== seq) return;
+      this.viewFile = file;
+      this.searchDirty = true;
+      this.diskChanged = false;
+    } catch {
+      if (this.disposed || this.loadSeq !== seq) return;
+      this.viewFile = {
+        kind: "error",
+        relPath: `commit:${shortHash}`,
+        lines: [],
+        message: "cannot read commit",
+      };
+      this.searchDirty = true;
+    } finally {
+      if (!this.disposed && this.loadSeq === seq) {
+        this.viewLoading = false;
+        this.viewTargetRelPath = null;
+        this.touch();
+        this.requestRender();
+      }
+    }
+  }
+
   dispose(): void {
     this.disposed = true;
     if (this.noticeTimer) {
@@ -365,41 +417,81 @@ export class NavigatorOverlay implements Focusable {
       // Plan section 5 item 5: a dim Clean row when both lists are empty.
       rows.push({ kind: "group", label: "Clean \u2014 nothing staged or unstaged", tone: "dim" });
     }
-    // A root-commit search over history builds child sets from each commit's
-    // parents: parent -> list of its children (shortHash). Ancestor rows are
-    // the commits in history whose shortHash is an ancestor of an expanded
-    // commit (merge parents included), collected from the actual history so
-    // off-screen parents are skipped.
-    let familyRows: GitRow[] = [];
+    // Build the ancestor family for every expanded commit (v3, one level per
+    // expand). Unlike the v2 deep DFS, each expanded commit emits only its
+    // *direct* parents as commit-child rows (depth = anchor depth + 1); a
+    // parent becomes an anchor only when the user expands it in turn, so the
+    // tree grows one level at a time and FAMILY_MAX_DEPTH becomes a ceiling
+    // (surfaced as a notice) instead of a silent cut. A commit that is both a
+    // top-level history entry and an ancestor of an expanded commit
+    // intentionally appears twice — once flat in history, once nested under
+    // its descendant — which mirrors a file tree where the same node can show
+    // under multiple expanded parents.
+    const familyByAnchor = new Map<string, GitRow[]>();
     if (this.gitExpanded.size > 0) {
       const byHash = new Map<string, GitCommit>();
       for (const commit of git.history) byHash.set(commit.shortHash, commit);
+      // commitDepth: at what indent does a commit's row render? Computed by a
+      // walk over the *current* expand/collapse state, never incrementally:
+      // a top-level history commit is depth 0; a commit that is listed as a
+      // direct parent of an expanded anchor renders one deeper than that
+      // anchor, chained through nested expansions. The newest expanded anchor
+      // (history order) that lists the hash is the one the added-set dedup
+      // claims it for, so the walk picks the same anchor: depth = the anchor's
+      // own depth + 1. Recomputing from gitExpanded on every cache miss means
+      // collapsing a chain correctly *resets* the depths (no stale indents).
+      const memo = new Map<string, number>();
+      const commitDepth = (hash: string): number => {
+        const cached = memo.get(hash);
+        if (cached !== undefined) return cached;
+        for (const anchor of git.history) {
+          if (this.gitExpanded.has(anchor.shortHash) && (anchor.parents ?? []).includes(hash)) {
+            const depth = commitDepth(anchor.shortHash) + 1;
+            memo.set(hash, depth);
+            return depth;
+          }
+        }
+        memo.set(hash, 0);
+        return 0;
+      };
       const added = new Set<string>();
       let count = 0;
-      // DFS over history commits that are ancestors of an expanded commit.
-      const visit = (commit: GitCommit, depth: number): void => {
-        if (count >= FAMILY_MAX_ROWS) return;
+      for (const commit of git.history) {
+        if (count >= FAMILY_MAX_ROWS) break;
+        if (!this.gitExpanded.has(commit.shortHash)) continue;
+        const depth = commitDepth(commit.shortHash) + 1;
+        const out: GitRow[] = [];
+        let capped = false;
         for (const parentHash of commit.parents ?? []) {
-          if (count >= FAMILY_MAX_ROWS) return;
+          if (count >= FAMILY_MAX_ROWS) {
+            capped = true;
+            break;
+          }
           const parent = byHash.get(parentHash);
           if (!parent || added.has(parent.shortHash)) continue;
           added.add(parent.shortHash);
           count += 1;
-          familyRows.push({ kind: "commit-child", commit: parent, depth });
-          if (depth < FAMILY_MAX_DEPTH) visit(parent, depth + 1);
+          out.push({ kind: "commit-child", commit: parent, depth });
         }
-      };
-      for (const commit of git.history) {
-        if (count >= FAMILY_MAX_ROWS) break;
-        if (this.gitExpanded.has(commit.shortHash)) visit(commit, 1);
+        // v3: no silent cut. When the global breadth cap ends the walk
+        // mid-anchor, signal it with a dim hint row (skipped by the cursor).
+        if (capped && out.length > 0) {
+          out.push({
+            kind: "group",
+            label: "\u2026 more ancestors (narrow the view or collapse a branch)",
+            tone: "dim",
+          });
+        }
+        if (out.length > 0) familyByAnchor.set(commit.shortHash, out);
       }
     }
     rows.push({ kind: "group", label: `History (${git.history.length})`, tone: "muted" });
     for (const commit of git.history) {
       rows.push({ kind: "commit", commit });
-      rows.push(...familyRows.filter((r) => r.kind === "commit-child" && r.commit.shortHash === commit.shortHash));
+      // Emit the whole family block once, directly under its expanded anchor.
+      const family = familyByAnchor.get(commit.shortHash);
+      if (family) rows.push(...family);
     }
-    rows.push(...familyRows.filter((r) => r.kind === "commit-child" && !git.history.some((c) => c.shortHash === r.commit.shortHash)));
     this.gitRowsCache = { git, version: this.gitTreeVersion, rows };
     return rows;
   }
@@ -647,8 +739,51 @@ export class NavigatorOverlay implements Focusable {
         this.alignFilesCursor(row.relPath);
         this.focus = "viewer";
         void this.openRelPath(row.relPath);
-      } else if (row.kind === "commit") {
-        this.toggleCommitFamily(row.commit.shortHash);
+      } else if (row.kind === "commit" || row.kind === "commit-child") {
+        // v3: Enter is the "open" verb — open the commit's diff in the
+        // viewer. Family expansion moves to l / right (see below), matching
+        // the file pane's file-vs-dir split. Without an injected loadCommit
+        // the overlay falls back to toggling the family (v2 behavior — focus
+        // stays on git), which keeps harnesses that never stub loadCommit
+        // working without changing their Enter semantics.
+        if (!this.loadCommit) {
+          this.toggleCommitFamily(row.commit.shortHash);
+        } else {
+          this.focus = "viewer";
+          void this.openCommit(row.commit.shortHash);
+        }
+      }
+    } else if (matchesKey(data, Key.right) || data === "l") {
+      // v3: l / right is the "structure" verb — expand the family of the
+      // commit under the cursor (a commit-child expands its own subtree).
+      const row = rows[this.gitCursor];
+      if (!row) return;
+      if (row.kind === "commit" || row.kind === "commit-child") {
+        const hash = row.commit.shortHash;
+        const depth = row.kind === "commit-child" ? row.depth : 0;
+        if (depth >= FAMILY_MAX_DEPTH && !this.gitExpanded.has(hash)) {
+          this.showNotice("max depth reached \u2014 collapse a parent to go deeper");
+          return; // no touch(); the notice already requested a render
+        }
+        this.toggleCommitFamily(hash);
+      }
+    } else if (matchesKey(data, Key.left) || data === "h") {
+      const row = rows[this.gitCursor];
+      if (!row) return;
+      if (row.kind === "commit" || row.kind === "commit-child") {
+        const wasExpanded = this.gitExpanded.has(row.commit.shortHash);
+        this.gitExpanded.delete(row.commit.shortHash);
+        this.gitTreeVersion++;
+        this.touch();
+        // Step out to the anchor parent like the file pane: when a
+        // commit-child collapses, move the cursor to its expanded ancestor so
+        // the user lands on a row that is still visible (Issue #030 semantics).
+        if (row.kind === "commit-child" && wasExpanded) {
+          const anchorIndex = rows.findIndex(
+            (r) => r.kind === "commit" && this.gitExpanded.has(r.commit.shortHash) && (r.commit.parents ?? []).includes(row.commit.shortHash),
+          );
+          if (anchorIndex >= 0) this.gitCursor = anchorIndex;
+        }
       }
     } else {
       return;
@@ -1067,7 +1202,10 @@ export class NavigatorOverlay implements Focusable {
       const indent = "  ".repeat(Math.max(0, row.node.depth));
       const nameStyle = hasChanges(row.node) ? T.warning : row.node.hidden ? T.dim : T.muted;
       const label = row.node.name + (row.node.isSymlink ? T.dim(" \u2197") : "");
-      body = icon(nameStyle) + T.dim(indent + marker) + nameStyle(label);
+      // Issue #031: icon sits after the indent so it moves with depth and
+      // stays glued to the marker/name it belongs to, instead of floating at
+      // a fixed left column that desynchronizes from the indented label.
+      body = T.dim(indent) + icon(nameStyle) + T.dim(marker) + nameStyle(label);
     } else {
       const indent = "  ".repeat(Math.max(0, row.node.depth));
       const openPath = this.viewTargetRelPath ?? this.viewFile?.relPath;
@@ -1077,7 +1215,8 @@ export class NavigatorOverlay implements Focusable {
       else if (row.node.hidden) nameStyle = (text: string) => T.dim(text);
       else if (row.node.gitCode === "??" || row.node.gitCode === "!!") nameStyle = (text: string) => T.dim(text);
       const label = row.node.name + (row.node.isSymlink ? T.dim(" \u2197") : "");
-      body = icon(nameStyle) + T.dim(indent) + nameStyle(label);
+      // Issue #031: same depth-glued icon placement as the dir branch above.
+      body = T.dim(indent) + icon(nameStyle) + nameStyle(label);
       if (row.node.gitCode) badge = " " + this.codeText(row.node.gitCode);
     }
 
@@ -1108,6 +1247,19 @@ export class NavigatorOverlay implements Focusable {
     return this.joinLeftRight(label, info, leftW);
   }
 
+  /**
+   * v3 expand/collapse marker for a commit row, mirroring the file pane's dir
+   * marker: ▾ when the family is expanded, ▸ when it has in-history parents to
+   * reveal, blank for a root (nothing to expand). Marker glyph + space = 2
+   * visible cells, same as the dir marker. A root commit gets no marker so the
+   * hash column stays aligned with rows that have one.
+   */
+  private commitMarker(commit: GitCommit): string {
+    const hasParents = (commit.parents?.length ?? 0) > 0;
+    if (!hasParents) return "  ";
+    return this.gitExpanded.has(commit.shortHash) ? "\u25be " : "\u25b8 "; // ▾ / ▸
+  }
+
   private buildGitRow(row: GitRow, selected: boolean, leftW: number): string {
     const T = this.T;
     let line: string;
@@ -1131,16 +1283,21 @@ export class NavigatorOverlay implements Focusable {
       line = arrow + fit.text + " ".repeat(gap) + badge;
     } else if (row.kind === "commit-child") {
       const arrow = selected ? T.accent(T.bold("\u25b6 ")) : "  ";
+      const marker = this.commitMarker(row.commit);
       const hash = T.muted(row.commit.shortHash);
-      const room = Math.max(4, leftW - 2 - visibleWidth(row.commit.shortHash) - 2 - 2 * row.depth);
+      const indentW = 2 * row.depth;
+      // Width accounting: arrow(2) + indent(2·depth) + marker(2) + hash + sep(2).
+      const room = Math.max(4, leftW - 2 - indentW - 2 - visibleWidth(row.commit.shortHash) - 2);
       const subject = T.dim(truncateToWidth(row.commit.subject, room, ""));
-      line = arrow + "  ".repeat(row.depth) + hash + "  " + subject;
+      line = arrow + "  ".repeat(row.depth) + marker + hash + "  " + subject;
     } else {
       const arrow = selected ? T.accent(T.bold("\u25b6 ")) : "  ";
+      const marker = this.commitMarker(row.commit);
       const hash = T.muted(row.commit.shortHash);
-      const room = Math.max(4, leftW - 2 - visibleWidth(row.commit.shortHash) - 2);
+      // Width accounting: arrow(2) + marker(2) + hash + sep(2).
+      const room = Math.max(4, leftW - 2 - 2 - visibleWidth(row.commit.shortHash) - 2);
       const subject = T.dim(truncateToWidth(row.commit.subject, room, ""));
-      line = arrow + hash + "  " + subject;
+      line = arrow + marker + hash + "  " + subject;
     }
     return selected ? T.selectedBg(this.padTo(line, leftW)) : this.padTo(line, leftW);
   }
@@ -1182,10 +1339,11 @@ export class NavigatorOverlay implements Focusable {
       return rows;
     }
 
-    // Text-like content.
+    // Text-like content (v3: `diff` falls through here, so a commit diff gets
+    // the same gutter / wrap / scroll / search path as a text file).
     const T = this.T;
     let noticeRows = 0;
-    if (file.kind === "truncated" && file.notice) noticeRows += 1;
+    if ((file.kind === "truncated" || file.kind === "diff") && file.notice) noticeRows += 1;
     if (this.diskChanged) noticeRows += 1;
 
     // Gutter width follows the total line count when it is known, not the
@@ -1196,7 +1354,10 @@ export class NavigatorOverlay implements Focusable {
     const contentArea = Math.max(1, area - noticeRows);
 
     // Optional notices above the content.
+    // v3: the diff notice ("commit abc1234 · N files · +I −D") is a summary,
+    // not an alert, so it uses T.dim rather than the truncation warning.
     if (file.kind === "truncated" && file.notice) rows.push(this.padTo(" " + T.warning(file.notice), rightW));
+    if (file.kind === "diff" && file.notice) rows.push(this.padTo(" " + T.dim(file.notice), rightW));
     if (this.diskChanged) {
       rows.push(this.padTo(" " + T.warning("file changed on disk \u2014 press r to reload"), rightW));
     }
@@ -1240,7 +1401,12 @@ export class NavigatorOverlay implements Focusable {
     const isSwitching = this.viewLoading && this.viewTargetRelPath !== null && this.viewTargetRelPath !== this.viewFile?.relPath;
     const currentPath = (isSwitching ? this.viewTargetRelPath : this.viewFile?.relPath) ?? "(no file)";
     const file = isSwitching ? null : this.viewFile;
-    const left = " " + (this.focus === "viewer" ? T.accent(T.bold(this.shortPath(currentPath))) : T.muted(this.shortPath(currentPath)));
+    // v3: a commit diff shows "commit <hash>" instead of a path — mirrors git
+    // show's header and keeps the long commit:<hash> identity string out of
+    // the title row.
+    const headerPath =
+      file?.kind === "diff" && file.commitHash ? `commit ${file.commitHash}` : this.shortPath(currentPath);
+    const left = " " + (this.focus === "viewer" ? T.accent(T.bold(headerPath)) : T.muted(headerPath));
     const meta: string[] = [];
     if (file) {
       const size = formatSize(file.sizeBytes);

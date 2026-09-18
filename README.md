@@ -73,7 +73,9 @@ Layout: files tree on the left, git panel below it, file viewer on the right, co
 | Files | `/` | Incremental fuzzy filter (name matches rank first) |
 | Files | `.` | Toggle hidden dot entries |
 | Git | `j` `k` / arrows | Move through changed files and history |
-| Git | `Enter` | Open the file (expands the tree to it); on a commit row, expand/collapse its ancestor family |
+| Git | `Enter` | Open the changed file (expands the tree to it); on a commit row, show its diff in the viewer |
+| Git | `l` `h` / arrows | Expand, collapse a commit's ancestor family (one level at a time) |
+| Git | `g` `G` | Top, bottom |
 | Viewer | `j` `k` / arrows | Scroll |
 | Viewer | `Ctrl+d` `Ctrl+u`, `g` `G` | Half page, top, bottom |
 | Viewer | `/` | Search (smart case, incremental) |
@@ -90,6 +92,7 @@ Esc precedence in one line: filter, then search, then close.
 - Syntax highlighting uses pi's own `highlightCode` and `getLanguageFromPath`, so colors follow the active theme and no tools like `bat` are needed.
 - Tree source is hybrid: inside a repository it lists tracked plus untracked non-ignored files; without git, and in a repository with nothing to list yet (a fresh `git init`), it falls back to an async filesystem walk with a static ignore list, dot entries included but hidden by default. `.gitignore` parsing is a v2 candidate.
 - Git panel: branch or detached HEAD, ahead and behind counters, unstaged and staged lists, last 20 commits. All git calls are async with a 3 s timeout; the panel shows a single explanation row when git is missing or the cwd is not a repository, and a dim `Clean` row when nothing is staged or unstaged. Status and the tracked listing are read with `-z`, so paths containing spaces, quotes or newlines survive intact.
+- Commit rows: `Enter` opens the commit's diff in the viewer (prefix-styled `+`/`-`/`@@` lines, a stat summary notice, and a `commit <hash>` header); `l` expands one level of its ancestor family (`▸`/`▾` markers), `h` collapses and steps out to the anchor. Expanding is capped by `FAMILY_MAX_DEPTH` (a notice tells you when you hit the floor) and `FAMILY_MAX_ROWS` (a dim `… more ancestors` hint marks the cut).
 - Refresh runs every 3 s while the overlay is open, plus `r`, with one refresh in flight at a time: a tick that arrives mid-refresh is dropped. Git state is re-read every tick; the tree is re-collected only when a cheap probe changes — the porcelain-derived signature in git mode, the modification times of the expanded directories in fs mode — and rebuilt only when the path set itself changes, with git codes otherwise stamped in place. Expanded and collapsed directories, top-level ones included, are preserved across rebuilds. Repeated failures notify once per distinct message instead of once per tick.
 - Hidden dot entries render dim, and the `.` toggle is Files-scoped.
 - Caps: files over 1 MB or 5000 lines open truncated with a notice, and never load in full — the loader reads at most 1 MB from the head. The truncated view reports the total line count when the whole file was read and it is under 256 KB. Binary files are detected by a NUL byte and shown as a metadata card; images show a metadata card in v1.

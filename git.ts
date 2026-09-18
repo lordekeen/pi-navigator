@@ -16,7 +16,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-import { GIT_HISTORY_COUNT, GIT_TIMEOUT_MS } from "./constants";
+import { GIT_HISTORY_COUNT, GIT_TIMEOUT_MS, MAX_HIGHLIGHT_BYTES, MAX_HIGHLIGHT_LINES } from "./constants";
 import type { GitChangedFile, GitCommit, GitState } from "./types";
 
 const execFileAsync = promisify(execFile);
@@ -266,3 +266,116 @@ export function gitCodeMap(state: GitState): Map<string, string> {
   for (const file of state.unstaged) map.set(file.relPath, file.code);
   return map;
 }
+
+/**
+ * A commit's diff, ready for the viewer pane. `lines` carries the **plain**
+ * (unstyled) diff body; the caller (index.ts) styles it with the active
+ * theme via styleDiffLines so git.ts stays theme-free (matching viewer.ts's
+ * "highlight in the loader" split).
+ */
+export interface CommitDiff {
+  shortHash: string;
+  /** Parent short hashes; empty for a root commit. */
+  parents: string[];
+  /** Plain diff body lines, already CR-normalized. Empty for a root commit. */
+  lines: string[];
+  /** Files changed count + insertions/deletions for the notice row. */
+  filesChanged: number;
+  insertions: number;
+  deletions: number;
+  /** Human summary, e.g. "commit abc1234 · 1 file · +2 −0". */
+  notice: string;
+}
+
+/**
+ * Read one commit's diff. This is the v3 commit-detail view data source.
+ *
+ * Never throws and is bounded the same way the file viewer is: the body is
+ * capped at MAX_HIGHLIGHT_BYTES bytes (binary detection happens on the plain
+ * text: a NUL byte in the diff output means the commit touches a binary
+ * blob, and the body is treated as empty rather than rendered as garbage).
+ * The stat line (files changed / insertions / deletions) is read separately
+ * from `git show --numstat` and folded into `notice`.
+ *
+ * For a **merge commit**, `git show` without options emits no diff body
+ * (combined diff format), so the body is constructed from `--first-parent`
+ * (the merge's own delta) and the stat reflects that single-parent view —
+ * the same deltas lazygit/gitui surface for a merge. `--first-parent` also
+ * resolves the *parent hash used for `..` diffing* for a merge, since a
+ * first-parent diff is expressed against parent 1.
+ */
+export async function readCommitDiff(cwd: string, shortHash: string): Promise<CommitDiff> {
+  // Resolve the short hash to a full one (handles ambiguous shorts safely).
+  const resolved = await runGit(cwd, ["rev-parse", "--verify", "--quiet", `${shortHash}^{commit}`]);
+  if (resolved.status !== "ok") {
+    return {
+      shortHash,
+      parents: [],
+      lines: [],
+      filesChanged: 0,
+      insertions: 0,
+      deletions: 0,
+      notice: `cannot read commit ${shortHash}`,
+    };
+  }
+  const fullHash = resolved.stdout.trim();
+
+  const parentsRes = await runGit(cwd, ["show", "-s", "--pretty=format:%p", fullHash]);
+  const parents =
+    parentsRes.status === "ok"
+      ? parentsRes.stdout.trim().split(/\s+/).filter((p) => p.length > 0)
+      : [];
+
+  // Parallel: body + stat line. Both use --first-parent so a merge commit's
+  // own delta is shown rather than an empty combined diff.
+  const [bodyRes, statRes] = await Promise.all([
+    runGit(cwd, ["show", "--no-color", "--no-renames", "--first-parent", "--pretty=format:", fullHash]),
+    runGit(cwd, ["show", "--numstat", "--format=", "--no-renames", "--first-parent", fullHash]),
+  ]);
+
+  let filesChanged = 0;
+  let insertions = 0;
+  let deletions = 0;
+  if (statRes.status === "ok") {
+    for (const raw of statRes.stdout.split("\n")) {
+      const m = raw.match(/^(\d+)\s+(\d+)\s+(.+)$/);
+      if (!m) continue; // skip binary entries and the summary line
+      filesChanged += 1;
+      insertions += Number.parseInt(m[1] ?? "0", 10) || 0;
+      deletions += Number.parseInt(m[2] ?? "0", 10) || 0;
+    }
+  }
+
+  // Cap the captured stdout before splitting so a huge diff never allocates
+  // more than the viewer caps (same boundedness as loadFile).
+  let body = bodyRes.status === "ok" ? bodyRes.stdout : "";
+  let truncated = false;
+  if (body.length > MAX_HIGHLIGHT_BYTES || body.split("\n").length > MAX_HIGHLIGHT_LINES) {
+    body = body.slice(0, MAX_HIGHLIGHT_BYTES);
+    truncated = true;
+  }
+  // A binary diff body would render as garbage (control bytes); degrade to a
+  // notice instead (Issue #024 spirit).
+  if (body.includes("\0")) {
+    body = "";
+    truncated = false;
+  }
+
+  const lines = body.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+
+  const filesLabel =
+    filesChanged === 1 ? "1 file" : filesChanged === 0 ? "no files" : `${filesChanged} files`;
+  let message = `commit ${shortHash} \u00b7 ${filesLabel} \u00b7 +${insertions} \u2212${deletions}`;
+  if (truncated) message += ` \u00b7 diff truncated (showing the head)`;
+  return {
+    shortHash,
+    parents,
+    lines,
+    filesChanged,
+    insertions,
+    deletions,
+    notice: message,
+  };
+}
+

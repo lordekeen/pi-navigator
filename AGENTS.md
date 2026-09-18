@@ -59,14 +59,15 @@ The overlay is a pure TUI component; it never touches the filesystem or git dire
 | `index.ts` | Extension entry; registers `/navigator`; owns all async work (git, tree collection, file stat) and pushes results into the overlay via setters. |
 | `navigator.ts` | `NavigatorOverlay` — the pure TUI component: frame, files pane, git panel, viewer pane, footer, help modal. UI state only; no fs/git. |
 | `tree.ts` | Tree building from entries, cursor movement, filter, flatten, expansion memory. |
-| `git.ts` | git binary detection, `readGitState` (porcelain), history, tracked-file listing, availability cache. |
+| `git.ts` | git binary detection, `readGitState` (porcelain), history, `readCommitDiff` (v3 commit-diff), tracked-file listing, availability cache. |
 | `viewer.ts` | `loadFile` pipeline: stat, binary sniff, image tier, size caps, tab expansion, CR normalization, highlighting, search, display rows. |
+| `diff.ts` | v3 diff-line prefix styler (`styleDiffLines`) — theme-driven `+`/`-`/`@@`/meta coloring; runs in the loader, git.ts stays theme-free. |
 | `icons.ts` | Nerd Font glyph map + `parseEnableIcons`; the icon column is env-gated (`PI_NAV_ICONS`) and never auto-detected. |
 | `theme.ts` | `makeNavigatorTheme` — maps semantic tokens (accent/muted/dim/…) onto pi `Theme` tokens. No hardcoded colors. |
-| `types.ts` | Shared structural types (FileNode, GitState, ViewerFile, rows). |
+| `types.ts` | Shared structural types (FileNode, GitState, ViewerFile with `kind: "diff"`, rows). |
 | `constants.ts` | All tuning constants (caps, ratios, timeouts, ignored names, image extensions). |
 
-**Data contract:** `setTree` / `setGitState` / `openRelPath` are the only ways data enters the component. Keep the render path pure.
+**Data contract:** `setTree` / `setGitState` / `openRelPath` are the only ways data enters the component. Keep the render path pure. v3 adds `openCommit` + the optional `NavigatorOptions.loadCommit` injection (parallel to `loadFile`): when present, Enter on a commit opens its diff as a `ViewerFile` with `kind: "diff"` whose `relPath` is `commit:<hash>`; diffs skip the mtime poll in index.ts (`startsWith("commit:")` guard). When `loadCommit` is absent, Enter falls back to toggling the commit's family.
 
 ---
 

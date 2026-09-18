@@ -9,8 +9,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
 | **Pending / Open** | 1 | 0 | 0 | **1** |
-| **Resolved** | 6 | 8 | 15 | **29** |
-| **Total** | **7** | **8** | **15** | **30** |
+| **Resolved** | 6 | 10 | 17 | **33** |
+| **Total** | **7** | **10** | **17** | **34** |
 
 ---
 
@@ -55,6 +55,10 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | [#028](028-nerd-font-icons.md) | Nerd Font Filetype Icons, Env-Gated | Feature | Medium | New `icons.ts`; `PI_NAV_ICONS=1` opts into a one-cell Nerd Font icon column in the file tree (default plain glyphs). Env is read once in `index.ts`; width-safe at all sizes; one-time tofu hint when on. | **Resolved** |
 | [#029](029-git-pane-dynamic-rows.md) | Git Pane Dynamic Rows + Richer Badges | Feature | Low | `gitRows` skips empty `Unstaged (N)`/`Staged (N)` groups (both empty → `Clean`); `codeText` maps `R→warning`, `C→success`. Header summary always-on. | **Resolved** |
 | [#030](030-commit-family-tree.md) | Expandable Commit Family Tree | Feature | Low | `Enter` on a commit expands its ancestor family as indented rows (log `--parents`, `GitCommit.parents?`, `commit-child` kind), capped by `FAMILY_MAX_DEPTH`/`FAMILY_MAX_ROWS`, cache-keyed on `gitTreeVersion`. | **Resolved** |
+| [#031](031-nerd-font-icons-fixed-left-column.md) | Nerd Font Icons Float at a Fixed Left Column on Nested Entries | Bug | Low | `buildFileRow` rendered `icon + indent + name`, so the glyph sat at a fixed column and desynchronized from the indented label on nested rows. Reordered to `indent + icon + name` (dir/file branches); the glyph now moves with depth and stays glued to its marker/name. Width accounting unchanged. | **Resolved** |
+| [#032](032-commit-family-duplicate-rows.md) | Expanded Commit Family Duplicates Ancestor Rows and Mis-Nests | Bug | Medium | `gitRows` keyed family insertion on each child's own hash, so an ancestor that was both a top-level history row and a family child rendered twice and nested under the wrong anchor. Rebuilt as a per-anchor DFS block emitted once directly under the expanded commit. | **Resolved** |
+| [#033](033-solidity-icon-impersonates-typescript.md) | Solidity Icon Impersonates the TypeScript Glyph | Bug | Low | `EXT_ICONS` had `sol: "\ue628"` (the TypeScript codepoint) by copy-paste. Removed so `.sol` falls back to `GENERIC_ICON` like other unmapped languages. | **Resolved** |
+| [#034](034-commit-diff-view.md) | Commit Detail/Diff View + v3 Family-Tree Drift Fix | Feature | Medium | Enter on a commit opens its diff in the viewer (`readCommitDiff` + `styleDiffLines` + `ViewerKind "diff"`); family expansion moved to `l`/`h` (one level per expand, `▸`/`▾` markers, actionable `commit-child`, depth/row-cap notices instead of silent truncation). Optional `loadCommit` injection; fallback keeps v2 Enter semantics. version 0.4.0. | **Resolved** |
 
 ---
 
@@ -69,8 +73,12 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#025: Search Current-Match Highlight Targets the Wrong Occurrence on Multi-Hit Lines](025-search-current-match-highlight-off-by-occurrence.md) *(resolved)*
 - [#026: Git Group Rows With `tone: "dim"` Render as `muted`](026-git-group-dim-tone-collapses-to-muted.md) *(resolved)*
 - [#028: Nerd Font Filetype Icons, Env-Gated](028-nerd-font-icons.md) *(resolved)*
+- [#031: Nerd Font Icons Float at a Fixed Left Column on Nested Entries](031-nerd-font-icons-fixed-left-column.md) *(resolved)*
+- [#032: Expanded Commit Family Duplicates Ancestor Rows and Mis-Nests](032-commit-family-duplicate-rows.md) *(resolved)*
+- [#033: Solidity Icon Impersonates the TypeScript Glyph](033-solidity-icon-impersonates-typescript.md) *(resolved)*
+- [#034: Commit Detail/Diff View + v3 Family-Tree Drift Fix](034-commit-diff-view.md) *(resolved)*
 - [#029: Git Pane Dynamic Rows + Richer Badges](029-git-pane-dynamic-rows.md) *(resolved)*
-- [#030: Expandable Commit Family Tree](030-commit-family-tree.md) *(resolved)*
+- [#030: Expandable Commit Family Tree](030-commit-family-tree.md) *(resolved, keys superseded by v3 [#034] — `l`/`h` expand/collapse, Enter opens diff)*
 
 ### Performance & Resource Optimization
 - [#020: No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread](020-no-viewer-cache-blocking-highlight.md) *(partial — cache done)*

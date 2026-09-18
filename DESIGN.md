@@ -74,10 +74,27 @@ components:
     textColor: "{colors.success}"
   git-badge-deleted:
     textColor: "{colors.error}"
-  # Commit family tree (Issue #030): indented ancestor rows under an expanded
-  # commit; they use the same hash/subject styling as plain commit rows.
+  # Commit family tree (Issue #030, v3 keys): indented ancestor rows under an
+  # expanded commit; `l` expands one level, `h` collapses and steps out to the
+  # anchor. Rows carry the same ▸/▾ marker idiom as dirs.
   git-family-row:
     textColor: "{colors.text}"
+  # Commit diff view (v3, #034): diff lines styled by prefix in the loader.
+  # + → success, - → error, @@ → accent, diff/index/+++/---/new file/deleted
+  # file/Binary files meta → muted, context → text. The diff summary notice
+  # (“commit abc1234 · N files · +I −D”) uses dim, not warning.
+  diff-line-add:
+    textColor: "{colors.success}"
+  diff-line-del:
+    textColor: "{colors.error}"
+  diff-line-hunk:
+    textColor: "{colors.accent}"
+  diff-line-meta:
+    textColor: "{colors.muted}"
+  diff-line-context:
+    textColor: "{colors.text}"
+  diff-notice:
+    textColor: "{colors.dim}"
   # Nerd Font filetype icon column (Issue #028) — one cell between the cursor
   # arrow and the label; the glyph inherits the row name color, no color here.
   file-row-icon:
@@ -183,6 +200,7 @@ All corners are sharp. Borders are light-box-drawing (`U+2500` series): `┌ ┐
 - **git-badge-* ** — single-letter status badges: M=warning, A=success, D=error.
 - **viewer-gutter** — line-number column, dim.
 - **viewer-notice** — truncation / changed-on-disk banner, warning.
+- **diff-line-*** (v3) — commit-diff lines via the prefix styler (`styleDiffLines` in `diff.ts`): `+` success, `-` error, `@@` accent, meta muted, context text. The diff summary notice above the content is **dim** (informational), not warning.
 - **search-match / search-current** — in-file hit highlights; current match adds underline.
 - **help-modal-title / -keys / -desc** — accented title, accented key cell (16-col pad), muted description.
 - **card-title-binary / -error / -image** — card titles by kind; card-body is muted.

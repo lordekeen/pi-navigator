@@ -1,5 +1,12 @@
 # Issue #030: Expandable Commit Family Tree
 
+> **Superseded in part by v3**: the Enter-only toggle, missing `▸`/`▾`
+> marker, and silent `FAMILY_MAX_DEPTH` truncation resolved by
+> [`docs/plans/commit-detail-family-tree-v3-plan.md`](../plans/commit-detail-family-tree-v3-plan.md)
+> (implemented as [#034](034-commit-diff-view.md)). v3 keeps the data
+> groundwork here (`--parents`, `parents?`, `commit-child`) but moves family
+> expansion to `l`/`h` (file-pane idiom) and gives Enter the commit-diff view.
+
 - **Status**: Resolved
 - **Type**: Feature
 - **Severity**: Low
@@ -33,3 +40,5 @@ The history list is flat (hash, date, subject) with no relationship visibility. 
 ## Resolution
 
 Added `--parents` and `%p` to the log fetch; `GitCommit.parents?: string[]`; new `GitRow` kind `commit-child`. `gitRows()` builds a parent→child map from history and emits indented ancestor rows for expanded commits (DFS with depth/row caps); caches keyed on a new `gitTreeVersion`. `handleGitInput` Enter on a commit now calls `toggleCommitFamily`. Tests: git integration (merge → 2 parents, root → 0), navigator (expand/collapse, row cap), render (width-safe expanded family). Readme key table updated; version 0.3.0.
+
+**v3 follow-up:** the nteraction/keys changed (`l`/`h` expand/collapse, Enter opens a diff), family became one-level-per-expand, and truncation is now surfaced — see [#034](034-commit-diff-view.md).
