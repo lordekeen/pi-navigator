@@ -15,6 +15,23 @@ const { copyToClipboard } = vi.hoisted(() => ({ copyToClipboard: vi.fn() }));
 vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@earendil-works/pi-coding-agent")>()),
   copyToClipboard,
+  getMarkdownTheme: () => ({
+    heading: (t: string) => t,
+    link: (t: string) => t,
+    linkUrl: (t: string) => t,
+    code: (t: string) => t,
+    codeBlock: (t: string) => t,
+    codeBlockBorder: (t: string) => t,
+    quote: (t: string) => t,
+    quoteBorder: (t: string) => t,
+    hr: (t: string) => t,
+    listBullet: (t: string) => t,
+    bold: (t: string) => t,
+    italic: (t: string) => t,
+    underline: (t: string) => t,
+    strikethrough: (t: string) => t,
+    highlightCode: (code: string) => code.split("\n"),
+  }),
 }));
 
 import { NavigatorOverlay } from "../navigator";
@@ -605,7 +622,7 @@ describe("viewer keys", () => {
     harness.overlay.handleInput("h");
     harness.overlay.handleInput("l");
     const rendered = harness.overlay.render(120).join("\n"); // clamps happen in render
-    expect(rendered).toContain("h l  w wrap");
+    expect(rendered).toContain("w wrap  m mode");
     expect(rendered).not.toContain("h l x");
     expect(harness.state.closed).toBe(0);
   });
@@ -1024,5 +1041,139 @@ describe("Issue #050: viewer header commit transition", () => {
       commitHash: "abc1234",
       lines: ["+diff content"],
     });
+  });
+});
+
+describe("markdown rendered view", () => {
+  const mdFile: ViewerFile = {
+    kind: "text",
+    relPath: "README.md",
+    sizeBytes: 100,
+    lineCount: 4,
+    lines: ["# Heading", "", "- bullet point", "regular text"],
+    rawText: "# Heading\n\n- bullet point\nregular text",
+  };
+
+  it("toggles between code view and rendered view with m key", async () => {
+    const harness = makeHarness(24, async (p) => (p === "README.md" ? mdFile : { kind: "text", relPath: p, lines: [] }));
+    withTree(harness, ["README.md"]);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+
+    // Default code view: header shows 'm render', body has gutter border │
+    let rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).toContain("m render");
+    expect(rendered).toContain("│");
+
+    // Press 'm': toggles to rendered view
+    harness.overlay.handleInput("m");
+    rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).toContain("m code");
+    expect(rendered).not.toContain("m render");
+
+    // Press 'm' again: toggles back to code view
+    harness.overlay.handleInput("m");
+    rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).toContain("m render");
+    expect(rendered).not.toContain("m code");
+  });
+
+  it("shows notice and rejects toggle on non-markdown files", async () => {
+    const harness = makeHarness();
+    withTree(harness, ["a.ts"]);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+
+    let rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).not.toContain("m render");
+    expect(rendered).not.toContain("m code");
+
+    harness.overlay.handleInput("m");
+    rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).toContain("rendered view only available for markdown files");
+    expect(rendered).not.toContain("m code");
+  });
+
+  it("shows notice and rejects toggle on commit diffs", async () => {
+    const harness = makeHarness(
+      24,
+      undefined,
+      undefined,
+      async (hash) => ({
+        kind: "diff",
+        relPath: `commit:${hash}`,
+        commitHash: hash,
+        lines: ["diff --git a/README.md b/README.md", "+# New heading"],
+      }),
+    );
+
+    await harness.overlay.openCommit("abc1234");
+    harness.overlay.handleInput(KEYS.tab);
+    harness.overlay.handleInput(KEYS.tab);
+
+    harness.overlay.handleInput("m");
+    const rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).toContain("rendered view only available for markdown files");
+    expect(rendered).not.toContain("m code");
+  });
+
+  it("resets hscroll on mode toggle and makes w wrap toggle a no-op while rendered", async () => {
+    const harness = makeHarness(24, async () => mdFile);
+    withTree(harness, ["README.md"]);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+
+    // Scroll horizontally in code view
+    harness.overlay.handleInput("l");
+    harness.overlay.handleInput("l");
+    let rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).toContain("col 9");
+
+    // Switch to rendered view: hscroll resets
+    harness.overlay.handleInput("m");
+    rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).not.toContain("col 9");
+
+    // Pressing 'w' in rendered view is a no-op (wrap stays off in code view, not shown in header)
+    harness.overlay.handleInput("w");
+    rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).not.toContain("· wrap");
+
+    // Switch back to code view and verify wrap is still off
+    harness.overlay.handleInput("m");
+    rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).not.toContain("· wrap");
+  });
+
+  it("supports in-file search, cycling matches, and jumping in rendered mode", async () => {
+    const harness = makeHarness(24, async () => mdFile);
+    withTree(harness, ["README.md"]);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+
+    // Switch to rendered view
+    harness.overlay.handleInput("m");
+
+    // Start search for "bullet"
+    harness.overlay.handleInput("/");
+    for (const char of "bullet") {
+      harness.overlay.handleInput(char);
+    }
+    let rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).toContain("/bullet");
+    expect(rendered).toContain("1/1 matches");
+
+    // Apply search to return to normal mode
+    harness.overlay.handleInput(KEYS.enter);
+
+    // Cycle match in normal mode using n / N
+    harness.overlay.handleInput("n");
+    harness.overlay.handleInput("N");
+
+    // Open search again and escape
+    harness.overlay.handleInput("/");
+    harness.overlay.handleInput(KEYS.escape);
+    rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).not.toContain("/bullet");
   });
 });

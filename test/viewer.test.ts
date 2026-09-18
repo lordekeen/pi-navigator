@@ -20,6 +20,7 @@ import {
   extOf,
   formatSize,
   imageDimensions,
+  isMarkdownPath,
   loadFile,
   markMatches,
   maxLineWidth,
@@ -315,5 +316,64 @@ describe("loadFile", () => {
     const file = await loadFile(join(dir, "nope.ts"), "nope.ts");
     expect(file.kind).toBe("error");
     expect(file.message).toBeTruthy();
+  });
+
+  it("attaches rawText with unexpanded tabs on markdown files", async () => {
+    const path = join(dir, "doc.md");
+    const content = "# Title\n\t- Item with tab\n";
+    await writeFile(path, content);
+    const file = await loadFile(path, "doc.md");
+    expect(file.kind).toBe("text");
+    expect(file.rawText).toBe("# Title\n\t- Item with tab\n");
+    expect(file.rawText).toContain("\t");
+    expect(file.lines[1]).not.toContain("\t");
+  });
+
+  it("normalizes CRLF in rawText on markdown files", async () => {
+    const path = join(dir, "crlf.markdown");
+    const content = "# Title\r\nline 1\r\nline 2";
+    await writeFile(path, content);
+    const file = await loadFile(path, "crlf.markdown");
+    expect(file.kind).toBe("text");
+    expect(file.rawText).toBe("# Title\nline 1\nline 2");
+    expect(file.rawText).not.toContain("\r");
+  });
+
+  it("attaches capped head rawText on truncated markdown files", async () => {
+    const path = join(dir, "huge.md");
+    const lines = Array.from({ length: MAX_HIGHLIGHT_LINES + 50 }, (_, i) => `## Heading ${i}`);
+    await writeFile(path, lines.join("\n"));
+    const file = await loadFile(path, "huge.md");
+    expect(file.kind).toBe("truncated");
+    expect(file.rawText).toBeDefined();
+    expect(file.rawText?.split("\n")).toHaveLength(MAX_HIGHLIGHT_LINES);
+    expect(file.rawText?.split("\n")[0]).toBe("## Heading 0");
+    expect(file.rawText?.split("\n")[MAX_HIGHLIGHT_LINES - 1]).toBe(`## Heading ${MAX_HIGHLIGHT_LINES - 1}`);
+  });
+
+  it("leaves rawText undefined on non-markdown files", async () => {
+    const tsPath = join(dir, "code.ts");
+    await writeFile(tsPath, "const x = 1;");
+    const tsFile = await loadFile(tsPath, "code.ts");
+    expect(tsFile.rawText).toBeUndefined();
+
+    const binPath = join(dir, "data.bin");
+    await writeFile(binPath, Buffer.from([0, 1, 2]));
+    const binFile = await loadFile(binPath, "data.bin");
+    expect(binFile.rawText).toBeUndefined();
+  });
+});
+
+describe("isMarkdownPath", () => {
+  it("identifies markdown files by extension", () => {
+    expect(isMarkdownPath("README.md")).toBe(true);
+    expect(isMarkdownPath("docs/spec.markdown")).toBe(true);
+    expect(isMarkdownPath("NOTES.MD")).toBe(true);
+    expect(isMarkdownPath("SRC.MARKDOWN")).toBe(true);
+    expect(isMarkdownPath("src/main.ts")).toBe(false);
+    expect(isMarkdownPath("data.json")).toBe(false);
+    expect(isMarkdownPath("plain.txt")).toBe(false);
+    expect(isMarkdownPath(".md")).toBe(false);
+    expect(isMarkdownPath("noext")).toBe(false);
   });
 });

@@ -144,6 +144,11 @@ export function extOf(relPath: string): string {
   return basename.slice(dot + 1).toLowerCase();
 }
 
+export function isMarkdownPath(relPath: string): boolean {
+  const ext = extOf(relPath);
+  return ext === "md" || ext === "markdown";
+}
+
 async function sniffBinary(absPath: string): Promise<boolean> {
   let handle;
   try {
@@ -330,6 +335,7 @@ export async function loadFile(absPath: string, relPath: string): Promise<Viewer
     // The total count is only known — and only cheap — when the whole file was
     // read (plan section 9: "total line count when cheap").
     const lineCount = completeRead && sizeBytes <= MAX_LINE_COUNT_BYTES ? allLines.length : undefined;
+    const rawText = isMarkdownPath(relPath) ? raw.split("\n").slice(0, MAX_HIGHLIGHT_LINES).join("\n") : undefined;
     return {
       kind: "truncated",
       relPath,
@@ -338,12 +344,22 @@ export async function loadFile(absPath: string, relPath: string): Promise<Viewer
       lineCount,
       lines,
       notice: `Truncated view: ${reason}. Showing the first ${head.length} lines.`,
+      ...(rawText !== undefined ? { rawText } : {}),
     };
   }
 
   const lines = await highlightText(expanded, relPath);
   const lineCount = sizeBytes <= MAX_LINE_COUNT_BYTES ? allLines.length : undefined;
-  return { kind: "text", relPath, sizeBytes, mtimeMs, lineCount, lines };
+  const rawText = isMarkdownPath(relPath) ? raw : undefined;
+  return {
+    kind: "text",
+    relPath,
+    sizeBytes,
+    mtimeMs,
+    lineCount,
+    lines,
+    ...(rawText !== undefined ? { rawText } : {}),
+  };
 }
 
 // ── Search ──

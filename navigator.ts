@@ -12,11 +12,12 @@
  * work stays in index.ts.
  */
 
-import { copyToClipboard } from "@earendil-works/pi-coding-agent";
+import { copyToClipboard, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import {
   CURSOR_MARKER,
   decodeKittyPrintable,
   Key,
+  Markdown,
   matchesKey,
   truncateToWidth,
   visibleWidth,
@@ -39,7 +40,7 @@ import { mapExtensionToIcon } from "./icons";
 import { expandAncestors, filterRows, findNode, flattenVisible, hasChanges, moveCursor, pageJump } from "./tree";
 import type { NavigatorTheme } from "./theme";
 import type { FileNode, FilesRow, Focus, GitCommit, GitRow, GitState, InputMode, SearchMatch, ViewerFile } from "./types";
-import { computeRows, formatSize, markMatches, maxLineWidth, searchLines, type DisplayRow } from "./viewer";
+import { computeRows, formatSize, isMarkdownPath, markMatches, maxLineWidth, searchLines, type DisplayRow } from "./viewer";
 
 /**
  * Truncate a (possibly styled) string to a visible width and return both the
@@ -79,7 +80,7 @@ const FOCUS_HINTS: Record<Focus, string> = {
   // truncated off the footer (render test enforces this at 120, 100, 80).
   files: "j k move  Enter open  Tab  / filter  . hidden  y copy  ? help  q close",
   git: "j k move  Enter open file / diff  l h family  g G jump  Tab  y copy  ? help  q close",
-  viewer: "j k scroll  Ctrl+d/u  h l  w wrap  / search  n N  Tab  ? help  q close",
+  viewer: "j k scroll  Ctrl+d/u  w wrap  m mode  / search  n N  Tab  ? help  q close",
 };
 
 const MODE_HINTS: Record<Exclude<InputMode, "normal">, string> = {
@@ -100,6 +101,7 @@ const HELP_ROWS: Array<[string, string]> = [
   ["n N", "next/prev match (viewer)"],
   ["up/down, ^n/^p", "cycle matches (searching)"],
   ["w", "toggle word wrap"],
+  ["m", "toggle markdown rendered / code view"],
   ["h l", "horizontal scroll when wrap is off"],
   [".", "toggle hidden files"],
   ["y", "copy the selected path"],
@@ -154,6 +156,7 @@ export class NavigatorOverlay implements Focusable {
   private viewScroll = 0;
   private viewHscroll = 0;
   private viewWrap = false;
+  private viewRenderMarkdown = false;
   private diskChanged = false;
 
   private searchQuery = "";
@@ -180,6 +183,8 @@ export class NavigatorOverlay implements Focusable {
   private maxLineWidthCache: { file: ViewerFile; value: number } | null = null;
   private rowsCache: { marked: ViewerFile; width: number; wrap: boolean; hscroll: number; rows: DisplayRow[] } | null =
     null;
+  private mdRenderer: Markdown | null = null;
+  private mdCache: { file: ViewerFile; width: number; lines: string[] } | null = null;
   // Row-model memos. Each is keyed on exactly the inputs that affect its
   // output (object references + primitives), so a single render pass that
   // calls filesRows()/gitRows()/gitNavRows() several times builds each array
@@ -298,6 +303,7 @@ export class NavigatorOverlay implements Focusable {
       const file = await this.loadFile(relPath);
       if (this.disposed || this.loadSeq !== seq) return;
       this.viewFile = file;
+      this.mdCache = null;
       // New file content: an active query must be re-scanned on next render.
       // The marked/maxLineWidth/rows caches key on the `viewFile` reference,
       // so the new object invalidates them automatically.
@@ -310,6 +316,7 @@ export class NavigatorOverlay implements Focusable {
     } catch {
       if (this.disposed || this.loadSeq !== seq) return;
       this.viewFile = { kind: "error", relPath, lines: [], message: "unexpected read failure" };
+      this.mdCache = null;
       this.searchDirty = true;
     } finally {
       if (!this.disposed && this.loadSeq === seq) {
@@ -352,6 +359,7 @@ export class NavigatorOverlay implements Focusable {
       const file = await this.loadCommit(shortHash);
       if (this.disposed || this.loadSeq !== seq) return;
       this.viewFile = file;
+      this.mdCache = null;
       this.searchDirty = true;
       this.diskChanged = false;
       if (!keepScroll || !sameCommit) {
@@ -366,6 +374,7 @@ export class NavigatorOverlay implements Focusable {
         lines: [],
         message: "cannot read commit",
       };
+      this.mdCache = null;
       this.searchDirty = true;
     } finally {
       if (!this.disposed && this.loadSeq === seq) {
@@ -837,8 +846,30 @@ export class NavigatorOverlay implements Focusable {
     } else if (data === "N") {
       this.cycleSearch(-1);
     } else if (data === "w") {
+      if (this.viewRenderMarkdown && this.canRenderMarkdown(this.viewFile)) {
+        return;
+      }
       this.viewWrap = !this.viewWrap;
       this.viewHscroll = 0;
+    } else if (data === "m") {
+      if (this.canRenderMarkdown(this.viewFile)) {
+        this.viewRenderMarkdown = !this.viewRenderMarkdown;
+        this.viewHscroll = 0; // rendered mode is wrap-only
+
+        // Full cache invalidation protocol:
+        this.rowsCache = null;
+        this.markedCache = null;
+        this.mdCache = null;
+        this.searchDirty = true;
+        this.searchMatches = [];
+        this.searchMatchLines.clear();
+        this.searchVersion++;
+
+        this.touch();
+      } else {
+        this.showNotice("rendered view only available for markdown files");
+      }
+      return;
     } else if (matchesKey(data, Key.left) || data === "h") {
       this.viewHscroll = Math.max(0, this.viewHscroll - 4);
     } else if (matchesKey(data, Key.right) || data === "l") {
@@ -851,8 +882,57 @@ export class NavigatorOverlay implements Focusable {
 
   // ── Actions ──
 
+  private canRenderMarkdown(file: ViewerFile | null): boolean {
+    return (
+      file !== null &&
+      file.kind !== "diff" &&
+      file.rawText !== undefined &&
+      isMarkdownPath(file.relPath)
+    );
+  }
+
+  private getRenderedMarkdownLines(file: ViewerFile, width: number): string[] {
+    if (width <= 0) return [];
+    if (this.mdCache && this.mdCache.file === file && this.mdCache.width === width) {
+      return this.mdCache.lines;
+    }
+    if (!this.mdRenderer) {
+      this.mdRenderer = new Markdown("", 0, 0, getMarkdownTheme());
+    }
+    this.mdRenderer.setText(file.rawText ?? "");
+    const rawLines = this.mdRenderer.render(width);
+
+    // Width safety clamp: pad to width and prevent bright ellipsis leakage
+    const lines = rawLines.map((line) => {
+      const vw = visibleWidth(line);
+      return vw < width ? line + " ".repeat(width - vw) : truncateToWidth(line, width, "");
+    });
+
+    this.mdCache = { file, width, lines };
+    this.searchDirty = true;
+    return lines;
+  }
+
+  private markRenderedLineMatches(
+    line: string,
+    lineIdx: number,
+    currentMatch: SearchMatch | undefined,
+    currentOccurrenceOnLine: number,
+  ): string {
+    const occ = currentMatch && lineIdx === currentMatch.line ? currentOccurrenceOnLine : -1;
+    return markMatches(line, this.searchQuery, this.T.searchMatch, this.T.searchCurrent, occ);
+  }
+
   private recomputeSearch(): void {
+    if (this.viewRenderMarkdown && this.canRenderMarkdown(this.viewFile) && this.mdCache) {
+      this.recomputeSearchOnLines(this.mdCache.lines);
+      return;
+    }
     const lines = this.viewFile?.lines ?? [];
+    this.recomputeSearchOnLines(lines);
+  }
+
+  private recomputeSearchOnLines(lines: string[]): void {
     this.searchMatches = searchLines(lines, this.searchQuery);
     this.searchMatchLines = new Set(this.searchMatches.map((m) => m.line));
     if (this.searchMatches.length === 0) this.searchIndex = 0;
@@ -1345,13 +1425,37 @@ export class NavigatorOverlay implements Focusable {
   // ── Right pane ──
 
   private buildRightRows(rightW: number, body: number): string[] {
+    const isSwitching = this.viewLoading && this.viewTargetRelPath !== null && this.viewTargetRelPath !== this.viewFile?.relPath;
+    const file = isSwitching ? null : this.viewFile;
+
+    const canRender = this.canRenderMarkdown(file);
+    const useRendered = canRender && this.viewRenderMarkdown;
+
+    let contentW: number;
+    let digits = 0;
+    if (useRendered && file) {
+      contentW = Math.max(10, rightW - 2);
+      this.viewHscroll = 0;
+    } else if (file) {
+      digits = Math.max(2, String(file.lineCount ?? file.lines.length).length);
+      const gutterW = digits + 1;
+      contentW = Math.max(10, rightW - 2 - (gutterW + 2));
+    } else {
+      contentW = Math.max(10, rightW - 2);
+    }
+
+    if (useRendered && file) {
+      const mdLines = this.getRenderedMarkdownLines(file, contentW);
+      this.recomputeSearchIfNeeded(mdLines);
+    } else {
+      this.recomputeSearchIfNeeded();
+    }
+
     const rows: string[] = [];
     const headerRow = this.mode === "search" ? this.buildSearchBar(rightW) : this.buildViewerHeader(rightW);
     rows.push(headerRow);
 
     const area = Math.max(1, body - 1);
-    const isSwitching = this.viewLoading && this.viewTargetRelPath !== null && this.viewTargetRelPath !== this.viewFile?.relPath;
-    const file = isSwitching ? null : this.viewFile;
 
     if (!file && this.viewLoading) {
       for (let i = 0; i < area; i++) rows.push(this.padTo(i === 0 ? " " + this.T.dim("(loading\u2026)") : "", rightW));
@@ -1373,12 +1477,6 @@ export class NavigatorOverlay implements Focusable {
     let noticeRows = 0;
     if ((file.kind === "truncated" || file.kind === "diff") && file.notice) noticeRows += 1;
     if (this.diskChanged) noticeRows += 1;
-
-    // Gutter width follows the total line count when it is known, not the
-    // number of rows actually displayed (plan sections 3.4 and 6).
-    const digits = Math.max(2, String(file.lineCount ?? file.lines.length).length);
-    const gutterW = digits + 1;
-    const contentW = Math.max(10, rightW - 2 - (gutterW + 2));
     const contentArea = Math.max(1, area - noticeRows);
 
     // Optional notices above the content.
@@ -1390,35 +1488,69 @@ export class NavigatorOverlay implements Focusable {
       rows.push(this.padTo(" " + T.warning("file changed on disk \u2014 press r to reload"), rightW));
     }
 
-    this.recomputeSearchIfNeeded();
-    const marked = this.markSearch(file);
+    if (useRendered) {
+      const mdLines = this.getRenderedMarkdownLines(file, contentW);
 
-    // Clamp horizontal scroll and scroll position. `maxLineWidth` depends only
-    // on visible width, which search marking does not change, so it is cached
-    // on the stable `file` reference; `computeRows` is cached on the cached
-    // `marked` reference plus width/wrap/hscroll, so vertical scrolling no
-    // longer re-wraps the whole file each keystroke.
-    const maxH = Math.max(0, this.cachedMaxLineWidth(file) - contentW);
-    this.viewHscroll = Math.max(0, Math.min(this.viewHscroll, maxH));
-
-    const display = this.cachedComputeRows(marked, contentW, this.viewWrap, this.viewHscroll);
-    if (this.searchJump && this.searchMatches.length > 0) {
-      const currentMatch = this.searchMatches[this.searchIndex];
-      const target = display.findIndex((row) => row.line === currentMatch?.line);
-      if (target >= 0) this.viewScroll = Math.max(0, target - Math.floor(contentArea / 2));
-      this.searchJump = false;
-    }
-    this.viewScroll = Math.max(0, Math.min(this.viewScroll, Math.max(0, display.length - contentArea)));
-
-    for (let i = 0; i < contentArea; i++) {
-      const row = display[this.viewScroll + i];
-      if (!row) {
-        rows.push(this.padTo("", rightW));
-        continue;
+      if (this.searchJump && this.searchMatches.length > 0) {
+        const currentMatch = this.searchMatches[this.searchIndex];
+        if (currentMatch) {
+          this.viewScroll = Math.max(0, currentMatch.line - Math.floor(contentArea / 2));
+        }
+        this.searchJump = false;
       }
-      const gutter = row.line === null ? " ".repeat(digits) + " " : String(row.line + 1).padStart(digits) + " ";
-      const line = " " + T.dim(gutter) + T.frame("\u2502") + " " + row.text;
-      rows.push(this.padTo(line, rightW));
+      this.viewScroll = Math.max(0, Math.min(this.viewScroll, Math.max(0, mdLines.length - contentArea)));
+
+      const currentMatch = this.searchMatches.length > 0
+        ? this.searchMatches[Math.min(this.searchIndex, this.searchMatches.length - 1)]
+        : undefined;
+      const currentOccurrenceOnLine = currentMatch
+        ? this.searchMatches.filter((m) => m.line === currentMatch.line && m.start < currentMatch.start).length
+        : -1;
+
+      for (let i = 0; i < contentArea; i++) {
+        const lineIdx = this.viewScroll + i;
+        const rawLine = mdLines[lineIdx];
+        if (rawLine === undefined) {
+          rows.push(this.padTo("", rightW));
+          continue;
+        }
+
+        let styledLine = rawLine;
+        if (this.searchQuery && this.searchMatches.length > 0 && this.searchMatchLines.has(lineIdx)) {
+          styledLine = this.markRenderedLineMatches(styledLine, lineIdx, currentMatch, currentOccurrenceOnLine);
+        }
+        rows.push(this.padTo(" " + styledLine, rightW));
+      }
+    } else {
+      const marked = this.markSearch(file);
+
+      // Clamp horizontal scroll and scroll position. `maxLineWidth` depends only
+      // on visible width, which search marking does not change, so it is cached
+      // on the stable `file` reference; `computeRows` is cached on the cached
+      // `marked` reference plus width/wrap/hscroll, so vertical scrolling no
+      // longer re-wraps the whole file each keystroke.
+      const maxH = Math.max(0, this.cachedMaxLineWidth(file) - contentW);
+      this.viewHscroll = Math.max(0, Math.min(this.viewHscroll, maxH));
+
+      const display = this.cachedComputeRows(marked, contentW, this.viewWrap, this.viewHscroll);
+      if (this.searchJump && this.searchMatches.length > 0) {
+        const currentMatch = this.searchMatches[this.searchIndex];
+        const target = display.findIndex((row) => row.line === currentMatch?.line);
+        if (target >= 0) this.viewScroll = Math.max(0, target - Math.floor(contentArea / 2));
+        this.searchJump = false;
+      }
+      this.viewScroll = Math.max(0, Math.min(this.viewScroll, Math.max(0, display.length - contentArea)));
+
+      for (let i = 0; i < contentArea; i++) {
+        const row = display[this.viewScroll + i];
+        if (!row) {
+          rows.push(this.padTo("", rightW));
+          continue;
+        }
+        const gutter = row.line === null ? " ".repeat(digits) + " " : String(row.line + 1).padStart(digits) + " ";
+        const line = " " + T.dim(gutter) + T.frame("\u2502") + " " + row.text;
+        rows.push(this.padTo(line, rightW));
+      }
     }
 
     return rows;
@@ -1442,7 +1574,10 @@ export class NavigatorOverlay implements Focusable {
       if (size) meta.push(size);
       if (file.lineCount !== undefined) meta.push(`${file.lineCount}L`);
       if (file.kind === "truncated") meta.push("truncated");
-      if (this.viewWrap) meta.push("wrap");
+      if (this.canRenderMarkdown(file)) {
+        meta.push(this.viewRenderMarkdown ? "m code" : "m render");
+      }
+      if (!this.viewRenderMarkdown && this.viewWrap) meta.push("wrap");
       if (this.viewHscroll > 0) meta.push(`col ${this.viewHscroll + 1}`);
       if (this.viewLoading) meta.push("loading\u2026");
     } else if (this.viewLoading && currentPath !== "(no file)") {
@@ -1487,7 +1622,7 @@ export class NavigatorOverlay implements Focusable {
     );
   }
 
-  private recomputeSearchIfNeeded(): void {
+  private recomputeSearchIfNeeded(lines?: string[]): void {
     if (!this.searchQuery) {
       if (this.searchMatches.length > 0) {
         this.searchMatches = [];
@@ -1501,7 +1636,13 @@ export class NavigatorOverlay implements Focusable {
     // changed under an active query). Keystrokes that change the query call
     // `recomputeSearch` directly and clear the dirty flag, so a plain render —
     // e.g. scrolling or moving the cursor — no longer re-scans the file.
-    if (this.searchDirty) this.recomputeSearch();
+    if (this.searchDirty) {
+      if (lines) {
+        this.recomputeSearchOnLines(lines);
+      } else {
+        this.recomputeSearch();
+      }
+    }
   }
 
   private markSearch(file: ViewerFile): ViewerFile {

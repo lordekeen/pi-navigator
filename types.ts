@@ -119,6 +119,14 @@ export interface ViewerFile {
   commitHash?: string;
   /** Diff-only: parent short hashes, for the notice line. */
   parents?: string[];
+
+  /**
+   * Unexpanded, CR-normalized source text for alternative renderers
+   * (e.g. rendered Markdown). Retained only for markdown files of kind
+   * "text" or "truncated". Undefined for diff, binary, image, error, and
+   * non-markdown source files.
+   */
+  rawText?: string;
 }
 
 export interface SearchMatch {

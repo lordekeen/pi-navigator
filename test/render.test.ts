@@ -7,7 +7,28 @@
  */
 
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@earendil-works/pi-coding-agent")>()),
+  getMarkdownTheme: () => ({
+    heading: (t: string) => t,
+    link: (t: string) => t,
+    linkUrl: (t: string) => t,
+    code: (t: string) => t,
+    codeBlock: (t: string) => t,
+    codeBlockBorder: (t: string) => t,
+    quote: (t: string) => t,
+    quoteBorder: (t: string) => t,
+    hr: (t: string) => t,
+    listBullet: (t: string) => t,
+    bold: (t: string) => t,
+    italic: (t: string) => t,
+    underline: (t: string) => t,
+    strikethrough: (t: string) => t,
+    highlightCode: (code: string) => code.split("\n"),
+  }),
+}));
 
 import { mapExtensionToIcon } from "../icons";
 import { MIN_OVERLAY_HEIGHT, MIN_OVERLAY_WIDTH } from "../constants";
@@ -528,5 +549,133 @@ describe("render width safety", () => {
     const nameInFile = plainFile.indexOf("Button.tsx");
     expect(glyphInFile, "file glyph must precede the name").toBeLessThan(nameInFile);
     expect(glyphInFile, "file glyph (depth 2) must sit after the 4-space indent").toBeGreaterThanOrEqual(7);
+  });
+});
+
+describe("rendered markdown width safety", () => {
+  const richMarkdown = [
+    "# This is a very long heading that should wrap or be truncated safely without overflowing the pane width",
+    "",
+    "A regular paragraph with **bold text**, *italic text*, and [a long markdown link with descriptive text](https://example.com/very/long/url/path/here).",
+    "",
+    "## Lists and Nesting",
+    "- Top level item 1 with lots of words to trigger automatic word wrapping inside the reader layout",
+    "- Top level item 2",
+    "  - Nested sub-item A with additional details",
+    "  - Nested sub-item B",
+    "",
+    "## Code Block",
+    "```typescript",
+    "const greeting: string = 'Hello, this is a very long code line inside a fenced block that should be padded and fit cleanly';",
+    "function add(a: number, b: number): number { return a + b; }",
+    "```",
+    "",
+    "## Table",
+    "| Column 1 | Column 2 | Column 3 |",
+    "| --- | --- | --- |",
+    "| Cell 1A with long content | Cell 1B | Cell 1C |",
+    "| Cell 2A | Cell 2B with long text | Cell 2C |",
+    "",
+  ].join("\n");
+
+  function makeMarkdownHarness(rows: number): NavigatorOverlay {
+    const theme = makeNavigatorTheme({
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+      underline: (text: string) => text,
+      inverse: (text: string) => text,
+    } as never);
+
+    const overlay = new NavigatorOverlay({
+      cwd: "/work/repo",
+      theme,
+      getTerminalRows: () => rows,
+      requestRender: () => undefined,
+      onClose: () => undefined,
+      loadFile: async (relPath: string): Promise<ViewerFile> => ({
+        kind: "text",
+        relPath,
+        sizeBytes: Buffer.byteLength(richMarkdown),
+        lineCount: richMarkdown.split("\n").length,
+        lines: richMarkdown.split("\n"),
+        rawText: richMarkdown,
+      }),
+      refresh: () => undefined,
+    });
+
+    overlay.setTree(
+      buildTree("/work/repo", entriesFromPaths(["README.md"]), new Map()),
+      "fs",
+    );
+
+    return overlay;
+  }
+
+  it("renders rich markdown width-safely at 120x36", async () => {
+    const overlay = makeMarkdownHarness(36);
+    await overlay.openRelPath("README.md");
+    // Switch focus to viewer and toggle rendered mode
+    overlay.handleInput(KEYS.tab);
+    overlay.handleInput(KEYS.tab);
+    overlay.handleInput("m");
+
+    const lines = expectWidthSafe(overlay, 120);
+    expect(lines.join("\n")).toContain("m code");
+    expect(lines.join("\n")).not.toMatch(/\x1b\[0m\.\.\./);
+  });
+
+  it("renders rich markdown width-safely at 100x28 and keeps footer focus indicators intact", async () => {
+    const overlay = makeMarkdownHarness(28);
+    await overlay.openRelPath("README.md");
+    overlay.handleInput(KEYS.tab);
+    overlay.handleInput(KEYS.tab);
+    overlay.handleInput("m");
+
+    const lines = expectWidthSafe(overlay, 100);
+    const footer = lines[lines.length - 2] ?? "";
+    expect(footer).toContain("viewer");
+    expect(footer).toContain("files");
+    expect(footer).toContain("git");
+    expect(lines.join("\n")).not.toMatch(/\x1b\[0m\.\.\./);
+  });
+
+  it("renders rich markdown width-safely at 80x24", async () => {
+    const overlay = makeMarkdownHarness(24);
+    await overlay.openRelPath("README.md");
+    overlay.handleInput(KEYS.tab);
+    overlay.handleInput(KEYS.tab);
+    overlay.handleInput("m");
+
+    const lines = expectWidthSafe(overlay, 80);
+    expect(lines.join("\n")).not.toMatch(/\x1b\[0m\.\.\./);
+  });
+
+  it("renders rich markdown width-safely at 60 columns (narrow screen)", async () => {
+    const overlay = makeMarkdownHarness(24);
+    await overlay.openRelPath("README.md");
+    overlay.handleInput(KEYS.tab);
+    overlay.handleInput(KEYS.tab);
+    overlay.handleInput("m");
+
+    const lines = expectWidthSafe(overlay, 60);
+    expect(lines.join("\n")).not.toMatch(/\x1b\[0m\.\.\./);
+  });
+
+  it("renders search highlights inside pane bounds in rendered mode", async () => {
+    const overlay = makeMarkdownHarness(28);
+    await overlay.openRelPath("README.md");
+    overlay.handleInput(KEYS.tab);
+    overlay.handleInput(KEYS.tab);
+    overlay.handleInput("m");
+
+    // Search for a term that occurs in headings and code
+    overlay.handleInput("/");
+    for (const char of "long") {
+      overlay.handleInput(char);
+    }
+    const lines = expectWidthSafe(overlay, 100);
+    expect(lines.join("\n")).toContain("/long");
+    expect(lines.join("\n")).not.toMatch(/\x1b\[0m\.\.\./);
   });
 });
