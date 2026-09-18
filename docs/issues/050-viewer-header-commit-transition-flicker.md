@@ -1,6 +1,6 @@
 # Issue #050: Viewer Header Flickers Raw `commit:<hash>` Identity During Commit Transitions
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Bug / UI Polish
 - **Severity**: Low
 - **Component**: [`navigator.ts`](file:///home/jhonny/Sources/pi-navigator/navigator.ts) · [`buildViewerHeader`](file:///home/jhonny/Sources/pi-navigator/navigator.ts#L1404-L1429)
@@ -41,6 +41,11 @@ const headerPath =
 
 ## Acceptance Criteria
 
-- [ ] Header displays `"commit <shortHash>"` consistently while a commit load is in flight and after completion.
-- [ ] No visual flicker from colon-prefixed `"commit:<shortHash>"` during commit transitions.
-- [ ] `npm run typecheck` and `npm test` are green.
+- [x] Header displays `"commit <shortHash>"` consistently while a commit load is in flight and after completion.
+- [x] No visual flicker from colon-prefixed `"commit:<shortHash>"` during commit transitions.
+- [x] `npm run typecheck` and `npm test` are green.
+
+## Resolution
+
+- In [`NavigatorOverlay.buildViewerHeader`](file:///home/jhonny/Sources/pi-navigator/navigator.ts), formatted `isCommit` as `(file?.kind === "diff" && file.commitHash) || currentPath.startsWith("commit:")`, eliminating the colon transition flicker.
+- Added unit test in `test/navigator.test.ts` verifying `"commit <hash>"` formatting during async diff loads.

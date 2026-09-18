@@ -687,6 +687,21 @@ describe("copy (y)", () => {
     await Promise.resolve();
     expect(copyToClipboard).toHaveBeenCalledWith("abc1234");
   });
+
+  it("copies clean commit hash when focused on viewer with commit diff (Issue #049)", async () => {
+    const harness = makeHarness(24, undefined, undefined, async (hash) => ({
+      kind: "diff",
+      relPath: `commit:${hash}`,
+      commitHash: hash,
+      lines: ["diff content"],
+    }));
+    await harness.overlay.openCommit("abc1234");
+    harness.overlay.handleInput(KEYS.tab); // files -> git
+    harness.overlay.handleInput(KEYS.tab); // git -> viewer
+    harness.overlay.handleInput("y");
+    await Promise.resolve();
+    expect(copyToClipboard).toHaveBeenCalledWith("abc1234");
+  });
 });
 
 // ── Issue #001: Stale content race when opening file ──
@@ -911,5 +926,103 @@ describe("shortPath", () => {
     });
     const rendered = overlay.render(80).join("\n");
     expect(rendered).toContain("~/project");
+  });
+});
+
+describe("Issue #048: reloadOpenFile on commit diff", () => {
+  it("reloads commit diff without routing to loadFile or crashing into error card", async () => {
+    let commitLoads = 0;
+    const loadCalls: string[] = [];
+    const harness = makeHarness(
+      24,
+      async (relPath) => {
+        loadCalls.push(relPath);
+        return { kind: "text", relPath, lines: ["file-content"] };
+      },
+      undefined,
+      async (hash) => {
+        commitLoads += 1;
+        return {
+          kind: "diff",
+          relPath: `commit:${hash}`,
+          commitHash: hash,
+          lines: ["+diff-line-1", "+diff-line-2", "+diff-line-3"],
+        };
+      },
+    );
+
+    await harness.overlay.openCommit("abc1234");
+    expect(commitLoads).toBe(1);
+    expect(loadCalls).toEqual([]);
+
+    // Trigger reload via "r" key
+    harness.overlay.handleInput("r");
+    await Promise.resolve();
+
+    // Must reload commit via loadCommit, not loadFile
+    expect(commitLoads).toBe(2);
+    expect(loadCalls).toEqual([]);
+
+    // Viewer still displays the diff and not an error
+    const rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).toContain("diff-line-1");
+    expect(rendered).not.toContain("unexpected read failure");
+  });
+
+  it("preserves scroll position when refreshing active commit diff", async () => {
+    const lines = Array.from({ length: 50 }, (_, i) => `+diff-line-${i}`);
+    const harness = makeHarness(
+      24,
+      undefined,
+      undefined,
+      async (hash) => ({
+        kind: "diff",
+        relPath: `commit:${hash}`,
+        commitHash: hash,
+        lines,
+      }),
+    );
+
+    await harness.overlay.openCommit("abc1234");
+    // Switch focus to viewer and scroll down
+    harness.overlay.handleInput(KEYS.tab);
+    harness.overlay.handleInput(KEYS.tab);
+    harness.overlay.handleInput("j");
+    harness.overlay.handleInput("j");
+    harness.overlay.handleInput("j");
+
+    const bodyBefore = harness.overlay.render(120).slice(0, -2).join("\n");
+    harness.overlay.handleInput("r");
+    await Promise.resolve();
+    const bodyAfter = harness.overlay.render(120).slice(0, -2).join("\n");
+
+    expect(bodyAfter).toBe(bodyBefore);
+  });
+});
+
+describe("Issue #050: viewer header commit transition", () => {
+  it("renders 'commit <hash>' instead of 'commit:<hash>' while diff load is in flight", () => {
+    let resolveCommit!: (file: ViewerFile) => void;
+    const harness = makeHarness(
+      24,
+      undefined,
+      undefined,
+      () =>
+        new Promise<ViewerFile>((resolve) => {
+          resolveCommit = resolve;
+        }),
+    );
+
+    void harness.overlay.openCommit("abc1234");
+    const rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).toContain("commit abc1234");
+    expect(rendered).not.toContain("commit:abc1234");
+
+    resolveCommit({
+      kind: "diff",
+      relPath: "commit:abc1234",
+      commitHash: "abc1234",
+      lines: ["+diff content"],
+    });
   });
 });

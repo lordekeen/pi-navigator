@@ -1,6 +1,6 @@
 # Issue #048: `reloadOpenFile` Routes Commit Diffs to Filesystem Loader, Crashing the Viewer
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Bug
 - **Severity**: High
 - **Component**: [`navigator.ts`](file:///home/jhonny/Sources/pi-navigator/navigator.ts) · [`reloadOpenFile`](file:///home/jhonny/Sources/pi-navigator/navigator.ts#L266-L270)
@@ -72,7 +72,13 @@ Add an optional `keepScroll: boolean = false` parameter to `openCommit` parallel
 
 ## Acceptance Criteria
 
-- [ ] Pressing `r` while viewing a commit diff preserves the diff view instead of showing an error card.
-- [ ] Scroll position and active search in the diff view are preserved across `r` reload when `keepScroll` is true.
-- [ ] Unit test in `test/navigator.test.ts` verifies `reloadOpenFile` / `r` on an active commit diff.
-- [ ] `npm run typecheck` and `npm test` are green.
+- [x] Pressing `r` while viewing a commit diff preserves the diff view instead of showing an error card.
+- [x] Scroll position and active search in the diff view are preserved across `r` reload when `keepScroll` is true.
+- [x] Unit test in `test/navigator.test.ts` verifies `reloadOpenFile` / `r` on an active commit diff.
+- [x] `npm run typecheck` and `npm test` are green.
+
+## Resolution
+
+- Added `keepScroll = false` parameter to `openCommit` in [`navigator.ts`](file:///home/jhonny/Sources/pi-navigator/navigator.ts) to preserve scroll and horizontal scroll during reloads of the same commit.
+- Updated `reloadOpenFile` to check whether `this.viewFile` is a commit diff (`kind === "diff"` or `relPath.startsWith("commit:")`), routing reloads to `openCommit(hash, true)` when `loadCommit` is configured.
+- Added comprehensive unit tests in `test/navigator.test.ts` covering commit diff reload without error cards and scroll preservation.

@@ -264,9 +264,16 @@ export class NavigatorOverlay implements Focusable {
 
   /** Reload the open file, keeping scroll position. Used by "r". */
   reloadOpenFile(): void {
-    const relPath = this.viewFile?.relPath;
-    if (!relPath) return;
-    void this.openRelPath(relPath, true);
+    const file = this.viewFile;
+    if (!file) return;
+    if (file.kind === "diff" || file.relPath.startsWith("commit:")) {
+      const hash = file.commitHash ?? file.relPath.slice("commit:".length);
+      if (hash && this.loadCommit) {
+        void this.openCommit(hash, true);
+      }
+      return;
+    }
+    void this.openRelPath(file.relPath, true);
   }
 
   /** Open a file by relative path (async; sets viewer state on completion). */
@@ -321,7 +328,7 @@ export class NavigatorOverlay implements Focusable {
    * `commit:<shortHash>` — distinct from any file path — so the viewer
    * header / caches key on it and index.ts can skip the mtime poll for it.
    */
-  async openCommit(shortHash: string): Promise<void> {
+  async openCommit(shortHash: string, keepScroll = false): Promise<void> {
     if (!this.loadCommit) {
       this.toggleCommitFamily(shortHash);
       return;
@@ -329,11 +336,16 @@ export class NavigatorOverlay implements Focusable {
     const seq = ++this.loadSeq;
     this.viewLoading = true;
     this.viewTargetRelPath = `commit:${shortHash}`;
-    this.viewScroll = 0;
-    this.viewHscroll = 0;
-    this.searchQuery = "";
-    this.searchMatches = [];
-    this.searchIndex = 0;
+    const sameCommit = this.viewFile?.kind === "diff" && this.viewFile.commitHash === shortHash;
+    if (!keepScroll || !sameCommit) {
+      this.viewScroll = 0;
+      this.viewHscroll = 0;
+      if (!sameCommit) {
+        this.searchQuery = "";
+        this.searchMatches = [];
+        this.searchIndex = 0;
+      }
+    }
     this.touch();
     this.requestRender();
     try {
@@ -342,6 +354,10 @@ export class NavigatorOverlay implements Focusable {
       this.viewFile = file;
       this.searchDirty = true;
       this.diskChanged = false;
+      if (!keepScroll || !sameCommit) {
+        this.viewScroll = 0;
+        this.viewHscroll = 0;
+      }
     } catch {
       if (this.disposed || this.loadSeq !== seq) return;
       this.viewFile = {
@@ -868,7 +884,14 @@ export class NavigatorOverlay implements Focusable {
       if (row?.kind === "file") value = row.relPath;
       else if (row?.kind === "commit") value = row.commit.shortHash;
     } else if (this.focus === "viewer") {
-      value = this.viewTargetRelPath ?? this.viewFile?.relPath ?? "";
+      if (this.viewFile?.kind === "diff" && this.viewFile.commitHash) {
+        value = this.viewFile.commitHash;
+      } else {
+        value = this.viewTargetRelPath ?? this.viewFile?.relPath ?? "";
+        if (value.startsWith("commit:")) {
+          value = value.slice("commit:".length);
+        }
+      }
     } else {
       value = this.filesRows()[this.filesCursor]?.node.relPath ?? "";
     }
@@ -1409,8 +1432,9 @@ export class NavigatorOverlay implements Focusable {
     // v3: a commit diff shows "commit <hash>" instead of a path — mirrors git
     // show's header and keeps the long commit:<hash> identity string out of
     // the title row.
-    const headerPath =
-      file?.kind === "diff" && file.commitHash ? `commit ${file.commitHash}` : this.shortPath(currentPath);
+    const isCommit = (file?.kind === "diff" && file.commitHash) || currentPath.startsWith("commit:");
+    const commitHash = file?.commitHash ?? (currentPath.startsWith("commit:") ? currentPath.slice("commit:".length) : "");
+    const headerPath = isCommit ? `commit ${commitHash}` : this.shortPath(currentPath);
     const left = " " + (this.focus === "viewer" ? T.accent(T.bold(headerPath)) : T.muted(headerPath));
     const meta: string[] = [];
     if (file) {

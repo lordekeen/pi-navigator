@@ -8,8 +8,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
-| **Pending / Open** | 2 | 1 | 2 | **5** |
-| **Resolved** | 7 | 14 | 25 | **46** |
+| **Pending / Open** | 1 | 0 | 0 | **1** |
+| **Resolved** | 8 | 15 | 27 | **50** |
 | **Total** | **9** | **15** | **27** | **51** |
 
 ---
@@ -19,10 +19,6 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | ID | Title | Type | Severity | Component | Status |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | [#020](020-no-viewer-cache-blocking-highlight.md) | No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread | Bug / Performance | High | `viewer.ts` | Open (partial — cache done; event-loop yielding deferred: blocked by pi's bundled-runtime virtual-module boundary, needs a pi-side API) |
-| [#048](048-reload-open-file-crashes-commit-diff.md) | `reloadOpenFile` Routes Commit Diffs to Filesystem Loader, Crashing the Viewer | Bug | High | `navigator.ts` | Open |
-| [#049](049-copy-context-raw-commit-scheme.md) | `copyContext` Copies Raw `commit:<hash>` Identity String in Viewer Pane | Bug / UX Consistency | Medium | `navigator.ts` | Open |
-| [#050](050-viewer-header-commit-transition-flicker.md) | Viewer Header Flickers Raw `commit:<hash>` Identity During Commit Transitions | Bug / UI Polish | Low | `navigator.ts` | Open |
-| [#051](051-redundant-ext-icons-entries.md) | Dead Extension Entries in `EXT_ICONS` Superseded by `FILENAME_ICONS` | Technical Debt / Code Hygiene | Low | `icons.ts` | Open |
 
 ---
 
@@ -76,6 +72,10 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | [#045](045-extof-dotfile-returns-name-as-extension.md) | `extOf` Returns Dotfile Name as Extension | Enhancement | Low | Updated `extOf` in `viewer.ts` to return `""` when `dot <= 0`. Added explicit `FILENAME_ICONS` map in `icons.ts` for exact dotfile and filename matching. | **Resolved** |
 | [#046](046-walktree-reverse-sibling-order.md) | `walkTree` Visits Siblings in Reverse Order | Enhancement / Technical Debt | Low | Reversed push order in `walkTree` (`node.children.length - 1` down to 0) so LIFO stack pops visit siblings in forward DFS order. | **Resolved** |
 | [#047](047-git-binary-negative-cache-permanent.md) | `gitBinaryPresent` Negative Cache Is Permanent for Non-ENOENT Failures | Enhancement / Robustness | Low | Introduced `{ status: "missing" }` on spawn `ENOENT`; `isGitAvailable` caches negative result only for genuine missing binary, leaving transient errors uncached. | **Resolved** |
+| [#048](048-reload-open-file-crashes-commit-diff.md) | `reloadOpenFile` Routes Commit Diffs to Filesystem Loader, Crashing the Viewer | Bug | High | Added `keepScroll` parameter to `openCommit`; `reloadOpenFile` routes diff reloads to `openCommit(hash, true)` when `loadCommit` is configured instead of `openRelPath`. | **Resolved** |
+| [#049](049-copy-context-raw-commit-scheme.md) | `copyContext` Copies Raw `commit:<hash>` Identity String in Viewer Pane | Bug / UX Consistency | Medium | Updated `copyContext` in `navigator.ts` to extract `file.commitHash` or strip `commit:` prefix when focused on the diff viewer pane. | **Resolved** |
+| [#050](050-viewer-header-commit-transition-flicker.md) | Viewer Header Flickers Raw `commit:<hash>` Identity During Commit Transitions | Bug / UI Polish | Low | Formatted `isCommit` as `(file?.kind === "diff" && file.commitHash) || currentPath.startsWith("commit:")`, preventing colon flicker while loading. | **Resolved** |
+| [#051](051-redundant-ext-icons-entries.md) | Dead Extension Entries in `EXT_ICONS` Superseded by `FILENAME_ICONS` | Technical Debt / Code Hygiene | Low | Verified redundant entries moved to `FILENAME_ICONS` during #045 refactor; `test/icons.test.ts` covers exact dotfile mapping. | **Resolved** |
 
 ---
 
@@ -101,8 +101,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#037: `diff.ts` and `icons.ts` Missing From `package.json` `"files"` and `tsconfig.json` `"include"`](037-diff-icons-missing-from-package-files.md) *(resolved)*
 - [#038: `buildCard` Width Overflow at Narrow Panes](038-buildcard-width-overflow-narrow-panes.md) *(resolved)*
 - [#043: Commit Subject Truncated if Message Contains Unit Separator](043-commit-subject-truncation-on-unit-separator.md) *(resolved)*
-- [#048: `reloadOpenFile` Routes Commit Diffs to Filesystem Loader, Crashing the Viewer](048-reload-open-file-crashes-commit-diff.md)
-- [#050: Viewer Header Flickers Raw `commit:<hash>` Identity During Commit Transitions](050-viewer-header-commit-transition-flicker.md)
+- [#048: `reloadOpenFile` Routes Commit Diffs to Filesystem Loader, Crashing the Viewer](048-reload-open-file-crashes-commit-diff.md) *(resolved)*
+- [#050: Viewer Header Flickers Raw `commit:<hash>` Identity During Commit Transitions](050-viewer-header-commit-transition-flicker.md) *(resolved)*
 
 ### Performance & Resource Optimization
 - [#020: No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread](020-no-viewer-cache-blocking-highlight.md) *(partial — cache done)*
@@ -126,7 +126,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 ### User Experience & Keyboard Navigation
 - [#004: Ambiguous Key Hints for Search Navigation (`n`/`N`) Between Input Modes](004-search-navigation-keybindings-inconsistency.md)
 - [#044: Tree Sort Collator Lacks `numeric: true` — `file10` Sorts Before `file2`](044-collator-missing-numeric-sorting.md) *(resolved)*
-- [#049: `copyContext` Copies Raw `commit:<hash>` Identity String in Viewer Pane](049-copy-context-raw-commit-scheme.md)
+- [#049: `copyContext` Copies Raw `commit:<hash>` Identity String in Viewer Pane](049-copy-context-raw-commit-scheme.md) *(resolved)*
 
 ### Technical Debt & Code Robustness
 - [#005: Fragile Fallback Chain in Footer Hint Resolution](005-hints-lookup-fallback-chain.md)
@@ -138,7 +138,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#045: `extOf` Returns Dotfile Name as Extension](045-extof-dotfile-returns-name-as-extension.md) *(resolved)*
 - [#046: `walkTree` Visits Siblings in Reverse Order](046-walktree-reverse-sibling-order.md) *(resolved)*
 - [#047: `gitBinaryPresent` Negative Cache Is Permanent for Non-ENOENT Failures](047-git-binary-negative-cache-permanent.md) *(resolved)*
-- [#051: Dead Extension Entries in `EXT_ICONS` Superseded by `FILENAME_ICONS`](051-redundant-ext-icons-entries.md)
+- [#051: Dead Extension Entries in `EXT_ICONS` Superseded by `FILENAME_ICONS`](051-redundant-ext-icons-entries.md) *(resolved)*
 
 ---
 

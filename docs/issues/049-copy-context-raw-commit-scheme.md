@@ -1,6 +1,6 @@
 # Issue #049: `copyContext` Copies Raw `commit:<hash>` Identity String in Viewer Pane
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Bug / UX Consistency
 - **Severity**: Medium
 - **Component**: [`navigator.ts`](file:///home/jhonny/Sources/pi-navigator/navigator.ts) · [`copyContext`](file:///home/jhonny/Sources/pi-navigator/navigator.ts#L864-L882)
@@ -49,6 +49,11 @@ When copying from the viewer pane and viewing a commit diff, extract the commit 
 
 ## Acceptance Criteria
 
-- [ ] Pressing `y` while viewing a commit diff in the viewer pane copies the commit hash (e.g. `"abc1234"`), not `"commit:abc1234"`.
-- [ ] Unit test in `test/navigator.test.ts` verifies `copyContext` (`y`) behavior while focused on the viewer with an open commit diff.
-- [ ] `npm run typecheck` and `npm test` are green.
+- [x] Pressing `y` while viewing a commit diff in the viewer pane copies the commit hash (e.g. `"abc1234"`), not `"commit:abc1234"`.
+- [x] Unit test in `test/navigator.test.ts` verifies `copyContext` (`y`) behavior while focused on the viewer with an open commit diff.
+- [x] `npm run typecheck` and `npm test` are green.
+
+## Resolution
+
+- Updated `copyContext` in [`navigator.ts`](file:///home/jhonny/Sources/pi-navigator/navigator.ts) to check `this.viewFile?.kind === "diff"` and extract `this.viewFile.commitHash` (or strip leading `"commit:"`), aligning with the git panel's hash copying behavior.
+- Added unit test in `test/navigator.test.ts` ensuring clean commit hash clipboard copying from the viewer pane.

@@ -1,6 +1,6 @@
 # Issue #051: Dead Extension Entries in `EXT_ICONS` Superseded by `FILENAME_ICONS`
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Technical Debt / Code Hygiene
 - **Severity**: Low
 - **Component**: [`icons.ts`](file:///home/jhonny/Sources/pi-navigator/icons.ts) · [`EXT_ICONS`](file:///home/jhonny/Sources/pi-navigator/icons.ts#L75-L87)
@@ -43,6 +43,11 @@ Remove the unreachable keys from `EXT_ICONS` to avoid confusion and maintain a c
 
 ## Acceptance Criteria
 
-- [ ] Unreachable entries removed from `EXT_ICONS`.
-- [ ] Existing icon resolution tests in `test/icons.test.ts` continue to pass.
-- [ ] `npm run typecheck` and `npm test` are green.
+- [x] Unreachable entries removed from `EXT_ICONS`.
+- [x] Existing icon resolution tests in `test/icons.test.ts` continue to pass.
+- [x] `npm run typecheck` and `npm test` are green.
+
+## Resolution
+
+- Verified and confirmed that the redundant entries (`dockerfile`, `gitignore`, `gitattributes`, `editorconfig`, `license`) were moved out of `EXT_ICONS` and properly isolated into `FILENAME_ICONS` during the #045 refactor.
+- `test/icons.test.ts` covers exact dotfile mapping and extension fallbacks.
