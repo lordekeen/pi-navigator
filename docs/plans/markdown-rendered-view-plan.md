@@ -1,6 +1,6 @@
 # pi-navigator — Rendered Markdown View Implementation Plan
 
-**Status:** Proposed  
+**Status:** Implemented (v0.5.0 — shipped in `6d07f43`)  
 **Spec Reference:** [`docs/specs/markdown-rendered-view.md`](file:///home/jhonny/Sources/pi-navigator/docs/specs/markdown-rendered-view.md) (rev. 2)  
 **Target Version:** 0.5.0 (Minor version bump from 0.4.2)  
 **Scope:** In-viewer toggle (`m`) between syntax-highlighted source code view and rich terminal rendered Markdown view using native `@earendil-works/pi-tui` and `@earendil-works/pi-coding-agent` components, with complete search, scroll, caching, and width-safety integration.
