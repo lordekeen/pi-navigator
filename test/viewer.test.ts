@@ -362,6 +362,15 @@ describe("loadFile", () => {
     const binFile = await loadFile(binPath, "data.bin");
     expect(binFile.rawText).toBeUndefined();
   });
+
+  it("attaches rawText on extended markdown extensions (.mdx, .mkd, .mdown)", async () => {
+    for (const ext of ["mdx", "mkd", "mdown"]) {
+      const p = join(dir, `sample.${ext}`);
+      await writeFile(p, `# Heading in ${ext}\n\ncontent`);
+      const file = await loadFile(p, `sample.${ext}`);
+      expect(file.rawText).toBe(`# Heading in ${ext}\n\ncontent`);
+    }
+  });
 });
 
 describe("isMarkdownPath", () => {
@@ -370,10 +379,17 @@ describe("isMarkdownPath", () => {
     expect(isMarkdownPath("docs/spec.markdown")).toBe(true);
     expect(isMarkdownPath("NOTES.MD")).toBe(true);
     expect(isMarkdownPath("SRC.MARKDOWN")).toBe(true);
+    expect(isMarkdownPath("component.mdx")).toBe(true);
+    expect(isMarkdownPath("doc.mkd")).toBe(true);
+    expect(isMarkdownPath("guide.mdown")).toBe(true);
+    expect(isMarkdownPath("PAGE.MDX")).toBe(true);
+    expect(isMarkdownPath("PAGE.MKD")).toBe(true);
+    expect(isMarkdownPath("PAGE.MDOWN")).toBe(true);
     expect(isMarkdownPath("src/main.ts")).toBe(false);
     expect(isMarkdownPath("data.json")).toBe(false);
     expect(isMarkdownPath("plain.txt")).toBe(false);
     expect(isMarkdownPath(".md")).toBe(false);
     expect(isMarkdownPath("noext")).toBe(false);
+    expect(isMarkdownPath("archive.md5")).toBe(false);
   });
 });

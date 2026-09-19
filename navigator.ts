@@ -871,8 +871,10 @@ export class NavigatorOverlay implements Focusable {
       }
       return;
     } else if (matchesKey(data, Key.left) || data === "h") {
+      if (this.viewRenderMarkdown && this.canRenderMarkdown(this.viewFile)) return;
       this.viewHscroll = Math.max(0, this.viewHscroll - 4);
     } else if (matchesKey(data, Key.right) || data === "l") {
+      if (this.viewRenderMarkdown && this.canRenderMarkdown(this.viewFile)) return;
       this.viewHscroll += 4;
     } else {
       return;
@@ -935,7 +937,9 @@ export class NavigatorOverlay implements Focusable {
   private recomputeSearchOnLines(lines: string[]): void {
     this.searchMatches = searchLines(lines, this.searchQuery);
     this.searchMatchLines = new Set(this.searchMatches.map((m) => m.line));
-    if (this.searchMatches.length === 0) this.searchIndex = 0;
+    if (this.searchIndex >= this.searchMatches.length) {
+      this.searchIndex = Math.max(0, this.searchMatches.length - 1);
+    }
     this.searchVersion++;
     this.searchDirty = false;
   }
@@ -1435,7 +1439,6 @@ export class NavigatorOverlay implements Focusable {
     let digits = 0;
     if (useRendered && file) {
       contentW = Math.max(10, rightW - 2);
-      this.viewHscroll = 0;
     } else if (file) {
       digits = Math.max(2, String(file.lineCount ?? file.lines.length).length);
       const gutterW = digits + 1;
@@ -1444,8 +1447,8 @@ export class NavigatorOverlay implements Focusable {
       contentW = Math.max(10, rightW - 2);
     }
 
-    if (useRendered && file) {
-      const mdLines = this.getRenderedMarkdownLines(file, contentW);
+    const mdLines = useRendered && file ? this.getRenderedMarkdownLines(file, contentW) : null;
+    if (mdLines) {
       this.recomputeSearchIfNeeded(mdLines);
     } else {
       this.recomputeSearchIfNeeded();
@@ -1488,8 +1491,7 @@ export class NavigatorOverlay implements Focusable {
       rows.push(this.padTo(" " + T.warning("file changed on disk \u2014 press r to reload"), rightW));
     }
 
-    if (useRendered) {
-      const mdLines = this.getRenderedMarkdownLines(file, contentW);
+    if (useRendered && mdLines) {
 
       if (this.searchJump && this.searchMatches.length > 0) {
         const currentMatch = this.searchMatches[this.searchIndex];

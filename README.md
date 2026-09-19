@@ -2,7 +2,7 @@
 
 Read-only project file navigator for pi. Opens a centered overlay inside a running pi session with a file tree, git state, and a syntax-highlighted viewer. No file editing, no external binaries, no runtime dependencies.
 
-![status](https://img.shields.io/badge/status-v0.3.0-green)
+![status](https://img.shields.io/badge/status-v0.5.1-green)
 
 ## Install
 
@@ -81,6 +81,7 @@ Layout: files tree on the left, git panel below it, file viewer on the right, co
 | Viewer | `/` | Search (smart case, incremental) |
 | Viewer | `n` `N` | Next, previous match |
 | Viewer | `w` | Toggle word wrap |
+| Viewer | `m` | Toggle markdown rendered / code view |
 | Viewer | `h` `l` / arrows | Horizontal scroll when wrap is off |
 
 Esc precedence in one line: filter, then search, then close.

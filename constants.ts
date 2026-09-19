@@ -65,6 +65,9 @@ export const IGNORED_NAMES = new Set([
 /** Extensions routed to the image viewer tier instead of text. */
 export const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "avif"]);
 
+/** Extensions identified as Markdown files for rendered viewing. */
+export const MARKDOWN_EXTENSIONS = new Set(["md", "markdown", "mdown", "mkd", "mdx"]);
+
 // ── Git ──
 
 /** Timeout for every git invocation. */

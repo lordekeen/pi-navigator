@@ -19,6 +19,7 @@ import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import {
   BINARY_SNIFF_BYTES,
   IMAGE_EXTENSIONS,
+  MARKDOWN_EXTENSIONS,
   MAX_HIGHLIGHT_BYTES,
   MAX_HIGHLIGHT_LINES,
   MAX_LINE_COUNT_BYTES,
@@ -145,8 +146,7 @@ export function extOf(relPath: string): string {
 }
 
 export function isMarkdownPath(relPath: string): boolean {
-  const ext = extOf(relPath);
-  return ext === "md" || ext === "markdown";
+  return MARKDOWN_EXTENSIONS.has(extOf(relPath));
 }
 
 async function sniffBinary(absPath: string): Promise<boolean> {

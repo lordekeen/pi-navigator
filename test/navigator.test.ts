@@ -1176,4 +1176,108 @@ describe("markdown rendered view", () => {
     rendered = harness.overlay.render(120).join("\n");
     expect(rendered).not.toContain("/bullet");
   });
+
+  it("allows mode toggle on .mdx, .mkd, and .mdown files (#055)", async () => {
+    const mdxFile: ViewerFile = {
+      kind: "text",
+      relPath: "doc.mdx",
+      lines: ["# MDX Heading"],
+      rawText: "# MDX Heading",
+    };
+    const harness = makeHarness(24, async () => mdxFile);
+    withTree(harness, ["doc.mdx"]);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+
+    expect(harness.overlay.render(120).join("\n")).toContain("m render");
+    harness.overlay.handleInput("m");
+    expect(harness.overlay.render(120).join("\n")).toContain("m code");
+  });
+
+  it("clamps searchIndex when toggling into rendered mode produces fewer matches (#052)", async () => {
+    const fileWithFewerRenderedMatches: ViewerFile = {
+      kind: "text",
+      relPath: "test.md",
+      lines: ["item 1", "item 2", "item 3", "item 4", "item 5", "item 6"],
+      rawText: "item 1 and item 2 only",
+    };
+    const harness = makeHarness(24, async () => fileWithFewerRenderedMatches);
+    withTree(harness, ["test.md"]);
+    harness.overlay.handleInput(KEYS.enter);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    harness.overlay.handleInput("/");
+    for (const ch of "item") {
+      harness.overlay.handleInput(ch);
+    }
+    expect(harness.overlay.render(120).join("\n")).toContain("1/6 matches");
+
+    for (let i = 0; i < 5; i++) {
+      harness.overlay.handleInput(KEYS.down);
+    }
+    expect(harness.overlay.render(120).join("\n")).toContain("6/6 matches");
+
+    harness.overlay.handleInput(KEYS.enter);
+
+    // Toggle to rendered view (2 matches)
+    harness.overlay.handleInput("m");
+    harness.overlay.render(120);
+
+    // searchIndex must be clamped
+    expect((harness.overlay as any).searchIndex).toBeLessThan((harness.overlay as any).searchMatches.length);
+    expect((harness.overlay as any).buildSearchBar(120)).toContain("2/2 matches");
+    expect((harness.overlay as any).buildSearchBar(120)).not.toContain("6/2 matches");
+  });
+
+  it("guards horizontal scroll keys in rendered markdown mode (#053)", async () => {
+    const harness = makeHarness(24, async () => mdFile);
+    withTree(harness, ["README.md"]);
+    harness.overlay.handleInput(KEYS.enter);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Toggle to rendered view
+    harness.overlay.handleInput("m");
+    harness.overlay.render(120);
+
+    // After rendering, cachedLines is populated
+    expect((harness.overlay as any).cachedLines).toBeDefined();
+    expect((harness.overlay as any).viewHscroll).toBe(0);
+
+    // Pressing h, l, left, right in rendered mode are no-ops: touch() is not called and viewHscroll is untouched
+    harness.overlay.handleInput("h");
+    harness.overlay.handleInput("l");
+    harness.overlay.handleInput(KEYS.left);
+    harness.overlay.handleInput(KEYS.right);
+
+    expect((harness.overlay as any).cachedLines).toBeDefined(); // touch() was not called
+    expect((harness.overlay as any).viewHscroll).toBe(0);
+
+    // Render pass in rendered mode does not mutate viewHscroll
+    const rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).not.toContain("col ");
+
+    // In code view, horizontal scroll keys still work and call touch()
+    harness.overlay.handleInput("m");
+    harness.overlay.render(120);
+    expect((harness.overlay as any).cachedLines).toBeDefined();
+
+    harness.overlay.handleInput("l");
+    expect((harness.overlay as any).viewHscroll).toBe(4);
+    expect((harness.overlay as any).cachedLines).toBeUndefined(); // touch() was called
+  });
+
+  it("invokes getRenderedMarkdownLines at most once per render pass (#054)", async () => {
+    const harness = makeHarness(24, async () => mdFile);
+    withTree(harness, ["README.md"]);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+
+    harness.overlay.handleInput("m");
+
+    const spy = vi.spyOn(harness.overlay as any, "getRenderedMarkdownLines");
+    harness.overlay.render(120);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
 });

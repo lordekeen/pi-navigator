@@ -9,8 +9,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
 | **Pending / Open** | 1 | 0 | 0 | **1** |
-| **Resolved** | 8 | 15 | 27 | **50** |
-| **Total** | **9** | **15** | **27** | **51** |
+| **Resolved** | 8 | 16 | 31 | **55** |
+| **Total** | **9** | **16** | **31** | **56** |
 
 ---
 
@@ -26,6 +26,11 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | ID | Title | Type | Severity | Resolution Summary | Status |
 | :--- | :--- | :--- | :--- | :--- | :---: |
+| [#052](052-search-index-out-of-bounds-mode-toggle.md) | `searchIndex` Out of Bounds When Toggling Markdown Rendered Mode (`m`) | Bug / UI Consistency | Medium | Clamped `searchIndex` to `Math.max(0, searchMatches.length - 1)` in `recomputeSearchOnLines` whenever `searchIndex >= searchMatches.length`, preventing out-of-bounds counters in `buildSearchBar`. | **Resolved** |
+| [#053](053-horizontal-scroll-rendered-markdown-mutation.md) | Horizontal Scroll Keys Mutate State During Render in Rendered Mode | Bug / UI Polish | Low | Guarded `h`, `l`, `Key.left`, and `Key.right` in `handleViewerInput` when rendered markdown mode is active; removed state-mutating `this.viewHscroll = 0` from `buildRightRows`. | **Resolved** |
+| [#054](054-redundant-rendered-markdown-line-call.md) | Redundant `getRenderedMarkdownLines` Invocation in `buildRightRows` | Performance / Code Hygiene | Low | Cached `mdLines` at the start of `buildRightRows` and reused it across search recomputation and viewport rendering, calling `getRenderedMarkdownLines` at most once per pass. | **Resolved** |
+| [#055](055-markdown-extensions-whitelist.md) | `isMarkdownPath` Excludes Common Markdown Extensions (`.mdx`, `.mkd`, `.mdown`) | Enhancement | Low | Added `MARKDOWN_EXTENSIONS` set to `constants.ts` and updated `isMarkdownPath` in `viewer.ts` to include `.mdx`, `.mkd`, and `.mdown`. | **Resolved** |
+| [#056](056-readme-version-and-markdown-keys.md) | README Keybindings and Version Badge Out of Sync with v0.5.0 | Documentation | Low | Updated status badge in `README.md` to `v0.5.0` and documented `m` key in the Viewer keys table. | **Resolved** |
 | [#010](010-help-modal-bright-ellipsis-leak.md) | Help Modal Leaks a Bright Ellipsis Out of the Muted Style at Narrow Widths | Bug | Medium | `truncateToWidth` injects `\x1b[0m` resets around its ellipsis; wrapping a truncated string in `T.muted`/`T.dim` closed the style early and rendered `...` in bright default. `composeHelp` now truncates with an empty ellipsis + manual dim `…`; `padTo` and `joinLeftRight` use an empty ellipsis for a clean hard-cut. | **Resolved** |
 | [#011](011-slicestyled-quadratic-suffix-alloc.md) | `sliceStyled` Allocates a String Suffix Per Character (O(n²)) | Bug / Performance | High | Replaced the per-iteration `styled.slice(i)` + `rest.match(/^…/)` with a module-level sticky CSI regex (`/\x1b\[[0-9;?]*[ -/]*[@-~]/y`) whose `lastIndex` is set before each `exec`, scanning the full string in place. Per-line cost O(n²)→O(n); escape handling, wide-char one-cell, and reset-termination unchanged. | **Resolved** |
 | [#012](012-computerows-full-file-per-render.md) | Full-File `computeRows` Re-Derived Every Render | Enhancement / Performance | High | Added `rowsCache` keyed on `(marked ref, width, wrap, hscroll)`; vertical scrolling and cursor moves now reuse cached wrapped rows instead of re-wrapping the whole file each keystroke. `marked` itself is cached on `(viewFile, searchVersion)`. | **Resolved** |
@@ -103,6 +108,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#043: Commit Subject Truncated if Message Contains Unit Separator](043-commit-subject-truncation-on-unit-separator.md) *(resolved)*
 - [#048: `reloadOpenFile` Routes Commit Diffs to Filesystem Loader, Crashing the Viewer](048-reload-open-file-crashes-commit-diff.md) *(resolved)*
 - [#050: Viewer Header Flickers Raw `commit:<hash>` Identity During Commit Transitions](050-viewer-header-commit-transition-flicker.md) *(resolved)*
+- [#052: `searchIndex` Out of Bounds When Toggling Markdown Rendered Mode (`m`)](052-search-index-out-of-bounds-mode-toggle.md) *(resolved)*
+- [#053: Horizontal Scroll Keys Mutate State During Render in Rendered Mode](053-horizontal-scroll-rendered-markdown-mutation.md) *(resolved)*
 
 ### Performance & Resource Optimization
 - [#020: No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread](020-no-viewer-cache-blocking-highlight.md) *(partial — cache done)*
@@ -122,11 +129,13 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#006: Redundant Child Iteration in `findNode` Tree Search](006-findnode-redundant-tree-traversal.md) *(resolved)*
 - [#008: Periodic 3-Second Polling May Cause Overhead in Large Repositories](008-fs-polling-overhead.md) *(resolved)*
 - [#041: `collectFsProbe` Serializes Stat Calls](041-collectfsprobe-serial-stat-calls.md) *(resolved)*
+- [#054: Redundant `getRenderedMarkdownLines` Invocation in `buildRightRows`](054-redundant-rendered-markdown-line-call.md) *(resolved)*
 
 ### User Experience & Keyboard Navigation
 - [#004: Ambiguous Key Hints for Search Navigation (`n`/`N`) Between Input Modes](004-search-navigation-keybindings-inconsistency.md)
 - [#044: Tree Sort Collator Lacks `numeric: true` — `file10` Sorts Before `file2`](044-collator-missing-numeric-sorting.md) *(resolved)*
 - [#049: `copyContext` Copies Raw `commit:<hash>` Identity String in Viewer Pane](049-copy-context-raw-commit-scheme.md) *(resolved)*
+- [#055: `isMarkdownPath` Excludes Common Markdown Extensions (`.mdx`, `.mkd`, `.mdown`)](055-markdown-extensions-whitelist.md) *(resolved)*
 
 ### Technical Debt & Code Robustness
 - [#005: Fragile Fallback Chain in Footer Hint Resolution](005-hints-lookup-fallback-chain.md)
@@ -139,6 +148,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#046: `walkTree` Visits Siblings in Reverse Order](046-walktree-reverse-sibling-order.md) *(resolved)*
 - [#047: `gitBinaryPresent` Negative Cache Is Permanent for Non-ENOENT Failures](047-git-binary-negative-cache-permanent.md) *(resolved)*
 - [#051: Dead Extension Entries in `EXT_ICONS` Superseded by `FILENAME_ICONS`](051-redundant-ext-icons-entries.md) *(resolved)*
+- [#056: README Keybindings and Version Badge Out of Sync with v0.5.0](056-readme-version-and-markdown-keys.md) *(resolved)*
 
 ---
 
