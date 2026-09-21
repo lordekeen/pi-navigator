@@ -5,7 +5,7 @@
  * caller; the render path never blocks on git. Missing git or a missing
  * repository degrade to `available: false` plus a human readable state line.
  *
- * Parsing note: status is read as `--porcelain -uall -z` and the tracked list
+ * Parsing note: status is read as `--porcelain -unormal -z` and the tracked list
  * as `ls-files -z`, so paths arrive verbatim (no C-style quoting) and only NUL
  * separates records. In -z output a renamed or copied entry carries its source
  * path in the *following* record with the field order reversed (target first,
@@ -36,9 +36,9 @@ let gitBinaryPresent: boolean | null = null;
 
 /**
  * Result of a single git invocation. `"ok"` carries stdout; `"overflow"`
- * means the output exceeded `maxBuffer` (e.g. a monorepo with enormous
- * `status -uall`/`ls-files` output) and must be surfaced rather than silently
- * treated as empty; `"error"` is any other failure (non-zero exit, timeout,
+ * means the output exceeded `maxBuffer` (e.g. oversized `status -unormal`/
+ * `ls-files` output) and must be surfaced rather than silently treated as
+ * empty; `"error"` is any other failure (non-zero exit, timeout,
  * missing binary). (Issue #024.)
  */
 type GitResult =
@@ -274,11 +274,16 @@ export function toCwdRelative(paths: string[], prefix: string): string[] {
   return out;
 }
 
-/** Per-path status badge map; worktree codes win over index codes. */
+/**
+ * Per-path status badge map; worktree codes win over index codes. A trailing
+ * slash — the porcelain marker for an untracked directory (`?? dir/`) — is
+ * stripped so the key matches the tree node's relPath and the `??` badge lands
+ * on the directory row itself (Issue #058).
+ */
 export function gitCodeMap(state: GitState): Map<string, string> {
   const map = new Map<string, string>();
-  for (const file of state.staged) map.set(file.relPath, file.code);
-  for (const file of state.unstaged) map.set(file.relPath, file.code);
+  for (const file of state.staged) map.set(file.relPath.replace(/\/$/, ""), file.code);
+  for (const file of state.unstaged) map.set(file.relPath.replace(/\/$/, ""), file.code);
   return map;
 }
 
@@ -373,8 +378,16 @@ export async function readCommitDiff(cwd: string, shortHash: string): Promise<Co
   }
 
   body = body.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  if (body.length > MAX_HIGHLIGHT_BYTES) {
-    body = body.slice(0, MAX_HIGHLIGHT_BYTES);
+  // Byte-true cap (Issue #060 finding 5): `body.length` counts UTF-16 code
+  // units — multi-byte characters overcount the budget, and `.slice` can split
+  // a surrogate pair mid-way. Truncate to the byte budget, then step back over
+  // UTF-8 continuation bytes to a lead byte so no sequence is cut in half
+  // (same rule decodeUtf8Head applies to capped file reads).
+  if (Buffer.byteLength(body, "utf8") > MAX_HIGHLIGHT_BYTES) {
+    const bytes = Buffer.from(body, "utf8");
+    let end = MAX_HIGHLIGHT_BYTES;
+    while (end > 0 && (bytes[end] ?? 0) >= 0x80 && (bytes[end] ?? 0) < 0xc0) end -= 1;
+    body = bytes.subarray(0, end).toString("utf8");
     truncated = true;
   }
 

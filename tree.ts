@@ -30,9 +30,39 @@ export interface TreeEntry {
   symlink: boolean;
 }
 
-/** Tracked files and untracked paths as plain file entries. */
+/** Tracked files and untracked paths as tree entries. A trailing slash marks
+ * an untracked directory: `git status -unormal` reports an entirely untracked
+ * directory as a single `?? dir/` record, so the slash is authoritative —
+ * stripped here, no per-entry stat in the hot path (Issue #058). */
 export function entriesFromPaths(paths: string[]): TreeEntry[] {
-  return paths.map((relPath) => ({ relPath, isDir: false, symlink: false }));
+  return paths.map((relPath) => {
+    const isDir = relPath.endsWith("/");
+    return { relPath: isDir ? relPath.slice(0, -1) : relPath, isDir, symlink: false };
+  });
+}
+
+/**
+ * Entries for one declared directory's subtree, via the same bounded walk as
+ * collectFsEntries (depth cap, IGNORED_NAMES, symlink cycle guard). Fills the
+ * children of an untracked directory that `git status -unormal` reports as a
+ * single `?? dir/` record with no children (Issue #058). The walk starts at
+ * the directory's tree depth so the cap matches a root walk exactly; entries
+ * stay cwd-relative so the caller can merge them straight into the build.
+ */
+export async function collectDirEntries(cwd: string, relDir: string): Promise<TreeEntry[]> {
+  const segments = relDir.split("/").filter(Boolean).length;
+  if (segments === 0) return [];
+  const entries: TreeEntry[] = [];
+  const visited = new Set<string>();
+  try {
+    // Same seed as collectFsEntries: a symlink pointing back at the workspace
+    // root is refused, not re-walked.
+    visited.add(await realpath(cwd));
+  } catch {
+    // Unreachable root: the per-directory walk failures handle it.
+  }
+  await walk(join(cwd, relDir), relDir, segments - 1, entries, visited);
+  return entries;
 }
 
 /**
@@ -302,6 +332,24 @@ export function walkTree(root: FileNode, visit: (node: FileNode) => boolean | vo
 
 // ── Expansion state ──
 
+/**
+ * RelPaths of expanded untracked (`??`) directory nodes. The git-mode probe's
+ * porcelain signature cannot see entry changes inside an untracked directory
+ * (`git status -unormal` reports it as one record no matter its contents), so
+ * index.ts folds the mtimes of these subtrees into the probe via
+ * collectFsProbe — mirroring fs-mode probing for exactly those subtrees
+ * (Issue #058). Contents of collapsed directories are deliberately not
+ * probed, matching the plan.
+ */
+export function expandedUntrackedDirs(root: FileNode | null): Set<string> {
+  const dirs = new Set<string>();
+  if (!root) return dirs;
+  walkTree(root, (node) => {
+    if (node.isDir && node.expanded && node.gitCode === "??" && node.relPath) dirs.add(node.relPath);
+  });
+  return dirs;
+}
+
 export function collectExpanded(root: FileNode | null): Set<string> {
   const expanded = new Set<string>();
   if (!root) return expanded;
@@ -390,11 +438,15 @@ export function filterRows(root: FileNode, query: string, showHidden: boolean): 
 
   const walk = (parent: FileNode) => {
     for (const child of parent.children) {
+      // Mirror flattenVisible exactly: with showHidden off, a hidden node is
+      // skipped outright — including a hidden DIRECTORY, so files under
+      // `.github/` never surface through filtering either (Issue #060
+      // finding 3). A hidden file matching the query stays hidden too.
+      if (!showHidden && child.hidden) continue;
       if (child.isDir) {
         walk(child);
         continue;
       }
-      if (!showHidden && child.hidden) continue;
       if (!child.lowerRelPath.includes(q)) continue;
       matches.push({
         kind: "match",

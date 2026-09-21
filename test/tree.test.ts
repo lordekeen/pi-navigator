@@ -12,9 +12,12 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { MAX_TREE_DEPTH } from "../constants";
+import { gitCodeMap, parsePorcelain } from "../git";
+import type { GitState } from "../types";
 import {
   applyGitCodes,
   buildTree,
+  collectDirEntries,
   collectExpanded,
   collectFsEntries,
   collectFsProbe,
@@ -317,6 +320,121 @@ describe("reapplyExpansion", () => {
   });
 });
 
+// ── Untracked directory entries (Issue #058) ──
+
+describe("entriesFromPaths untracked directories (Issue #058)", () => {
+  it("derives isDir from a trailing slash and strips it", () => {
+    expect(entriesFromPaths(["brandnew/", "tracked.ts"])).toEqual([
+      { relPath: "brandnew", isDir: true, symlink: false },
+      { relPath: "tracked.ts", isDir: false, symlink: false },
+    ]);
+  });
+
+  it("handles a nested untracked directory path", () => {
+    expect(entriesFromPaths(["src/newdir/"])).toEqual([
+      { relPath: "src/newdir", isDir: true, symlink: false },
+    ]);
+  });
+});
+
+describe("untracked directory subtree (Issue #058)", () => {
+  it("builds a tree from real `?? dir/` porcelain output end to end", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-nav-untracked-"));
+    try {
+      await mkdir(join(dir, "brandnew/sub"), { recursive: true });
+      await writeFile(join(dir, "tracked.ts"), "t\n");
+      await writeFile(join(dir, "brandnew/a.txt"), "a\n");
+      await writeFile(join(dir, "brandnew/sub/b.txt"), "b\n");
+      // Boundedness: ignored names inside the untracked dir are skipped, and
+      // the depth cap matches the root walk (tree depth 6 listed, deeper
+      // dropped at the tree build).
+      await mkdir(join(dir, "brandnew/node_modules/pkg"), { recursive: true });
+      await writeFile(join(dir, "brandnew/node_modules/pkg/index.js"), "x\n");
+      await mkdir(join(dir, "brandnew/d1/d2/d3/d4/d5/d6"), { recursive: true });
+      await writeFile(join(dir, "brandnew/d1/d2/d3/d4/d5/d6/leaf.txt"), "deep\n");
+
+      // 1. Real porcelain output: -unormal reports the untracked dir as a
+      //    single `?? brandnew/` record with no children.
+      const porcelain = parsePorcelain("?? brandnew/\0M  tracked.ts\0", "");
+      const untracked = porcelain.unstaged.filter((f) => f.code === "??").map((f) => f.relPath);
+      const base = entriesFromPaths(Array.from(new Set(["tracked.ts", ...untracked])));
+
+      // 2. Fill the declared untracked dirs with the bounded fs walk.
+      const filled = await Promise.all(base.filter((e) => e.isDir).map((e) => collectDirEntries(dir, e.relPath)));
+      const entries = [...base, ...filled.flat()];
+
+      // 3. gitCodeMap strips the slash so the badge lands on the dir row.
+      const state: GitState = {
+        available: true,
+        branch: "main",
+        detached: false,
+        ahead: 0,
+        behind: 0,
+        unstaged: [{ relPath: "brandnew/", code: "??" }, { relPath: "tracked.ts", code: "M" }],
+        staged: [],
+        history: [],
+        refreshedAt: 0,
+      };
+      expect(gitCodeMap(state).get("brandnew")).toBe("??");
+
+      const tree = buildTree(dir, entries, gitCodeMap(state));
+      reapplyExpansion(tree, new Set(), 0); // index.ts first-build default
+
+      const brandnew = findNode(tree, "brandnew");
+      expect(brandnew?.isDir).toBe(true);
+      expect(brandnew?.gitCode).toBe("??");
+      expect(brandnew?.expanded).toBe(true); // top level expands by default
+      expect(hasChanges(brandnew!)).toBe(true); // `??` applies to the whole dir
+
+      // Children fill; expanding the dir reveals them (a.txt at depth 1 under
+      // brandnew, b.txt one level deeper once `sub` is expanded too).
+      expect(findNode(tree, "brandnew/a.txt")).toMatchObject({ isDir: false });
+      expect(findNode(tree, "brandnew/sub/b.txt")).toMatchObject({ isDir: false });
+      expect(brandnew?.children.map((c) => c.name)).toEqual(expect.arrayContaining(["a.txt", "sub"]));
+      const sub = findNode(tree, "brandnew/sub");
+      if (sub) sub.expanded = true;
+      expect(flattenVisible(tree, true).map((r) => r.node.relPath)).toContain("brandnew/a.txt");
+      expect(flattenVisible(tree, true).map((r) => r.node.relPath)).toContain("brandnew/sub/b.txt");
+
+      // Bounded: ignored names inside the untracked dir never surface, and
+      // tree depth beyond MAX_TREE_DEPTH is dropped at the build.
+      expect(findNode(tree, "brandnew/node_modules")).toBeNull();
+      expect(findNode(tree, "brandnew/d1/d2/d3/d4/d5/d6")?.isDir).toBe(true);
+      expect(findNode(tree, "brandnew/d1/d2/d3/d4/d5/d6/leaf.txt")).toBeNull();
+
+      // Tracked files still carry their own codes.
+      expect(findNode(tree, "tracked.ts")?.gitCode).toBe("M");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a symlink cycle inside an untracked dir as a leaf entry", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-nav-untracked-loop-"));
+    try {
+      await mkdir(join(dir, "brandnew"));
+      await symlink(dir, join(dir, "brandnew/loop"));
+      const entries = await collectDirEntries(dir, "brandnew");
+      expect(entries.find((e) => e.relPath === "brandnew/loop")?.isDir).toBe(true);
+      // The link's subtree is not re-walked (same visited-set guard as the root).
+      expect(entries.some((e) => e.relPath.startsWith("brandnew/loop/"))).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns nothing for a missing or empty untracked dir", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-nav-untracked-missing-"));
+    try {
+      expect(await collectDirEntries(dir, "ghost")).toEqual([]);
+      await mkdir(join(dir, "empty"));
+      expect(await collectDirEntries(dir, "empty")).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 // ── Visibility and filtering ──
 
 describe("flattenVisible", () => {
@@ -355,6 +473,25 @@ describe("filterRows", () => {
     expect(filterRows(tree, "", true)).toEqual([]);
     expect(filterRows(tree, "env", false)).toEqual([]);
     expect(filterRows(tree, "env", true).map((r) => r.node.relPath)).toEqual([".env"]);
+  });
+
+  it("keeps files under hidden directories hidden when showHidden is off (Issue #060 finding 3)", () => {
+    const tree = buildTree(CWD, entries([".github/workflows/ci.yml", "src/app.ts"]), new Map());
+    // Mirrors flattenVisible: the whole `.github` subtree stays hidden.
+    expect(filterRows(tree, "ci", false)).toEqual([]);
+    expect(filterRows(tree, "workflows", false)).toEqual([]);
+    expect(filterRows(tree, "github", false)).toEqual([]);
+    // Non-hidden matches still surface with showHidden off.
+    expect(filterRows(tree, "app", false).map((r) => r.node.relPath)).toEqual(["src/app.ts"]);
+  });
+
+  it("surfaces hidden-dir files only with showHidden on, incl. hidden files (Issue #060 finding 3)", () => {
+    const tree = buildTree(CWD, entries([".github/workflows/ci.yml", ".github/.secret", "src/app.ts"]), new Map());
+    expect(filterRows(tree, "ci", true).map((r) => r.node.relPath)).toEqual([".github/workflows/ci.yml"]);
+    // A hidden FILE matching the query stays hidden with showHidden off…
+    expect(filterRows(tree, "secret", false)).toEqual([]);
+    // …and surfaces with it on.
+    expect(filterRows(tree, "secret", true).map((r) => r.node.relPath)).toEqual([".github/.secret"]);
   });
 });
 

@@ -12,6 +12,7 @@ import { promisify } from "node:util";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { MAX_HIGHLIGHT_BYTES } from "../constants";
 import {
   detectRepo,
   gitCodeMap,
@@ -48,6 +49,16 @@ describe("parsePorcelain", () => {
       { relPath: "new.txt", code: "??" },
       { relPath: "dir/other.txt", code: "??" },
     ]);
+  });
+
+  it("keeps the trailing slash of an untracked DIRECTORY record (Issue #058)", () => {
+    // `git status --porcelain -unormal -z` collapses an entirely untracked
+    // directory into a single `?? brandnew/` record; the slash is the only
+    // dir marker and must survive parsing for entriesFromPaths to pick up.
+    const out = parsePorcelain("?? brandnew/\0", "");
+    expect(out.unstaged).toEqual([{ relPath: "brandnew/", code: "??" }]);
+    const nested = parsePorcelain("?? src/newdir/\0", "src/");
+    expect(nested.unstaged).toEqual([{ relPath: "newdir/", code: "??" }]);
   });
 
   it("consumes the trailing source record of a -z rename and keeps the target", () => {
@@ -106,6 +117,23 @@ describe("toCwdRelative / gitCodeMap / gitTreeProbe", () => {
       refreshedAt: 0,
     };
     expect(gitCodeMap(state).get("a.ts")).toBe("M");
+  });
+
+  it("strips the trailing slash of untracked dir records so the badge lands on the dir row (Issue #058)", () => {
+    const state = {
+      available: true,
+      branch: "main",
+      detached: false,
+      ahead: 0,
+      behind: 0,
+      unstaged: [{ relPath: "brandnew/", code: "??" }],
+      staged: [{ relPath: "stageddir/", code: "A" }],
+      history: [],
+      refreshedAt: 0,
+    };
+    expect(gitCodeMap(state).get("brandnew")).toBe("??");
+    expect(gitCodeMap(state).get("stageddir")).toBe("A");
+    expect(gitCodeMap(state).get("brandnew/")).toBeUndefined();
   });
 
   it("folds branch, counters and file lines into the probe signature", () => {
@@ -357,6 +385,24 @@ describe("git integration on a scratch repository", () => {
     await commit(repo, "feat\x1fwith\x1fseparator");
     const state = await readGitState(repo);
     expect(state.history[0]?.subject).toBe("feat\x1fwith\x1fseparator");
+  });
+
+  it("caps a commit diff body on BYTES, never splitting a UTF-8 character (Issue #060 finding 5)", async () => {
+    // 262145 emoji = 1,048,580 UTF-8 bytes (> the 1 MiB cap) but only 524,290
+    // UTF-16 code units — the old `.slice` kept the wrong budget (2 MiB of
+    // UTF-8) and could cut a surrogate pair. The cap must hold in bytes and
+    // the truncated body must not end on a partial sequence.
+    await writeFile(join(repo, "emoji.txt"), "😀".repeat(262145) + "\n");
+    await commit(repo, "emoji flood");
+    const state = await readGitState(repo);
+    const diff = await readCommitDiff(repo, state.history[0]!.shortHash);
+
+    expect(diff.notice).toContain("diff truncated");
+    const body = diff.lines.join("\n");
+    expect(Buffer.byteLength(body, "utf8")).toBeLessThanOrEqual(MAX_HIGHLIGHT_BYTES);
+    // No partial UTF-8 sequence survived the cut (a split sequence would
+    // decode as U+FFFD when re-encoded).
+    expect(body).not.toContain("\uFFFD");
   });
 
   it("truncates commit diff exceeding MAX_HIGHLIGHT_LINES (Issue #036)", async () => {

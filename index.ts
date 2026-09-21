@@ -50,10 +50,12 @@ import { makeNavigatorTheme } from "./theme";
 import {
   applyGitCodes,
   buildTree,
+  collectDirEntries,
   collectExpanded,
   collectFsEntries,
   collectFsProbe,
   entriesFromPaths,
+  expandedUntrackedDirs,
   reapplyExpansion,
   type TreeEntry,
 } from "./tree";
@@ -307,8 +309,14 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
           // Cheap change probe (plan section 7): the tree is only re-collected
           // when this string changes. Fs mode probes the modification times of
           // the expanded directories; git mode uses the porcelain-derived
-          // signature. No full walk and no ls-files on an idle tick.
-          const probe = git.available ? gitTreeProbe(git) : await collectFsProbe(cwd, collectExpanded(root));
+          // signature. No full walk and no ls-files on an idle tick. In git
+          // mode the mtimes of expanded UNTRACKED directories are folded in:
+          // -unormal reports each as a single `?? dir/` record no matter its
+          // contents, so the porcelain signature alone could never see an
+          // entry added inside one (Issue #058).
+          const probe = git.available
+            ? gitTreeProbe(git) + "\n" + (await collectFsProbe(cwd, expandedUntrackedDirs(root)))
+            : await collectFsProbe(cwd, collectExpanded(root));
           const treeChanged = root === null || probe !== treeProbe;
 
           if (treeChanged) {
@@ -318,7 +326,18 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
             if (git.available) {
               const tracked = toCwdRelative(await readTrackedFiles(cwd), repo.prefix);
               const untracked = git.unstaged.filter((file) => file.code === "??").map((file) => file.relPath);
-              entries = entriesFromPaths(Array.from(new Set([...tracked, ...untracked])));
+              const base = entriesFromPaths(Array.from(new Set([...tracked, ...untracked])));
+              // Issue #058: -unormal reports an untracked directory as a single
+              // `?? dir/` record (no children). Fill those subtrees with the
+              // same bounded filesystem walk the fs mode uses (depth cap,
+              // IGNORED_NAMES, cycle guard) so the directory is a real,
+              // expandable node. Keep it read-only: the `??` badge lives on the
+              // directory row itself; filled children carry no per-file codes.
+              const declaredDirs = base.filter((entry) => entry.isDir);
+              const subtreeEntries = await Promise.all(
+                declaredDirs.map((dir) => collectDirEntries(cwd, dir.relPath)),
+              );
+              entries = [...base, ...subtreeEntries.flat()];
               nextSource = "git";
             } else {
               entries = await collectFsEntries(cwd);
