@@ -68,6 +68,49 @@ export const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "b
 /** Extensions identified as Markdown files for rendered viewing. */
 export const MARKDOWN_EXTENSIONS = new Set(["md", "markdown", "mdown", "mkd", "mdx"]);
 
+// ── Settings ──
+
+/** User-level pi-navigator settings file, under the pi agent dir. */
+export const NAVIGATOR_SETTINGS_FILE = "pi-navigator.json";
+
+/** Environment override for the image rendering mode (read once in index.ts). */
+export const NAVIGATOR_IMAGES_ENV = "PI_NAV_IMAGES";
+
+// ── Chafa / image rendering ──
+
+/** pi-chafa's config file name (read-only mirror; never written here). */
+export const PI_CHAFA_CONFIG_FILE = "pi-chafa.json";
+
+/** Minimum supported chafa version; matches pi-chafa's MIN_CHAFA_VERSION. */
+export const CHAFA_MIN_VERSION = { major: 1, minor: 10 } as const;
+
+/** Below this many columns the metadata card wins over a rendered image. */
+export const IMAGE_CELLS_MIN = 16;
+
+/** Hard column cap for a chafa render, whatever the pi-chafa preference says. */
+export const IMAGE_CELLS_MAX = 100;
+
+/** Below this many rows the metadata card wins over a rendered image. */
+export const IMAGE_ROWS_MIN = 4;
+
+/** `chafa --version` probe timeout. */
+export const IMAGE_PROBE_TIMEOUT_MS = 3000;
+
+/** Lower clamp for a chafa render timeout (pi-chafa timeoutMs may be lower). */
+export const IMAGE_RENDER_TIMEOUT_MIN_MS = 500;
+
+/** Upper clamp for a chafa render timeout. */
+export const IMAGE_RENDER_TIMEOUT_MAX_MS = 60_000;
+
+/** stdout cap for one chafa render (8 MiB), matching the bounded-memory rule. */
+export const IMAGE_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
+
+/** Debounce before re-rendering an open image at a new pane geometry. */
+export const IMAGE_RESIZE_DEBOUNCE_MS = 250;
+
+/** Bounded length for a chafa failure reason shown on the fallback card. */
+export const IMAGE_ERROR_MAX_CHARS = 200;
+
 // ── Git ──
 
 /** Timeout for every git invocation. */
