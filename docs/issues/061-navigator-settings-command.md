@@ -41,7 +41,7 @@ Fields added to the versioned schema (all `live: false` — settings are read on
 ## Acceptance Criteria
 
 - [x] `/navigator` with no args opens the overlay exactly as before.
-- [x] `/navigator settings` opens a pi-tui `SettingsList` overlay; Enter/Space cycles a row and persists immediately through the atomic writer; Esc closes without writing.
+- [x] `/navigator settings` opens a pi-tui `SettingsList` **in the editor dock** (see [#062](062-settings-menu-overlay-placement.md) — the original overlay placement deviated from the pi settings-UI standard and was corrected in v0.7.1); Enter/Space cycles a row and persists immediately through the atomic writer; Esc closes without writing.
 - [x] Every registry field round-trips: menu change → file content → effective behavior on the next `/navigator` open (`icons.enabled`, `viewer.wrap`, `viewer.markdown`, `tree.showHidden`, `images.mode`).
 - [x] Env-overridden rows are annotated; `PI_NAV_ICONS` invalid values warn and fall back to the file value.
 - [x] `/navigator help` renders the qdrant-memory layout (header, `commands` section, aligned rows) as a durable transcript entry; unknown subcommands warn then show it.
@@ -52,7 +52,7 @@ Fields added to the versioned schema (all `live: false` — settings are read on
 
 ## Resolution
 
-Implemented in v0.7.0 (spec: [`docs/specs/navigator-settings-menu.md`](../specs/navigator-settings-menu.md)). `settings.ts` gained the four-section schema (`icons`/`viewer`/`tree`), the pure `applyFieldEdit`, and the five-field registry; `icons.ts` gained `parseIconMode` (with `parseEnableIcons` kept as a compatibility wrapper); new `settings_menu.ts` implements the pure builder plus the pi-tui `SettingsList` overlay with commit/revert and env-override annotations; new `help.ts` holds the qdrant-memory-parity layout. `index.ts` routes `settings`/`help`/unknown, registers the durable entry renderer, exposes argument completions, and wires env-resolved settings into the overlay; `navigator.ts` gained `initialShowHidden` / `initialWrap` / `initialRenderMarkdown` (defaults preserve prior behavior). Reference studies: pi-overseer (`src/ui.ts`, `src/config-fields.ts`) and pi-qdrant-memory (`src/handlers.ts`, `src/out.ts`). Ten suites / 346 cases green; `tsc --noEmit` clean.
+Implemented in v0.7.0 (spec: [`docs/specs/navigator-settings-menu.md`](../specs/navigator-settings-menu.md)). `settings.ts` gained the four-section schema (`icons`/`viewer`/`tree`), the pure `applyFieldEdit`, and the five-field registry; `icons.ts` gained `parseIconMode` (with `parseEnableIcons` kept as a compatibility wrapper); new `settings_menu.ts` implements the pure builder plus the pi-tui `SettingsList` menu with commit/revert and env-override annotations (originally rendered as a centered overlay — corrected to the editor-dock placement in v0.7.1, see [#062](062-settings-menu-overlay-placement.md)); new `help.ts` holds the qdrant-memory-parity layout. `index.ts` routes `settings`/`help`/unknown, registers the durable entry renderer, exposes argument completions, and wires env-resolved settings into the overlay; `navigator.ts` gained `initialShowHidden` / `initialWrap` / `initialRenderMarkdown` (defaults preserve prior behavior). Reference studies: pi-overseer (`src/ui.ts`, `src/config-fields.ts`) and pi-qdrant-memory (`src/handlers.ts`, `src/out.ts`). Ten suites / 346 cases green; `tsc --noEmit` clean.
 
 ## References
 

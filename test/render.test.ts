@@ -691,7 +691,7 @@ describe("rendered markdown width safety", () => {
     expect(lines.join("\n")).not.toMatch(/\x1b\[0m\.\.\./);
   });
 });
-describe("settings overlay render width safety (Issue #061)", () => {
+describe("settings menu render width safety (Issue #061)", () => {
   function makeSettingsHarness() {
     let component: { render(width: number): string[]; handleInput?(data: string): void; invalidate(): void } | undefined;
     let resolveReady!: () => void;
@@ -729,7 +729,7 @@ describe("settings overlay render width safety (Issue #061)", () => {
     };
   }
 
-  it("renders the settings overlay width-safely at every suite size and a narrow width", async () => {
+  it("renders the settings menu width-safely at every suite size and a narrow width", async () => {
     const sizes = [
       [120, 36],
       [100, 28],
@@ -741,7 +741,7 @@ describe("settings overlay render width safety (Issue #061)", () => {
       const harness = makeSettingsHarness();
       await harness.ready;
       const component = harness.getComponent();
-      expect(component, "settings overlay did not render").toBeDefined();
+      expect(component, "settings menu did not render").toBeDefined();
       const lines = component!.render(width);
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i] ?? "";

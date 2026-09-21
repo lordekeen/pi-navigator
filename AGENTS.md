@@ -45,7 +45,7 @@ The overlay is a pure TUI component; it never touches the filesystem or git dire
   ```bash
   npm test               # vitest run — full suite
   npx vitest run -t "CRLF"   # focus one test by name
-  // Run the whole suite (346 cases across 10 files) with `npm test`.
+  // Run the whole suite (347 cases across 10 files) with `npm test`.
   ```
 - **Before claiming work is done**, both `npm run typecheck` and `npm test` must be green. The render suite enforces width-safety at multiple terminal sizes (120×36, 100×28, 80×24, and narrow widths) — keep it that way when adding UI.
 - **Add or update tests for the code you change, even if nobody asked.** Width-safety regressions and ANSI/escape-sequence bugs are exactly the class this suite exists to catch.
@@ -67,7 +67,7 @@ The overlay is a pure TUI component; it never touches the filesystem or git dire
 | `types.ts` | Shared structural types (FileNode, GitState, ViewerFile with `kind: "diff"`, rows). |
 | `constants.ts` | All tuning constants (caps, ratios, timeouts, ignored names, image extensions). |
 | `settings.ts` | pi-navigator settings schema/normalizer/loader/writer (`~/.pi/agent/pi-navigator.json`, `PI_NAV_IMAGES` / `PI_NAV_ICONS`), the `NAVIGATOR_CONFIG_FIELDS` registry, and pure `applyFieldEdit`. |
-| `settings_menu.ts` | `/navigator settings` overlay: pure `buildSettingItems` + a thin pi-tui `SettingsList` wrapper (commit/revert, env-override annotations). No fs access; fs stays in `index.ts`/`settings.ts`. |
+| `settings_menu.ts` | `/navigator settings` editor-dock menu: pure `buildSettingItems` + a thin pi-tui `SettingsList` wrapper (commit/revert, env-override annotations). Rendered via a plain `ctx.ui.custom` (no overlay) so it docks above the message input, per the pi settings-UI standard. No fs access; fs stays in `index.ts`/`settings.ts`. |
 | `help.ts` | `/navigator help` durable entry layout: `NAVIGATOR_COMMANDS`, pure `buildHelpLines` (qdrant-memory parity). |
 | `images.ts` | pi-chafa detection, config mirror, chafa probe/render/sanitize, geometry. |
 

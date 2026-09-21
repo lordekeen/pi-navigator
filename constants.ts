@@ -76,17 +76,6 @@ export const NAVIGATOR_SETTINGS_FILE = "pi-navigator.json";
 /** Environment override for the image rendering mode (read once in index.ts). */
 export const NAVIGATOR_IMAGES_ENV = "PI_NAV_IMAGES";
 
-// ── Settings menu overlay ──
-
-/** Overlay options passed to ctx.ui.custom for the /navigator settings menu. */
-export const SETTINGS_OVERLAY_OPTIONS = {
-  width: "64%",
-  minWidth: 40,
-  maxHeight: "80%",
-  anchor: "center",
-  margin: 1,
-} as const;
-
 // ── Chafa / image rendering ──
 
 /** pi-chafa's config file name (read-only mirror; never written here). */

@@ -46,7 +46,7 @@ const KEYS = {
 } as const;
 
 /**
- * fake ctx.ui.custom: invokes the overlay factory synchronously with an
+ * fake ctx.ui.custom: invokes the menu factory synchronously with an
  * identity theme, captures the component, and resolves when done() fires.
  */
 function makeUiHarness() {
@@ -182,5 +182,37 @@ describe("settings menu integration (real SettingsList)", () => {
     await closed;
     expect(commit).not.toHaveBeenCalled();
     expect(onWarning).not.toHaveBeenCalled();
+  });
+
+  it("calls ctx.ui.custom with no options object so the menu docks above the input", async () => {
+    const calls: unknown[][] = [];
+    const theme: SettingsMenuTheme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+    const ui: SettingsMenuUi = {
+      custom: <T>(...args: unknown[]): Promise<T> => {
+        calls.push(args);
+        const factory = args[0] as (
+          tui: unknown,
+          th: SettingsMenuTheme,
+          keybindings: unknown,
+          done: (result: T) => void,
+        ) => unknown;
+        factory({}, theme, {}, () => undefined);
+        return Promise.resolve(undefined as T);
+      },
+    };
+
+    await openSettingsMenu(ui, {
+      settings: fullSettings(),
+      overrides: {},
+      commit: (next: NavigatorSettings): CommitResult => ({ ok: true, settings: next }),
+      onWarning: () => undefined,
+    });
+
+    // The pi settings-UI standard (pi's own /settings selector, pi-overseer,
+    // @aliou/pi-utils-settings) is a plain editor-dock component: passing
+    // { overlay: true, ... } would float a centered modal over the transcript.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toHaveLength(1);
+    expect(calls[0]?.[1]).toBeUndefined();
   });
 });

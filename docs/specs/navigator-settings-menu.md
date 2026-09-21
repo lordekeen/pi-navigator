@@ -144,9 +144,9 @@ export async function openSettingsMenu(ui: SettingsMenuUi, deps: SettingsMenuDep
 ```
 
 - Uses pi-tui's `SettingsList` (`new SettingsList(items, 10, theme, onChange, onCancel, { enableSearch: true })`) — pi-tui owns navigation (up/down), Enter/Space cycling, search typing, and Esc-cancel. No key handling is written by hand.
-- `ctx.ui.custom<void>((tui, theme, _keybindings, done) => component, { overlay: true, overlayOptions: SETTINGS_OVERLAY_OPTIONS })`; Esc → `onCancel` → `done()` (writes nothing).
+- `ctx.ui.custom<void>((tui, theme, _keybindings, done) => component)` with **no overlay options** — the menu docks in the editor area on/above the message textbox, the pi standard for extension settings UI (pi's own `/settings` selector replaces the editor container; `/home/jhonny/Sources/pi-overseer` `src/ui.ts` and `@aliou/pi-utils-settings` both call `ctx.ui.custom` without `overlay`). The transcript stays visible instead of being covered by a centered modal. Esc → `onCancel` → `done()` (writes nothing).
 - Guarded dynamic/shape check like the navigator overlay: `ctx.ui.custom` is assumed present in TUI mode.
-- The wrapper component (`SettingsMenuOverlay`) renders the navigator's visual language: a titled frame (`pi-navigator · settings`), the list, and a dim footer note `changes apply the next time /navigator opens`. It delegates `handleInput` to the `SettingsList`. Every line it produces itself is width-safe with `visibleWidth` / `truncateToWidth(…, "")`; the `SettingsList` truncates its own lines.
+- The wrapper component (`SettingsMenuOverlay`) renders the navigator's visual language: a titled frame (`pi-navigator · settings`), the list, and a dim footer note `changes apply the next time /navigator opens`. It delegates `handleInput` to the `SettingsList`. Every line it produces itself is width-safe with `visibleWidth` / `truncateToWidth(…, "")`; the `SettingsList` truncates its own lines. The component renders into whatever width the editor area has, so width safety is asserted the same way as the navigator overlay.
 - Theme: a `SettingsListTheme` built from the injected pi `Theme`/`makeNavigatorTheme` tokens (label accent/muted, value default/accent, description dim, cursor accent, hint dim). **No hardcoded colors.**
 - `onChange(id, rawValue)`: `applyFieldEdit(current, id, raw)`; on `!ok` → `onWarning` + restore the item's previous display value via `list.updateValue`. On ok → `commit(next)`; on `{ok:false}` → warning + restore; on success → replace `current` from the returned settings and refresh every row (`updateValue`), because normalization may canonicalize more than the edited field.
 
@@ -221,7 +221,7 @@ inside the overlay: press ? for keys, q to close     ← dim
 | `test/icons.test.ts` | `parseIconMode` truth table (enable/disable/invalid/empty); `parseEnableIcons` compatibility. |
 | `test/settings_menu.test.ts` (new) | `buildSettingItems` values + override annotations; menu integration with the real `SettingsList`: cycle persists via `commit`, failed `commit` reverts + warns, Esc closes with zero commits. |
 | `test/help.test.ts` (new) | `buildHelpLines` header/order/alignment (longest + 2)/dim row shape; `parseNavigatorArgs` routing (empty, settings, help, unknown, extra tokens, case). |
-| `test/render.test.ts` | Settings overlay renders within width at 120×36, 100×28, 80×24 and a narrow width; no width overflow, no stray escapes. |
+| `test/render.test.ts` | Settings menu renders within width at 120×36, 100×28, 80×24 and a narrow width; no width overflow, no stray escapes. |
 
 ## 9. Docs, packaging & release
 

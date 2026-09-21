@@ -1,14 +1,17 @@
 /**
- * /navigator settings — pi-tui SettingsList overlay (pi-overseer pattern).
+ * /navigator settings — pi-tui SettingsList in the editor dock (pi-overseer
+ * pattern).
  *
  * `buildSettingItems` is pure and pi-free (unit-tested directly); the TUI
  * layer lazily imports pi-tui behind a dynamic shape check and wraps its
- * `SettingsList` in a navigator-style titled frame. The module never touches
- * the filesystem (fs stays in settings.ts/index.ts) and hardcodes no colors —
- * the SettingsListTheme is built from the injected pi `Theme` tokens.
+ * `SettingsList` in a navigator-style titled frame. The menu renders as a
+ * plain (non-overlay) `ctx.ui.custom` component, so it docks in the editor
+ * area on/above the message textbox like pi's own `/settings` selector and the
+ * reference extensions — the transcript stays visible. The module never
+ * touches the filesystem (fs stays in settings.ts/index.ts) and hardcodes no
+ * colors — the SettingsListTheme is built from the injected pi `Theme` tokens.
  */
 
-import { SETTINGS_OVERLAY_OPTIONS } from "./constants";
 import { applyFieldEdit, NAVIGATOR_CONFIG_FIELDS, type NavigatorSettings } from "./settings";
 
 export interface SettingItemData {
@@ -74,7 +77,6 @@ export interface SettingsMenuTheme {
 export interface SettingsMenuUi {
   custom<T>(
     factory: (tui: unknown, theme: SettingsMenuTheme, keybindings: unknown, done: (result: T) => void) => unknown,
-    options?: { overlay?: boolean; overlayOptions?: unknown },
   ): Promise<T>;
 }
 
@@ -129,9 +131,10 @@ const MAX_VISIBLE_ROWS = 10;
  * The navigator-style wrapper: titled frame (`pi-navigator · settings`), the
  * SettingsList, and a dim footer note. Every line it produces itself is
  * width-safe (truncateToWidth with the repo's empty-ellipsis convention);
- * the SettingsList truncates its own lines.
+ * the SettingsList truncates its own lines. Rendered in the editor dock, so
+ * it fills whatever width the editor area has.
  */
-class SettingsMenuOverlay implements ComponentLike {
+class SettingsMenuFrame implements ComponentLike {
   private readonly list: SettingsListLike;
   private readonly title: string;
   private readonly footer: string;
@@ -164,11 +167,11 @@ class SettingsMenuOverlay implements ComponentLike {
 }
 
 /**
- * Open the settings menu overlay. Esc → the SettingsList's onCancel → done()
- * and nothing is written. Every edit goes through `applyFieldEdit` then
- * `commit`; failures warn and revert the row display, successes adopt the
- * committed settings and refresh every row (normalization may canonicalize
- * more than the edited field).
+ * Open the settings menu in the editor dock. Esc → the SettingsList's
+ * onCancel → done() and nothing is written. Every edit goes through
+ * `applyFieldEdit` then `commit`; failures warn and revert the row display,
+ * successes adopt the committed settings and refresh every row (normalization
+ * may canonicalize more than the edited field).
  */
 export async function openSettingsMenu(ui: SettingsMenuUi, deps: SettingsMenuDeps): Promise<void> {
   let pitui: PituiModule;
@@ -239,8 +242,7 @@ export async function openSettingsMenu(ui: SettingsMenuUi, deps: SettingsMenuDep
       const settingsList = new SettingsList(items, MAX_VISIBLE_ROWS, settingsTheme, onChange, () => done(), {
         enableSearch: true,
       });
-      return new SettingsMenuOverlay(settingsList, theme, truncate);
+      return new SettingsMenuFrame(settingsList, theme, truncate);
     },
-    { overlay: true, overlayOptions: SETTINGS_OVERLAY_OPTIONS },
   );
 }

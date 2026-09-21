@@ -2,7 +2,7 @@
 
 Read-only project file navigator for pi. Opens a centered overlay inside a running pi session with a file tree, git state, and a syntax-highlighted viewer. No file editing, no runtime dependencies; images optionally render through a user-installed `chafa` (see [Images](#images-optional)).
 
-![status](https://img.shields.io/badge/status-v0.7.0-green)
+![status](https://img.shields.io/badge/status-v0.7.1-green)
 
 ## Install
 
@@ -149,7 +149,7 @@ The feature is documented in [docs/specs/chafa-image-rendering.md](docs/specs/ch
 
 ## Development
 
-Files: `index.ts` (entry, command routing, async data ownership), `navigator.ts` (overlay component, keymap, rendering), `tree.ts` (tree model, fs walk), `git.ts` (async git access and porcelain parsing), `viewer.ts` (load caps, highlighting, search, display rows), `theme.ts` (token mapping), `types.ts`, `constants.ts`, `settings.ts` (pi-navigator settings terrain), `settings_menu.ts` (`/navigator settings` overlay), `help.ts` (`/navigator help` entry layout), `images.ts` (chafa detection, probe, sanitize, geometry).
+Files: `index.ts` (entry, command routing, async data ownership), `navigator.ts` (overlay component, keymap, rendering), `tree.ts` (tree model, fs walk), `git.ts` (async git access and porcelain parsing), `viewer.ts` (load caps, highlighting, search, display rows), `theme.ts` (token mapping), `types.ts`, `constants.ts`, `settings.ts` (pi-navigator settings terrain), `settings_menu.ts` (`/navigator settings` menu, rendered in the editor area above the input), `help.ts` (`/navigator help` entry layout), `images.ts` (chafa detection, probe, sanitize, geometry).
 
 Planning documents live in `docs/plans/`: `ui-standards-report.md` (platform and reference findings), `pi-navigator-implementation-plan.md` (the original plan — now superseded; see `docs/issues/issues_index.md` for current state), and `qa-evidence.md`. Issues are tracked in `docs/issues/`. The throwaway visual mock is `mockups/navigator.html` — open it in a browser and drive it with the same keymap.
 
@@ -164,7 +164,7 @@ runtime dependencies, ever — `node_modules` is dev-only.
   than the plan's original "NodeNext" because pi loads extensions through jiti,
   which resolves the code's intentionally extensionless relative imports;
   NodeNext would demand `.js` extensions the runtime does not need.
-- `npm test` — ten vitest suites (346 cases): porcelain `-z` parsing plus a
+- `npm test` — ten vitest suites (347 cases): porcelain `-z` parsing plus a
   real-git scratch-repo integration pass, tree building/fs-walk fixtures
   (ignores, dot entries, symlink cycles), viewer caps and UTF-8 head decoding,
   the keymap reducer (escape precedence, focus cycling, copy), settings
@@ -172,7 +172,7 @@ runtime dependencies, ever — `node_modules` is dev-only.
   `applyFieldEdit`), the settings-menu builder and real-SettingsList
   integration, the help layout + command-routing suites, pi-chafa
   detection/config/probe/sanitizer/geometry, and render width-safety at
-  120x36, 100x28 and 80x24 — plus 60/50-column, settings-overlay and chafa
+  120x36, 100x28 and 80x24 — plus 60/50-column, settings-menu and chafa
   payload cases — including help/filter/search modes and the compact notice.
 
 Test runs must stay green with `typecheck` and `test`; the suites have already

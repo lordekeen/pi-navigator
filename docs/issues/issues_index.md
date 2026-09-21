@@ -8,9 +8,9 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
-| **Pending / Open** | 1 | 0 | 0 | **1** |
-| **Resolved** | 10 | 18 | 32 | **60** |
-| **Total** | **11** | **18** | **32** | **61** |
+| **Pending / Open** | 1 | 1 | 1 | **3** |
+| **Resolved** | 10 | 19 | 32 | **61** |
+| **Total** | **11** | **20** | **33** | **64** |
 
 ---
 
@@ -19,9 +19,12 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | ID | Title | Type | Severity | Component | Status |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | [#020](020-no-viewer-cache-blocking-highlight.md) | No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread | Bug / Performance | High | `viewer.ts` | Open (partial — cache done; event-loop yielding deferred: blocked by pi's bundled-runtime virtual-module boundary, needs a pi-side API) |
+| [#063](063-review-followups.md) | Code-Health Review Follow-Ups (Duplication, Seams, Test Gaps) | Technical Debt | Low | `icons.ts` / `settings.ts` / `index.ts` / `navigator.ts` / `help.ts` / tests | Open — from the review run with #062: duplicated env truth table + notify-once block, 7 hard-cut truncation sites, registry-vs-manual settings normalization (5 touch points per new field), 3 hand-maintained help tables, no direct `diff.ts`/`theme.ts` suite |
+| [#064](064-navigator-decomposition.md) | `navigator.ts` Holds Six Responsibilities; Tree-Cache Counters Unsynchronized by Convention | Technical Debt / Architecture | Medium | `navigator.ts` | Open — `NavigatorOverlay` is 2,060 lines / 122 private fields / 72 methods covering files, git, viewer, help, frame geometry and input routing; `filesRowsCache` validity rests on a manually-bumped `treeVersion` (4 raw `++` sites, 24 `touch()` calls) |
 | [#058](058-untracked-dirs-unreachable.md) | Untracked Directories Are Dead-End Leaves (Unreachable in Git Mode) | Bug | High | `git.ts` / `index.ts` / `tree.ts` | Resolved |
 | [#059](059-nowrap-wide-char-hscroll-lock.md) | Nowrap Viewer Hscroll Locked at 0 on Wide-Char Lines | Bug | High | `viewer.ts` / `navigator.ts` | Resolved |
 | [#060](060-review-minor-fixes.md) | Minor Findings Batch from Full Debugger Code Review | Bug / Technical Debt | Low | `navigator.ts` / `viewer.ts` / `tree.ts` / `git.ts` | Resolved |
+| [#062](062-settings-menu-overlay-placement.md) | Settings Menu Opened as a Centered Overlay Instead of Docking Above the Message Input | Bug / UI Consistency | Medium | `settings_menu.ts` / `constants.ts` | Resolved |
 
 ---
 
@@ -38,7 +41,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | [#056](056-readme-version-and-markdown-keys.md) | README Keybindings and Version Badge Out of Sync with v0.5.0 | Documentation | Low | Updated status badge in `README.md` to `v0.5.0` and documented `m` key in the Viewer keys table. | **Resolved** |
 | [#059](059-nowrap-wide-char-hscroll-lock.md) | Nowrap Viewer Hscroll Locked at 0 on Wide-Char Lines (Line Tail Unreachable) | Bug | High | `maxLineWidth`/`sliceStyled` now count terminal cells (pi-tui `visibleWidth`): a 120-cell CJK line yields `maxH > 0` and `h`/`l` reach the tail; narrow-char behavior byte-identical, wrap mode unaffected. Width-safety tests added. version 0.6.1. | **Resolved** |
 | [#060](060-review-minor-fixes.md) | Minor Findings Batch from Full Debugger Code Review | Bug / Technical Debt | Low | Fixed all eight: `shortPath` home `/`-boundary, haystack fold-drift offset mapping (`foldMaps`), `filterRows` hidden-dir ancestry, `-unormal` docstring, byte-true `readCommitDiff` cap (no surrogate split), icon width accounting (emission-only `iconW`), icons hint moved out of `render()` into `setTree`, AGENTS.md counts (8 suites / 302 cases). version 0.6.1. | **Resolved** |
-| [#061](061-navigator-settings-command.md) | Slash-Command Settings Menu and Help (`/navigator settings` / `/navigator help`) | Feature | Medium | `/navigator settings` opens a pi-tui `SettingsList` overlay over the expanded four-section schema (images/icons/viewer/tree; atomic write, Esc cancels, env-shadowed rows annotated); `/navigator help` appends a durable qdrant-memory-style entry via `appendEntry`/`registerEntryRenderer`; unknown subcommands warn then show it; argument completions added. New `settings_menu.ts` + `help.ts`, ctor initial-state options, `PI_NAV_ICONS` enable/disable/invalid truth table, ten suites / 346 cases. version 0.7.0. | **Resolved** |
+| [#062](062-settings-menu-overlay-placement.md) | Settings Menu Opened as a Centered Overlay Instead of Docking Above the Message Input | Bug / UI Consistency | Medium | `settings_menu.ts` no longer passes `{ overlay: true, anchor: "center" }` to `ctx.ui.custom`, so the menu renders in the editor dock above the input (pi's own `/settings` selector, pi-overseer, `@aliou/pi-utils-settings`); dead `SETTINGS_OVERLAY_OPTIONS` deleted, `SettingsMenuUi.custom` narrowed, spec §4.2/§8 amended, one-argument contract test added. version 0.7.1. | **Resolved** |
+| [#061](061-navigator-settings-command.md) | Slash-Command Settings Menu and Help (`/navigator settings` / `/navigator help`) | Feature | Medium | `/navigator settings` opens a pi-tui `SettingsList` menu over the expanded four-section schema (images/icons/viewer/tree; atomic write, Esc cancels, env-shadowed rows annotated; rendered in the editor dock per #062); `/navigator help` appends a durable qdrant-memory-style entry via `appendEntry`/`registerEntryRenderer`; unknown subcommands warn then show it; argument completions added. New `settings_menu.ts` + `help.ts`, ctor initial-state options, `PI_NAV_ICONS` enable/disable/invalid truth table, ten suites / 347 cases. version 0.7.0. | **Resolved** |
 | [#010](010-help-modal-bright-ellipsis-leak.md) | Help Modal Leaks a Bright Ellipsis Out of the Muted Style at Narrow Widths | Bug | Medium | `truncateToWidth` injects `\x1b[0m` resets around its ellipsis; wrapping a truncated string in `T.muted`/`T.dim` closed the style early and rendered `...` in bright default. `composeHelp` now truncates with an empty ellipsis + manual dim `…`; `padTo` and `joinLeftRight` use an empty ellipsis for a clean hard-cut. | **Resolved** |
 | [#011](011-slicestyled-quadratic-suffix-alloc.md) | `sliceStyled` Allocates a String Suffix Per Character (O(n²)) | Bug / Performance | High | Replaced the per-iteration `styled.slice(i)` + `rest.match(/^…/)` with a module-level sticky CSI regex (`/\x1b\[[0-9;?]*[ -/]*[@-~]/y`) whose `lastIndex` is set before each `exec`, scanning the full string in place. Per-line cost O(n²)→O(n); escape handling, wide-char one-cell, and reset-termination unchanged. | **Resolved** |
 | [#012](012-computerows-full-file-per-render.md) | Full-File `computeRows` Re-Derived Every Render | Enhancement / Performance | High | Added `rowsCache` keyed on `(marked ref, width, wrap, hscroll)`; vertical scrolling and cursor moves now reuse cached wrapped rows instead of re-wrapping the whole file each keystroke. `marked` itself is cached on `(viewFile, searchVersion)`. | **Resolved** |
