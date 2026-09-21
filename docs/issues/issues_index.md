@@ -9,8 +9,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
 | **Pending / Open** | 1 | 0 | 0 | **1** |
-| **Resolved** | 8 | 17 | 31 | **56** |
-| **Total** | **9** | **17** | **31** | **57** |
+| **Resolved** | 10 | 17 | 32 | **59** |
+| **Total** | **11** | **17** | **32** | **60** |
 
 ---
 
@@ -19,6 +19,9 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | ID | Title | Type | Severity | Component | Status |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | [#020](020-no-viewer-cache-blocking-highlight.md) | No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread | Bug / Performance | High | `viewer.ts` | Open (partial — cache done; event-loop yielding deferred: blocked by pi's bundled-runtime virtual-module boundary, needs a pi-side API) |
+| [#058](058-untracked-dirs-unreachable.md) | Untracked Directories Are Dead-End Leaves (Unreachable in Git Mode) | Bug | High | `git.ts` / `index.ts` / `tree.ts` | Resolved |
+| [#059](059-nowrap-wide-char-hscroll-lock.md) | Nowrap Viewer Hscroll Locked at 0 on Wide-Char Lines | Bug | High | `viewer.ts` / `navigator.ts` | Resolved |
+| [#060](060-review-minor-fixes.md) | Minor Findings Batch from Full Debugger Code Review | Bug / Technical Debt | Low | `navigator.ts` / `viewer.ts` / `tree.ts` / `git.ts` | Resolved |
 
 ---
 
@@ -27,11 +30,14 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | ID | Title | Type | Severity | Resolution Summary | Status |
 | :--- | :--- | :--- | :--- | :--- | :---: |
 | [#057](057-chafa-image-rendering.md) | Optional Chafa Image Rendering (pi-chafa delegation) | Feature | Medium | Opt-in chafa symbol-art rendering in the viewer via pi-chafa delegation (`images.mode: "chafa"` / `PI_NAV_IMAGES`), pane-bounded geometry, strict SGR-only sanitizer, `i` toggle, resize reflow, deferred async support, full degradation to the metadata card — see `docs/specs/chafa-image-rendering.md`. version 0.6.0. | **Resolved** |
+| [#058](058-untracked-dirs-unreachable.md) | Untracked Directories Are Dead-End Leaves (Unreachable in Git Mode) | Bug | High | `entriesFromPaths` derives `isDir` from the porcelain trailing `/` and strips it; new bounded `collectDirEntries` walk fills untracked-dir subtrees (depth cap, ignored names, cycle guard); `gitCodeMap` normalizes dir keys so the `??` badge lands on the dir row; the idle probe folds mtimes of expanded untracked dirs. End-to-end seam test from real porcelain output. version 0.6.1. | **Resolved** |
 | [#052](052-search-index-out-of-bounds-mode-toggle.md) | `searchIndex` Out of Bounds When Toggling Markdown Rendered Mode (`m`) | Bug / UI Consistency | Medium | Clamped `searchIndex` to `Math.max(0, searchMatches.length - 1)` in `recomputeSearchOnLines` whenever `searchIndex >= searchMatches.length`, preventing out-of-bounds counters in `buildSearchBar`. | **Resolved** |
 | [#053](053-horizontal-scroll-rendered-markdown-mutation.md) | Horizontal Scroll Keys Mutate State During Render in Rendered Mode | Bug / UI Polish | Low | Guarded `h`, `l`, `Key.left`, and `Key.right` in `handleViewerInput` when rendered markdown mode is active; removed state-mutating `this.viewHscroll = 0` from `buildRightRows`. | **Resolved** |
 | [#054](054-redundant-rendered-markdown-line-call.md) | Redundant `getRenderedMarkdownLines` Invocation in `buildRightRows` | Performance / Code Hygiene | Low | Cached `mdLines` at the start of `buildRightRows` and reused it across search recomputation and viewport rendering, calling `getRenderedMarkdownLines` at most once per pass. | **Resolved** |
 | [#055](055-markdown-extensions-whitelist.md) | `isMarkdownPath` Excludes Common Markdown Extensions (`.mdx`, `.mkd`, `.mdown`) | Enhancement | Low | Added `MARKDOWN_EXTENSIONS` set to `constants.ts` and updated `isMarkdownPath` in `viewer.ts` to include `.mdx`, `.mkd`, and `.mdown`. | **Resolved** |
 | [#056](056-readme-version-and-markdown-keys.md) | README Keybindings and Version Badge Out of Sync with v0.5.0 | Documentation | Low | Updated status badge in `README.md` to `v0.5.0` and documented `m` key in the Viewer keys table. | **Resolved** |
+| [#059](059-nowrap-wide-char-hscroll-lock.md) | Nowrap Viewer Hscroll Locked at 0 on Wide-Char Lines (Line Tail Unreachable) | Bug | High | `maxLineWidth`/`sliceStyled` now count terminal cells (pi-tui `visibleWidth`): a 120-cell CJK line yields `maxH > 0` and `h`/`l` reach the tail; narrow-char behavior byte-identical, wrap mode unaffected. Width-safety tests added. version 0.6.1. | **Resolved** |
+| [#060](060-review-minor-fixes.md) | Minor Findings Batch from Full Debugger Code Review | Bug / Technical Debt | Low | Fixed all eight: `shortPath` home `/`-boundary, haystack fold-drift offset mapping (`foldMaps`), `filterRows` hidden-dir ancestry, `-unormal` docstring, byte-true `readCommitDiff` cap (no surrogate split), icon width accounting (emission-only `iconW`), icons hint moved out of `render()` into `setTree`, AGENTS.md counts (8 suites / 302 cases). version 0.6.1. | **Resolved** |
 | [#010](010-help-modal-bright-ellipsis-leak.md) | Help Modal Leaks a Bright Ellipsis Out of the Muted Style at Narrow Widths | Bug | Medium | `truncateToWidth` injects `\x1b[0m` resets around its ellipsis; wrapping a truncated string in `T.muted`/`T.dim` closed the style early and rendered `...` in bright default. `composeHelp` now truncates with an empty ellipsis + manual dim `…`; `padTo` and `joinLeftRight` use an empty ellipsis for a clean hard-cut. | **Resolved** |
 | [#011](011-slicestyled-quadratic-suffix-alloc.md) | `sliceStyled` Allocates a String Suffix Per Character (O(n²)) | Bug / Performance | High | Replaced the per-iteration `styled.slice(i)` + `rest.match(/^…/)` with a module-level sticky CSI regex (`/\x1b\[[0-9;?]*[ -/]*[@-~]/y`) whose `lastIndex` is set before each `exec`, scanning the full string in place. Per-line cost O(n²)→O(n); escape handling, wide-char one-cell, and reset-termination unchanged. | **Resolved** |
 | [#012](012-computerows-full-file-per-render.md) | Full-File `computeRows` Re-Derived Every Render | Enhancement / Performance | High | Added `rowsCache` keyed on `(marked ref, width, wrap, hscroll)`; vertical scrolling and cursor moves now reuse cached wrapped rows instead of re-wrapping the whole file each keystroke. `marked` itself is cached on `(viewFile, searchVersion)`. | **Resolved** |
@@ -112,6 +118,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#052: `searchIndex` Out of Bounds When Toggling Markdown Rendered Mode (`m`)](052-search-index-out-of-bounds-mode-toggle.md) *(resolved)*
 - [#053: Horizontal Scroll Keys Mutate State During Render in Rendered Mode](053-horizontal-scroll-rendered-markdown-mutation.md) *(resolved)*
 - [#057: Optional Chafa Image Rendering (pi-chafa delegation)](057-chafa-image-rendering.md) *(resolved)*
+- [#058: Untracked Directories Are Dead-End Leaves (Unreachable in Git Mode)](058-untracked-dirs-unreachable.md) *(resolved)*
+- [#059: Nowrap Viewer Hscroll Locked at 0 on Wide-Char Lines](059-nowrap-wide-char-hscroll-lock.md) *(resolved)*
 
 ### Performance & Resource Optimization
 - [#020: No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread](020-no-viewer-cache-blocking-highlight.md) *(partial — cache done)*
@@ -150,6 +158,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#046: `walkTree` Visits Siblings in Reverse Order](046-walktree-reverse-sibling-order.md) *(resolved)*
 - [#047: `gitBinaryPresent` Negative Cache Is Permanent for Non-ENOENT Failures](047-git-binary-negative-cache-permanent.md) *(resolved)*
 - [#051: Dead Extension Entries in `EXT_ICONS` Superseded by `FILENAME_ICONS`](051-redundant-ext-icons-entries.md) *(resolved)*
+- [#060: Minor Findings Batch from Full Debugger Code Review](060-review-minor-fixes.md) *(resolved)*
 - [#056: README Keybindings and Version Badge Out of Sync with v0.5.0](056-readme-version-and-markdown-keys.md) *(resolved)*
 
 ---
