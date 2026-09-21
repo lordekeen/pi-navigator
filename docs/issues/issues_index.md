@@ -9,8 +9,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
 | **Pending / Open** | 1 | 0 | 0 | **1** |
-| **Resolved** | 10 | 17 | 32 | **59** |
-| **Total** | **11** | **17** | **32** | **60** |
+| **Resolved** | 10 | 18 | 32 | **60** |
+| **Total** | **11** | **18** | **32** | **61** |
 
 ---
 
@@ -38,6 +38,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | [#056](056-readme-version-and-markdown-keys.md) | README Keybindings and Version Badge Out of Sync with v0.5.0 | Documentation | Low | Updated status badge in `README.md` to `v0.5.0` and documented `m` key in the Viewer keys table. | **Resolved** |
 | [#059](059-nowrap-wide-char-hscroll-lock.md) | Nowrap Viewer Hscroll Locked at 0 on Wide-Char Lines (Line Tail Unreachable) | Bug | High | `maxLineWidth`/`sliceStyled` now count terminal cells (pi-tui `visibleWidth`): a 120-cell CJK line yields `maxH > 0` and `h`/`l` reach the tail; narrow-char behavior byte-identical, wrap mode unaffected. Width-safety tests added. version 0.6.1. | **Resolved** |
 | [#060](060-review-minor-fixes.md) | Minor Findings Batch from Full Debugger Code Review | Bug / Technical Debt | Low | Fixed all eight: `shortPath` home `/`-boundary, haystack fold-drift offset mapping (`foldMaps`), `filterRows` hidden-dir ancestry, `-unormal` docstring, byte-true `readCommitDiff` cap (no surrogate split), icon width accounting (emission-only `iconW`), icons hint moved out of `render()` into `setTree`, AGENTS.md counts (8 suites / 302 cases). version 0.6.1. | **Resolved** |
+| [#061](061-navigator-settings-command.md) | Slash-Command Settings Menu and Help (`/navigator settings` / `/navigator help`) | Feature | Medium | `/navigator settings` opens a pi-tui `SettingsList` overlay over the expanded four-section schema (images/icons/viewer/tree; atomic write, Esc cancels, env-shadowed rows annotated); `/navigator help` appends a durable qdrant-memory-style entry via `appendEntry`/`registerEntryRenderer`; unknown subcommands warn then show it; argument completions added. New `settings_menu.ts` + `help.ts`, ctor initial-state options, `PI_NAV_ICONS` enable/disable/invalid truth table, ten suites / 346 cases. version 0.7.0. | **Resolved** |
 | [#010](010-help-modal-bright-ellipsis-leak.md) | Help Modal Leaks a Bright Ellipsis Out of the Muted Style at Narrow Widths | Bug | Medium | `truncateToWidth` injects `\x1b[0m` resets around its ellipsis; wrapping a truncated string in `T.muted`/`T.dim` closed the style early and rendered `...` in bright default. `composeHelp` now truncates with an empty ellipsis + manual dim `…`; `padTo` and `joinLeftRight` use an empty ellipsis for a clean hard-cut. | **Resolved** |
 | [#011](011-slicestyled-quadratic-suffix-alloc.md) | `sliceStyled` Allocates a String Suffix Per Character (O(n²)) | Bug / Performance | High | Replaced the per-iteration `styled.slice(i)` + `rest.match(/^…/)` with a module-level sticky CSI regex (`/\x1b\[[0-9;?]*[ -/]*[@-~]/y`) whose `lastIndex` is set before each `exec`, scanning the full string in place. Per-line cost O(n²)→O(n); escape handling, wide-char one-cell, and reset-termination unchanged. | **Resolved** |
 | [#012](012-computerows-full-file-per-render.md) | Full-File `computeRows` Re-Derived Every Render | Enhancement / Performance | High | Added `rowsCache` keyed on `(marked ref, width, wrap, hscroll)`; vertical scrolling and cursor moves now reuse cached wrapped rows instead of re-wrapping the whole file each keystroke. `marked` itself is cached on `(viewFile, searchVersion)`. | **Resolved** |

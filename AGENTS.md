@@ -41,11 +41,11 @@ The overlay is a pure TUI component; it never touches the filesystem or git dire
   ```bash
   npm run typecheck      # tsc --noEmit, strict
   ```
-- **Tests:** Vitest, eight suites (`viewer`, `tree`, `git`, `navigator`, `render`, `icons`, `settings`, `images`).
+- **Tests:** Vitest, ten suites (`viewer`, `tree`, `git`, `navigator`, `render`, `icons`, `settings`, `settings_menu`, `help`, `images`).
   ```bash
   npm test               # vitest run — full suite
   npx vitest run -t "CRLF"   # focus one test by name
-  // Run the whole suite (302 cases across 8 files) with `npm test`.
+  // Run the whole suite (346 cases across 10 files) with `npm test`.
   ```
 - **Before claiming work is done**, both `npm run typecheck` and `npm test` must be green. The render suite enforces width-safety at multiple terminal sizes (120×36, 100×28, 80×24, and narrow widths) — keep it that way when adding UI.
 - **Add or update tests for the code you change, even if nobody asked.** Width-safety regressions and ANSI/escape-sequence bugs are exactly the class this suite exists to catch.
@@ -56,20 +56,22 @@ The overlay is a pure TUI component; it never touches the filesystem or git dire
 
 | File | Owns |
 |---|---|
-| `index.ts` | Extension entry; registers `/navigator`; owns all async work (git, tree collection, file stat) and pushes results into the overlay via setters. |
+| `index.ts` | Extension entry; registers `/navigator` (subcommands `settings` / `help`, argument completions, the help entry renderer); owns all async work (git, tree collection, file stat) and pushes results into the overlay via setters. |
 | `navigator.ts` | `NavigatorOverlay` — the pure TUI component: frame, files pane, git panel, viewer pane, footer, help modal. UI state only; no fs/git. |
 | `tree.ts` | Tree building from entries, cursor movement, filter, flatten, expansion memory. |
 | `git.ts` | git binary detection, `readGitState` (porcelain), history, `readCommitDiff` (v3 commit-diff), tracked-file listing, availability cache. |
 | `viewer.ts` | `loadFile` pipeline: stat, binary sniff, image tier, size caps, tab expansion, CR normalization, highlighting, search, display rows. |
 | `diff.ts` | v3 diff-line prefix styler (`styleDiffLines`) — theme-driven `+`/`-`/`@@`/meta coloring; runs in the loader, git.ts stays theme-free. |
-| `icons.ts` | Nerd Font glyph map + `parseEnableIcons`; the icon column is env-gated (`PI_NAV_ICONS`) and never auto-detected. |
+| `icons.ts` | Nerd Font glyph map + `parseIconMode` (`parseEnableIcons` is its compatibility wrapper); icons are explicitly opt-in via `icons.enabled` or `PI_NAV_ICONS` (env wins) and never auto-detected. |
 | `theme.ts` | `makeNavigatorTheme` — maps semantic tokens (accent/muted/dim/…) onto pi `Theme` tokens. No hardcoded colors. |
 | `types.ts` | Shared structural types (FileNode, GitState, ViewerFile with `kind: "diff"`, rows). |
 | `constants.ts` | All tuning constants (caps, ratios, timeouts, ignored names, image extensions). |
-| `settings.ts` | pi-navigator settings schema/normalizer/loader/writer (`~/.pi/agent/pi-navigator.json`, `PI_NAV_IMAGES`). |
+| `settings.ts` | pi-navigator settings schema/normalizer/loader/writer (`~/.pi/agent/pi-navigator.json`, `PI_NAV_IMAGES` / `PI_NAV_ICONS`), the `NAVIGATOR_CONFIG_FIELDS` registry, and pure `applyFieldEdit`. |
+| `settings_menu.ts` | `/navigator settings` overlay: pure `buildSettingItems` + a thin pi-tui `SettingsList` wrapper (commit/revert, env-override annotations). No fs access; fs stays in `index.ts`/`settings.ts`. |
+| `help.ts` | `/navigator help` durable entry layout: `NAVIGATOR_COMMANDS`, pure `buildHelpLines` (qdrant-memory parity). |
 | `images.ts` | pi-chafa detection, config mirror, chafa probe/render/sanitize, geometry. |
 
-**Data contract:** `setTree` / `setGitState` / `openRelPath` are the only ways data enters the component. Keep the render path pure. v3 adds `openCommit` + the optional `NavigatorOptions.loadCommit` injection (parallel to `loadFile`): when present, Enter on a commit opens its diff as a `ViewerFile` with `kind: "diff"` whose `relPath` is `commit:<hash>`; diffs skip the mtime poll in index.ts (`startsWith("commit:")` guard). When `loadCommit` is absent, Enter falls back to toggling the commit's family.
+**Data contract:** `setTree` / `setGitState` / `openRelPath` are the only ways data enters the component, and settings land via the ctor options (`enableIcons`, `initialShowHidden`, `initialWrap`, `initialRenderMarkdown` — Issue #061). Keep the render path pure. v3 adds `openCommit` + the optional `NavigatorOptions.loadCommit` injection (parallel to `loadFile`): when present, Enter on a commit opens its diff as a `ViewerFile` with `kind: "diff"` whose `relPath` is `commit:<hash>`; diffs skip the mtime poll in index.ts (`startsWith("commit:")` guard). When `loadCommit` is absent, Enter falls back to toggling the commit's family.
 
 ---
 
@@ -82,7 +84,7 @@ The overlay is a pure TUI component; it never touches the filesystem or git dire
   - **`truncateToWidth`'s default `"..."` ellipsis is wrapped in `\x1b[0m` resets.** It closes any open style and renders the ellipsis in bright default. Truncate styled strings with an **empty** ellipsis (`""`) for a clean hard-cut; for plain text you want to re-style, truncate with `""`, strip the injected reset, and append your own styled ellipsis before wrapping (Issue #010).
 - **Width-safety is mandatory.** Every rendered row must fit its pane width. Use `visibleWidth`/`truncateToWidth` for measurement; never assume a string's `.length` equals its visible width (ANSI escapes, wide chars).
 - **Memory stays bounded by the caps** (`MAX_HIGHLIGHT_BYTES`, `MAX_HIGHLIGHT_LINES`), not by the file. Oversized files read a capped head, not the whole file.
-- **Icons are env-gated, not auto-detected.** `PI_NAV_ICONS=1` opts into the Nerd Font column; index.ts reads it once and passes `enableIcons` into the ctor. The component never touches `process.env`, and there is no capability probe (pi-tui has none for fonts). Keep it that way — a user who didn't opt in keeps plain glyphs always.
+- **Icons are explicitly opt-in, not auto-detected.** `icons.enabled` in the settings file or `PI_NAV_ICONS` opts into the Nerd Font column (env wins); index.ts reads the env-resolved setting once and passes `enableIcons` into the ctor. The component never touches `process.env`, and there is no capability probe (pi-tui has none for fonts). Keep it that way — a user who didn't opt in keeps plain glyphs always.
 - **Issues are tracked** in `docs/issues/` with a central `issues_index.md`. New bug → create `NNN-<slug>.md`, add to the Pending table; resolved → move to Resolved and update the overview counts. Follow the lifecycle in the index.
 
 ---

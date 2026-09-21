@@ -6,7 +6,41 @@
 
 import { describe, expect, it } from "vitest";
 
-import { GENERIC_ICON, mapExtensionToIcon, parseEnableIcons } from "../icons";
+import { GENERIC_ICON, mapExtensionToIcon, parseEnableIcons, parseIconMode } from "../icons";
+
+// ── PI_NAV_ICONS truth table (Issue #061) ──
+
+describe("parseIconMode", () => {
+  it.each(["1", "true", "yes", "on"])("enables icons for %s", (value) => {
+    expect(parseIconMode(value)).toEqual({ enabled: true });
+  });
+
+  it.each(["0", "false", "no", "off"])("disables icons for %s", (value) => {
+    expect(parseIconMode(value)).toEqual({ enabled: false });
+  });
+
+  it("is case-insensitive and trims whitespace", () => {
+    expect(parseIconMode(" TRUE ")).toEqual({ enabled: true });
+    expect(parseIconMode("  On  ")).toEqual({ enabled: true });
+    expect(parseIconMode("OFF")).toEqual({ enabled: false });
+    expect(parseIconMode("\tno\n")).toEqual({ enabled: false });
+  });
+
+  it("treats undefined, empty, and whitespace as no override, without a warning", () => {
+    expect(parseIconMode(undefined)).toEqual({ enabled: undefined });
+    expect(parseIconMode("")).toEqual({ enabled: undefined });
+    expect(parseIconMode("   ")).toEqual({ enabled: undefined });
+  });
+
+  it("rejects garbage with a bounded warning and falls back to the file/default", () => {
+    const result = parseIconMode("sometimes");
+    expect(result.enabled).toBeUndefined();
+    expect(result.warning).toBeDefined();
+    expect(result.warning ?? "").toContain("sometimes");
+    expect(result.warning ?? "").toContain("PI_NAV_ICONS");
+    expect(result.warning ?? "").toContain("file/default");
+  });
+});
 
 describe("parseEnableIcons", () => {
   it("enables on the accepted truthy values", () => {
@@ -21,13 +55,18 @@ describe("parseEnableIcons", () => {
     expect(parseEnableIcons("  On  ")).toBe(true);
   });
 
-  it("disables on unset, empty, and anything else", () => {
+  it("disables on unset, empty, and anything else (compat wrapper over parseIconMode)", () => {
     expect(parseEnableIcons(undefined)).toBe(false);
     expect(parseEnableIcons("")).toBe(false);
     expect(parseEnableIcons("0")).toBe(false);
     expect(parseEnableIcons("false")).toBe(false);
     expect(parseEnableIcons("off")).toBe(false);
     expect(parseEnableIcons("2")).toBe(false);
+  });
+
+  it("matches parseIconMode for disable values", () => {
+    expect(parseEnableIcons("no")).toBe(parseIconMode("no").enabled ?? false);
+    expect(parseEnableIcons("false")).toBe(parseIconMode("false").enabled ?? false);
   });
 });
 

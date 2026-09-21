@@ -1,8 +1,10 @@
 /**
  * pi-navigator — read-only project file navigator overlay for pi.
  *
- * Opens a centered overlay with a file tree, git state panel, and a
- * syntax-highlighted viewer. Launch via /navigator.
+ * Establishes the /navigator command grammar (Issue #061): bare opens a
+ * centered overlay with a file tree, git state panel, and a syntax-highlighted
+ * viewer; `settings` opens the settings menu (TUI only); `help` appends a
+ * durable help entry; any other subcommand warns then shows help.
  *
  * Data ownership: this entry point owns all async work (git, tree collection,
  * file stats) and pushes results into the overlay through setters. The overlay
@@ -23,6 +25,8 @@ import {
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 
+import { Text } from "@earendil-works/pi-tui";
+
 import {
   IMAGE_EXTENSIONS,
   MAX_POLL_INTERVAL_MS,
@@ -41,9 +45,11 @@ import {
   readTrackedFiles,
   toCwdRelative,
 } from "./git";
-import { ICONS_ENV, parseEnableIcons } from "./icons";
+import { ICONS_ENV } from "./icons";
+import { buildHelpLines, HELP_COMMANDS_TITLE, HELP_HEADER_PREFIX, HELP_HINT, HELP_ENTRY_TYPE, helpCommandColumnWidth, type NavigatorHelpData } from "./help";
 import { makeDeferredImageSupport, resolveImageSupport, runChafaRender, type ImageSupport } from "./images";
-import { loadNavigatorSettings } from "./settings";
+import { loadNavigatorSettings, writeNavigatorSettings } from "./settings";
+import { openSettingsMenu } from "./settings_menu";
 import { styleDiffLines } from "./diff";
 import { NavigatorOverlay } from "./navigator";
 import { makeNavigatorTheme } from "./theme";
@@ -63,6 +69,40 @@ import type { FileNode, GitState, ViewerFile } from "./types";
 import { extOf, loadFile, type LoadFileOptions } from "./viewer";
 
 type TuiLike = { terminal: { rows: number }; requestRender: () => void };
+
+/**
+ * Pure argument routing for /navigator (Issue #061): the first whitespace
+ * token decides, trailing tokens are ignored, matching is case-sensitive
+ * lowercase (a `Settings` token is unknown).
+ */
+export type ParsedNavigatorArgs =
+  | { readonly kind: "overlay" }
+  | { readonly kind: "settings" }
+  | { readonly kind: "help" }
+  | { readonly kind: "unknown"; readonly raw: string };
+
+export function parseNavigatorArgs(args: string): ParsedNavigatorArgs {
+  const token = args.trim().split(/\s+/).filter(Boolean)[0];
+  if (token === undefined) return { kind: "overlay" };
+  switch (token) {
+    case "settings":
+      return { kind: "settings" };
+    case "help":
+      return { kind: "help" };
+    default:
+      return { kind: "unknown", raw: token };
+  }
+}
+
+/** Argument completions for /navigator: settings / help, filtered by prefix. */
+function navigatorCompletions(prefix: string): { value: string; label: string; description: string }[] | null {
+  const items = [
+    { value: "settings", label: "Open the settings menu", description: "Configure images, icons, viewer, and tree behavior" },
+    { value: "help", label: "Show the command list", description: "Lists every /navigator subcommand" },
+  ];
+  const filtered = items.filter((item) => item.value.startsWith(prefix));
+  return filtered.length > 0 ? filtered : null;
+}
 
 async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionCommandContext): Promise<void> {
   if (!ctx.hasUI) {
@@ -100,7 +140,7 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
       const agentDir = getAgentDir();
       const loaded = loadNavigatorSettings({
         userPath: join(agentDir, NAVIGATOR_SETTINGS_FILE),
-        env: { images: process.env[NAVIGATOR_IMAGES_ENV] },
+        env: { images: process.env[NAVIGATOR_IMAGES_ENV], icons: process.env[ICONS_ENV] },
       });
       const emittedWarnings = new Set<string>();
       const notifyWarning = (message: string): void => {
@@ -284,11 +324,15 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
           });
         },
         // Env reads happen here, once, at overlay open; the component never
-        // touches process.env (Issues #028, #039).
-        enableIcons: parseEnableIcons(process.env[ICONS_ENV]),
+        // touches process.env (Issues #028, #039, #061). `enableIcons` and the
+        // three initial-state options come from the env-resolved settings.
+        enableIcons: loaded.settings.icons.enabled,
         home: process.env.HOME ?? process.env.USERPROFILE ?? "",
         // Deferred snapshot; upgraded via setImageSupport when resolution lands.
         imageSupport,
+        initialShowHidden: loaded.settings.tree.showHidden,
+        initialWrap: loaded.settings.viewer.wrap,
+        initialRenderMarkdown: loaded.settings.viewer.markdown === "rendered",
       });
 
       // Fire-and-forget: the overlay opens immediately; a resolved snapshot
@@ -451,11 +495,101 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
   );
 }
 
+/**
+ * /navigator settings (Issue #061): open the SettingsList menu over the FILE
+ * view of the settings (loaded without env; env-shadowed rows are annotated
+ * and the env still wins at the next open). Commit = atomic write → reload →
+ * notify warnings; any throw becomes a bounded `{ok:false}` — the menu issues
+ * the warning and reverts the row display.
+ */
+async function runSettings(ctx: ExtensionCommandContext): Promise<void> {
+  if (!ctx.hasUI || ctx.mode !== "tui" || typeof ctx.ui.custom !== "function") {
+    ctx.ui.notify("pi-navigator settings requires the interactive TUI", "warning");
+    return;
+  }
+
+  const userPath = join(getAgentDir(), NAVIGATOR_SETTINGS_FILE);
+  const emittedWarnings = new Set<string>();
+  const notifyWarning = (message: string): void => {
+    if (emittedWarnings.has(message)) return;
+    emittedWarnings.add(message);
+    ctx.ui.notify("pi-navigator: " + message, "warning");
+  };
+
+  const fileLoaded = loadNavigatorSettings({ userPath });
+  for (const warning of fileLoaded.warnings) notifyWarning(warning);
+
+  // Raw env presence decides the annotation (empty/whitespace = no override).
+  const overrides: Record<string, string> = {};
+  const imagesEnv = process.env[NAVIGATOR_IMAGES_ENV];
+  if (imagesEnv !== undefined && imagesEnv.trim() !== "") overrides["images.mode"] = NAVIGATOR_IMAGES_ENV;
+  const iconsEnv = process.env[ICONS_ENV];
+  if (iconsEnv !== undefined && iconsEnv.trim() !== "") overrides["icons.enabled"] = ICONS_ENV;
+
+  try {
+    await openSettingsMenu(ctx.ui, {
+      settings: fileLoaded.settings,
+      overrides,
+      commit: (next) => {
+        try {
+          writeNavigatorSettings(userPath, next);
+          const reloaded = loadNavigatorSettings({ userPath });
+          for (const warning of reloaded.warnings) notifyWarning(warning);
+          return { ok: true, settings: reloaded.settings };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return { ok: false, error: message.length <= 160 ? message : `${message.slice(0, 160)}…` };
+        }
+      },
+      onWarning: (message) => ctx.ui.notify(message, "warning"),
+    });
+  } catch (error) {
+    ctx.ui.notify(`pi-navigator: settings failed (${String(error)}).`, "warning");
+  }
+}
+
 export default function (pi: ExtensionAPI): void {
+  // Durable help entry renderer (Issue #061): delivered via appendEntry +
+  // registerEntryRenderer, never ctx.ui.notify. Restored/old entries with no
+  // data fall back to an empty cwd.
+  pi.registerEntryRenderer<NavigatorHelpData>(HELP_ENTRY_TYPE, (entry, _options, theme) => {
+    const cwd = entry.data?.cwd ?? "";
+    const T = makeNavigatorTheme(theme);
+    const lines = buildHelpLines({ cwd });
+    const width = helpCommandColumnWidth();
+    const styled = lines.map((line) => {
+      if (line === "") return line;
+      if (line === HELP_COMMANDS_TITLE) return T.bold(line);
+      if (line === HELP_HINT) return T.dim(line);
+      if (line.startsWith(HELP_HEADER_PREFIX)) {
+        return T.accent(HELP_HEADER_PREFIX) + T.dim(line.slice(HELP_HEADER_PREFIX.length));
+      }
+      // Command row: padded command column plain, description dim.
+      return line.slice(0, width) + T.dim(line.slice(width));
+    });
+    return new Text(styled.join("\n"));
+  });
+
   pi.registerCommand("navigator", {
-    description: "Open the read-only project navigator (file tree, git state, viewer)",
-    handler: async (_args, ctx) => {
-      await runNavigator(pi, ctx);
+    description: "Open the read-only project navigator; /navigator settings opens the settings menu, /navigator help shows commands",
+    getArgumentCompletions: (prefix: string) => navigatorCompletions(prefix),
+    handler: async (args, ctx) => {
+      const parsed = parseNavigatorArgs(args);
+      switch (parsed.kind) {
+        case "overlay":
+          await runNavigator(pi, ctx);
+          return;
+        case "settings":
+          await runSettings(ctx);
+          return;
+        case "help":
+          pi.appendEntry(HELP_ENTRY_TYPE, { cwd: ctx.cwd });
+          return;
+        case "unknown":
+          ctx.ui.notify(`pi-navigator: unknown subcommand \"${parsed.raw}\"`, "warning");
+          pi.appendEntry(HELP_ENTRY_TYPE, { cwd: ctx.cwd });
+          return;
+      }
     },
   });
 }

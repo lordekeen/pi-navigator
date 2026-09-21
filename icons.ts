@@ -16,6 +16,9 @@
 /** Environment variable that enables the icon column. */
 export const ICONS_ENV = "PI_NAV_ICONS";
 
+const ICON_ENABLE_VALUES: ReadonlySet<string> = new Set(["1", "true", "yes", "on"]);
+const ICON_DISABLE_VALUES: ReadonlySet<string> = new Set(["0", "false", "no", "off"]);
+
 /** Generic file glyph (Nerd Font `nf-custom-file`-class). */
 export const GENERIC_ICON = "\ue723";
 
@@ -106,11 +109,26 @@ export function mapExtensionToIcon(relPath: string, isDir: boolean): string {
 }
 
 /**
- * Parse the PI_NAV_ICONS env value. `1`/`true`/`yes`/`on` → true; anything
- * else (including unset) → false. Pure so the module and tests stay hermetic.
+ * Parse the PI_NAV_ICONS env value (Issue #061): enable = 1/true/yes/on,
+ * disable = 0/false/no/off, anything else ignored with one warning so the
+ * file/default setting stands. Case-insensitive, trimmed; empty input is
+ * "no override", never a warning. Mirrors `parseImageMode` (settings.ts).
+ */
+export function parseIconMode(value: string | undefined): { enabled?: boolean; warning?: string } {
+  if (value === undefined) return { enabled: undefined };
+  const trimmed = value.trim();
+  if (trimmed === "") return { enabled: undefined };
+  const normalized = trimmed.toLowerCase();
+  if (ICON_ENABLE_VALUES.has(normalized)) return { enabled: true };
+  if (ICON_DISABLE_VALUES.has(normalized)) return { enabled: false };
+  return { enabled: undefined, warning: `${trimmed} is not a valid PI_NAV_ICONS value; using the file/default setting` };
+}
+
+/**
+ * Compatibility wrapper over `parseIconMode`: `1`/`true`/`yes`/`on` → true,
+ * anything else (including unset) → false. Pure so the module and tests stay
+ * hermetic.
  */
 export function parseEnableIcons(env: string | undefined): boolean {
-  if (!env) return false;
-  const v = env.trim().toLowerCase();
-  return v === "1" || v === "true" || v === "yes" || v === "on";
+  return parseIconMode(env).enabled ?? false;
 }

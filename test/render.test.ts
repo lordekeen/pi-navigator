@@ -32,6 +32,8 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => ({
 
 import { mapExtensionToIcon } from "../icons";
 import { MIN_OVERLAY_HEIGHT, MIN_OVERLAY_WIDTH } from "../constants";
+import type { NavigatorSettings } from "../settings";
+import { openSettingsMenu, type SettingsMenuDeps, type SettingsMenuTheme, type SettingsMenuUi } from "../settings_menu";
 import { DEFAULT_PI_CHAFA_SUBSET, type ImageSupport } from "../images";
 import { makeNavigatorTheme } from "../theme";
 import { buildTree, entriesFromPaths } from "../tree";
@@ -689,6 +691,82 @@ describe("rendered markdown width safety", () => {
     expect(lines.join("\n")).not.toMatch(/\x1b\[0m\.\.\./);
   });
 });
+describe("settings overlay render width safety (Issue #061)", () => {
+  function makeSettingsHarness() {
+    let component: { render(width: number): string[]; handleInput?(data: string): void; invalidate(): void } | undefined;
+    let resolveReady!: () => void;
+    let resolveClosed!: () => void;
+    const ready = new Promise<void>((resolve) => { resolveReady = resolve; });
+    const closed = new Promise<void>((resolve) => { resolveClosed = resolve; });
+    const theme: SettingsMenuTheme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+    const ui: SettingsMenuUi = {
+      custom: <T>(
+        factory: (tui: unknown, th: SettingsMenuTheme, keybindings: unknown, done: (result: T) => void) => unknown,
+      ): Promise<T> => {
+        const result = factory({}, theme, {}, () => resolveClosed());
+        component = result as { render(width: number): string[]; handleInput?(data: string): void; invalidate(): void };
+        resolveReady();
+        return closed as unknown as Promise<T>;
+      },
+    };
+    const deps: SettingsMenuDeps = {
+      settings: {
+        version: 1,
+        images: { mode: "off" },
+        icons: { enabled: false },
+        viewer: { wrap: false, markdown: "code" },
+        tree: { showHidden: false },
+      } as NavigatorSettings,
+      overrides: { "images.mode": "PI_NAV_IMAGES", "icons.enabled": "PI_NAV_ICONS" },
+      commit: (next: NavigatorSettings): { ok: true; settings: NavigatorSettings } => ({ ok: true, settings: next }),
+      onWarning: () => undefined,
+    };
+    const menu = openSettingsMenu(ui, deps);
+    return {
+      ready,
+      getComponent: (): { render(width: number): string[]; handleInput?(data: string): void; invalidate(): void } | undefined => component,
+      closed: closed.then(() => menu),
+    };
+  }
+
+  it("renders the settings overlay width-safely at every suite size and a narrow width", async () => {
+    const sizes = [
+      [120, 36],
+      [100, 28],
+      [80, 24],
+      [44, 20],
+    ] as const;
+    for (const [width, rows] of sizes) {
+      void rows;
+      const harness = makeSettingsHarness();
+      await harness.ready;
+      const component = harness.getComponent();
+      expect(component, "settings overlay did not render").toBeDefined();
+      const lines = component!.render(width);
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i] ?? "";
+        expect(visibleWidth(line), `settings line ${i} overflows width ${width}: ${JSON.stringify(line)}`).toBeLessThanOrEqual(width);
+      }
+      const joined = lines.join("\n");
+      expect(joined).toContain("pi-navigator \u00b7 settings");
+      expect(joined).toContain("changes apply the next time /navigator opens");
+      // The override annotation may wrap across lines — assert stable fragments.
+      expect(joined).toContain("overridden by");
+      expect(joined).toContain("PI_NAV_IMAGES (env wins)");
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i] ?? "";
+        expect(line, `line ${i} contains a carriage return`).not.toContain("\r");
+        // The SettingsList truncates its OWN hint line with pi-tui's internal
+        // default ellipsis (issue #010 applies to navigator's own truncations),
+        // so only width-safety and the SGR-only whitelist are enforced here.
+        expect(line, `line ${i} has a non-SGR escape: ${JSON.stringify(line)}`).not.toMatch(/\x1b(?!\[[0-9;]*m)/);
+      }
+      harness.getComponent()?.handleInput?.("\x1b"); // close: nothing is written
+      await harness.closed;
+    }
+  });
+});
+
 describe("chafa image render width safety (§12.5)", () => {
   const activeChafaSupport = (): ImageSupport => ({
     mode: "chafa",

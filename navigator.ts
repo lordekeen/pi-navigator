@@ -97,6 +97,12 @@ export interface NavigatorOptions {
   home?: string;
   /** Initial image-support snapshot (tests inject; index.ts passes a deferred one). */
   imageSupport?: ImageSupport;
+  /** Start with hidden files visible (Issue #061; settings). Defaults to false. */
+  initialShowHidden?: boolean;
+  /** Start with word wrap enabled (Issue #061; settings). Defaults to false. */
+  initialWrap?: boolean;
+  /** Start with Markdown files rendered (Issue #061; settings). Defaults to false. */
+  initialRenderMarkdown?: boolean;
 }
 
 const FOCUS_HINTS: Record<Focus, string> = {
@@ -267,6 +273,11 @@ export class NavigatorOverlay implements Focusable {
     this.home = options.home ?? "";
     this.imageSupport = options.imageSupport ?? makeDeferredImageSupport("off");
     this.lastSupportFingerprint = supportFingerprint(this.imageSupport);
+    // Settings-landed initial state (Issue #061): defaults preserve the
+    // session-toggle behavior of prior versions exactly.
+    this.showHidden = options.initialShowHidden ?? false;
+    this.viewWrap = options.initialWrap ?? false;
+    this.viewRenderMarkdown = options.initialRenderMarkdown ?? false;
   }
 
   // ── Public API ──

@@ -2,7 +2,7 @@
 
 Read-only project file navigator for pi. Opens a centered overlay inside a running pi session with a file tree, git state, and a syntax-highlighted viewer. No file editing, no runtime dependencies; images optionally render through a user-installed `chafa` (see [Images](#images-optional)).
 
-![status](https://img.shields.io/badge/status-v0.6.0-green)
+![status](https://img.shields.io/badge/status-v0.7.0-green)
 
 ## Install
 
@@ -15,24 +15,50 @@ Then start pi and run `/navigator`.
 
 Does pi-navigator fit your setup? [Read more](./AGENTS.md) — [Dev docs](./docs/plans/pi-navigator-implementation-plan.md) — [Open issues](./docs/issues/issues_index.md)
 
-## Config
+## Configuration
 
-Nerd Font filetype icons are opt-in via an environment variable (the default is plain-text glyphs):
+Settings live in `~/.pi/agent/pi-navigator.json`. All fields are optional; missing sections fall back to defaults. The canonical file shape is:
 
-| Variable | Effect |
+```json
+{
+  "version": 1,
+  "images": { "mode": "off" },
+  "icons":  { "enabled": false },
+  "viewer": { "wrap": false, "markdown": "code" },
+  "tree":   { "showHidden": false }
+}
+```
+
+| Field | Default | Options | Effect |
+| --- | --- | --- | --- |
+| `images.mode` | `off` | `off`, `chafa` | Render images as chafa symbol art in the viewer when pi-chafa + chafa are installed; `off` keeps the metadata card |
+| `icons.enabled` | `false` | `true`, `false` | Show a Nerd Font filetype icon column in the file tree (requires a Nerd Font terminal) |
+| `viewer.wrap` | `false` | `true`, `false` | Start files with word wrap enabled; the `w` key still toggles it per session |
+| `viewer.markdown` | `code` | `code`, `rendered` | Open Markdown files as rendered text or plain code; the `m` key still toggles it per session |
+| `tree.showHidden` | `false` | `true`, `false` | Start with hidden files visible; the `.` key still toggles it per session |
+
+Environment variables override the file (precedence: defaults ← file ← env):
+
+| Variable | Values |
 | --- | --- |
-| `PI_NAV_ICONS=1` | Render a Nerd Font filetype icon column in the file tree (`1`/`true`/`yes`/`on` all enable) |
-| `PI_NAV_IMAGES=1` | Render images as chafa symbol art in the viewer when pi-chafa + chafa are installed (`1`/`true`/`yes`/`on`/`chafa` enable; `0`/`false`/`no`/`off` disable) |
+| `PI_NAV_IMAGES` | `1`/`true`/`yes`/`on`/`chafa` enable rendering; `0`/`false`/`no`/`off` disable; anything else warns and the file value stands; empty/whitespace is no override |
+| `PI_NAV_ICONS` | `1`/`true`/`yes`/`on` enable the icon column; `0`/`false`/`no`/`off` disable; anything else warns and the file value stands; empty/whitespace is no override |
 
-Set either variable in your shell profile (e.g. `export PI_NAV_ICONS=1` in `~/.zshrc`) before launching pi, or pass it inline: `PI_NAV_ICONS=1 pi`.
+Edit either the file or the variables in your shell profile (e.g. `export PI_NAV_ICONS=1` in `~/.zshrc`) before launching pi, or pass inline: `PI_NAV_ICONS=1 pi`.
 
-Icons depend on a terminal Nerd Font — without one, glyphs render as placeholder boxes (tofu). The overlay shows a one-time, non-blocking hint when icons are on. No other configuration: the git pane, commit-family view, and viewer follow the active pi theme with no hardcoded colors.
+**`/navigator settings`** opens a settings menu (interactive TUI) over the same fields — Enter/Space cycles a row and the change is written atomically; Esc closes without writing. Rows shadowed by an environment variable are annotated (`— overridden by PI_NAV_IMAGES (env wins)`); editing one still writes the file, and the env value stays effective until it is unset. Settings are read once per `/navigator` invocation, so **changes apply the next time /navigator opens** — there is nothing applied live mid-session.
+
+Icons depend on a terminal Nerd Font — without one, glyphs render as placeholder boxes (tofu). The overlay shows a one-time, non-blocking hint when icons are on. The git pane, commit-family view, and viewer follow the active pi theme with no hardcoded colors.
 
 ## Usage
 
 ```
-/navigator      open the overlay
+/navigator              open the overlay
+/navigator settings     open the settings menu (interactive TUI)
+/navigator help         show this command list
 ```
+
+`/navigator <anything else>` warns and shows the help list. `settings` requires the interactive TUI; in other modes it warns and does nothing.
 
 Layout: files tree on the left, git panel below it, file viewer on the right, contextual key hints in the footer.
 
@@ -123,7 +149,7 @@ The feature is documented in [docs/specs/chafa-image-rendering.md](docs/specs/ch
 
 ## Development
 
-Files: `index.ts` (entry, async data ownership), `navigator.ts` (overlay component, keymap, rendering), `tree.ts` (tree model, fs walk), `git.ts` (async git access and porcelain parsing), `viewer.ts` (load caps, highlighting, search, display rows), `theme.ts` (token mapping), `types.ts`, `constants.ts`, `settings.ts` (pi-navigator settings terrain), `images.ts` (chafa detection, probe, sanitize, geometry).
+Files: `index.ts` (entry, command routing, async data ownership), `navigator.ts` (overlay component, keymap, rendering), `tree.ts` (tree model, fs walk), `git.ts` (async git access and porcelain parsing), `viewer.ts` (load caps, highlighting, search, display rows), `theme.ts` (token mapping), `types.ts`, `constants.ts`, `settings.ts` (pi-navigator settings terrain), `settings_menu.ts` (`/navigator settings` overlay), `help.ts` (`/navigator help` entry layout), `images.ts` (chafa detection, probe, sanitize, geometry).
 
 Planning documents live in `docs/plans/`: `ui-standards-report.md` (platform and reference findings), `pi-navigator-implementation-plan.md` (the original plan — now superseded; see `docs/issues/issues_index.md` for current state), and `qa-evidence.md`. Issues are tracked in `docs/issues/`. The throwaway visual mock is `mockups/navigator.html` — open it in a browser and drive it with the same keymap.
 
@@ -138,14 +164,16 @@ runtime dependencies, ever — `node_modules` is dev-only.
   than the plan's original "NodeNext" because pi loads extensions through jiti,
   which resolves the code's intentionally extensionless relative imports;
   NodeNext would demand `.js` extensions the runtime does not need.
-- `npm test` — eight vitest suites (285 cases): porcelain `-z` parsing plus a
+- `npm test` — ten vitest suites (346 cases): porcelain `-z` parsing plus a
   real-git scratch-repo integration pass, tree building/fs-walk fixtures
   (ignores, dot entries, symlink cycles), viewer caps and UTF-8 head decoding,
   the keymap reducer (escape precedence, focus cycling, copy), settings
-  normalization/loading and the `PI_NAV_IMAGES` truth table, pi-chafa
+  normalization/loading (`PI_NAV_IMAGES` + `PI_NAV_ICONS` truth tables,
+  `applyFieldEdit`), the settings-menu builder and real-SettingsList
+  integration, the help layout + command-routing suites, pi-chafa
   detection/config/probe/sanitizer/geometry, and render width-safety at
-  120x36, 100x28 and 80x24 — plus 60/50-column and chafa payload cases —
-  including help/filter/search modes and the compact notice.
+  120x36, 100x28 and 80x24 — plus 60/50-column, settings-overlay and chafa
+  payload cases — including help/filter/search modes and the compact notice.
 
 Test runs must stay green with `typecheck` and `test`; the suites have already
 caught real bugs (a search-highlight crash from inverted theme tokens, a
