@@ -11,7 +11,7 @@
 
 In a git repository, the tracked-file listing uses `git status --porcelain -unormal -z` (changed from `-uall` in #024 to bound the untracked listing). With `-unormal`, git reports a **newly created, still-untracked directory as a single record**: `?? newdir/` — one path, **trailing slash**, no children.
 
-`entriesFromPaths` in `index.ts` builds a `FileEntry` for that record with `isDir: false` (it never inspects the slash), and `tree.ts` inserts it as a **file leaf**. Consequences:
+`entriesFromPaths` in `tree.ts` (imported by `index.ts`) builds a `FileEntry` for that record with `isDir: false` (it never inspects the slash), and the tree inserts it as a **file leaf**. Consequences:
 
 - The untracked directory renders as a *file* row in the Files pane and in the git panel's Unstaged group.
 - Pressing Enter (either pane) routes to `loadFile` → `stat` → `!isFile()` → the "not a regular file" error card.

@@ -20,11 +20,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | [#020](020-no-viewer-cache-blocking-highlight.md) | No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread | Bug / Performance | High | `viewer.ts` | Open (partial — cache done; event-loop yielding deferred: blocked by pi's bundled-runtime virtual-module boundary, needs a pi-side API) |
 | [#063](063-review-followups.md) | Code-Health Review Follow-Ups (Duplication, Seams, Test Gaps) | Technical Debt | Low | `icons.ts` / `settings.ts` / `index.ts` / `navigator.ts` / `help.ts` / tests | Open — from the review run with #062: duplicated env truth table + notify-once block, 7 hard-cut truncation sites, registry-vs-manual settings normalization (5 touch points per new field), 3 hand-maintained help tables, no direct `diff.ts`/`theme.ts` suite |
-| [#064](064-navigator-decomposition.md) | `navigator.ts` Holds Six Responsibilities; Tree-Cache Counters Unsynchronized by Convention | Technical Debt / Architecture | Medium | `navigator.ts` | Open — `NavigatorOverlay` is 2,060 lines / 122 private fields / 72 methods covering files, git, viewer, help, frame geometry and input routing; `filesRowsCache` validity rests on a manually-bumped `treeVersion` (4 raw `++` sites, 24 `touch()` calls) |
-| [#058](058-untracked-dirs-unreachable.md) | Untracked Directories Are Dead-End Leaves (Unreachable in Git Mode) | Bug | High | `git.ts` / `index.ts` / `tree.ts` | Resolved |
-| [#059](059-nowrap-wide-char-hscroll-lock.md) | Nowrap Viewer Hscroll Locked at 0 on Wide-Char Lines | Bug | High | `viewer.ts` / `navigator.ts` | Resolved |
-| [#060](060-review-minor-fixes.md) | Minor Findings Batch from Full Debugger Code Review | Bug / Technical Debt | Low | `navigator.ts` / `viewer.ts` / `tree.ts` / `git.ts` | Resolved |
-| [#062](062-settings-menu-overlay-placement.md) | Settings Menu Opened as a Centered Overlay Instead of Docking Above the Message Input | Bug / UI Consistency | Medium | `settings_menu.ts` / `constants.ts` | Resolved |
+| [#064](064-navigator-decomposition.md) | `navigator.ts` Holds Six Responsibilities; Tree-Cache Counters Unsynchronized by Convention | Technical Debt / Architecture | Medium | `navigator.ts` | Open — `NavigatorOverlay` is 2,060 lines / 122 private fields / 74 methods covering files, git, viewer, help, frame geometry and input routing; `filesRowsCache` validity rests on a manually-bumped `treeVersion` (4 raw `++` sites, 24 `touch()` calls) |
 
 ---
 

@@ -11,18 +11,18 @@
 
 Two structural findings from the repo-wide health sweep (run with Issue #062). Both are latent-risk items rather than live bugs — the suite is green — but they are the two largest structural liabilities in the codebase.
 
-## Finding 1 — one class, six components (2,060 lines, 122 private fields, 72 methods)
+## Finding 1 — one class, six components (2,060 lines, 122 private fields, 74 methods)
 
 `NavigatorOverlay` (`navigator.ts:155`) is the whole UI in a single class. The seams are already visible in its own method grouping:
 
 | Responsibility | Members | Rows |
 | :--- | :--- | :--- |
-| Files pane | `filesRows` (`:343`), `buildFilesHeader` (`:1303`), `buildFileRow` (`:1312`), `ensureFilesCursorVisible*` (`:1283`–`:1291`) | ~1 |
-| Git pane | `gitRows` (`:358`), `gitNavRows` (`:468`), `toggleCommitFamily` (`:484`), `buildGitRow` (`:1402`) | ~1 |
-| Viewer pane | `buildRightRows` (`:1458`), `buildViewerHeader` (`:1614`), 5 viewer caches (`:214`–`:219`) | ~1 |
-| Help modal | `HELP_ROWS` (`:123`), `composeHelp` (`:1831`) | ~1 |
-| Frame / geometry | `overlayHeight` (`:988`), `splitRows` (`:1088`) | ~1 |
-| Input routing | `handleInput` (`:493`) dispatching to 6 mode/pane handlers | ~1 |
+| Files pane | `filesRows` (`:497`), `buildFilesHeader` (`:1457`), `buildFileRow` (`:1466`), `ensureFilesCursorVisible*` (`:1437`–`:1443`) | ~1 |
+| Git pane | `gitRows` (`:512`), `gitNavRows` (`:622`), `toggleCommitFamily` (`:638`), `buildGitRow` (`:1556`) | ~1 |
+| Viewer pane | `buildRightRows` (`:1612`), `buildViewerHeader` (`:1768`), 5 viewer caches (`:214`–`:219`) | ~1 |
+| Help modal | `HELP_ROWS` (`:123`), `composeHelp` (`:1985`) | ~1 |
+| Frame / geometry | `overlayHeight` (`:1142`), `splitRows` (`:1242`) | ~1 |
+| Input routing | `handleInput` (`:647`) dispatching to 6 mode/pane handlers | ~1 |
 
 The row builders already take narrow inputs (`FilesRow`, `GitRow`, `leftW`), so extracting per-pane **view-model** modules is mechanical: the class keeps mutable state and input routing, each pane's render + memoization logic moves out and becomes independently testable. Expect roughly a halving of the file without touching the `setTree` / `setGitState` / `openRelPath` data contract documented in `AGENTS.md`.
 
