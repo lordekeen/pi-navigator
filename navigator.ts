@@ -279,6 +279,15 @@ export class NavigatorOverlay implements Focusable {
     this.root = root;
     this.treeSource = treeSource;
     this.filesCursor = moveCursor(this.filesRows().length, this.filesCursor, 0);
+    // One-time, non-blocking hint when the user opted into Nerd Font icons
+    // (Issue #028): glyphs depend on a terminal Nerd Font, which pi cannot
+    // detect. Fired from the setter, not render(), so the render path stays
+    // free of state mutations and re-render requests (cf. #053); the
+    // iconsNoticeShown guard makes it run exactly once.
+    if (this.enableIcons && !this.iconsNoticeShown) {
+      this.iconsNoticeShown = true;
+      this.showNotice("nerd icons on \u2014 glyphs may not render without a Nerd Font");
+    }
     this.touch();
   }
 
@@ -1237,15 +1246,6 @@ export class NavigatorOverlay implements Focusable {
     const overlayH = this.overlayHeight();
     const innerW = Math.max(0, width - 2);
 
-    // One-time, non-blocking hint when the user opted into Nerd Font icons
-    // (Issue #028): glyphs depend on a terminal Nerd Font, which pi cannot
-    // detect. Fire before building lines so the footer picks it up; the
-    // iconsNoticeShown guard makes it run exactly once.
-    if (this.enableIcons && !this.iconsNoticeShown) {
-      this.iconsNoticeShown = true;
-      this.showNotice("nerd icons on \u2014 glyphs may not render without a Nerd Font");
-    }
-
     if (width < MIN_OVERLAY_WIDTH || overlayH < MIN_OVERLAY_HEIGHT) {
       // Compact notice for terminals that cannot host the frame. Every line is
       // clipped to `width`, so the notice is width-safe like the frame.
@@ -1457,9 +1457,13 @@ export class NavigatorOverlay implements Focusable {
     const arrow = isCursor ? T.accent(T.bold("\u25b6 ")) : "  ";
     let body: string;
     let badge = "";
-    // Icon column (Issue #028): one cell when PI_NAV_ICONS is on, zero
-    // otherwise. The glyph inherits the name color it sits next to.
-    const iconW = this.enableIcons ? 1 : 0;
+    // Icon column (Issue #028): two cells when PI_NAV_ICONS is on — the glyph
+    // plus the trailing space icon() emits — and zero otherwise. The glyph
+    // inherits the name color it sits next to. iconW is emission-only: the
+    // icon lives inside `body`, which truncateAndWidth measures, so reserving
+    // extra cells in room/gap below would double-count it and truncate names
+    // one cell early (Issue #060 finding 6).
+    const iconW = this.enableIcons ? 2 : 0;
     const icon = (nameStyle: (t: string) => string) => (iconW ? nameStyle(mapExtensionToIcon(row.node.relPath, row.node.isDir)) + " " : "");
 
     if (row.kind === "match") {
@@ -1498,13 +1502,13 @@ export class NavigatorOverlay implements Focusable {
       if (row.node.gitCode) badge = " " + this.codeText(row.node.gitCode);
     }
 
-    const room = Math.max(4, leftW - 2 - iconW - visibleWidth(badge));
+    const room = Math.max(4, leftW - 2 - visibleWidth(badge));
     // Empty ellipsis: truncateToWidth's default "..." is wrapped in \x1b[0m
     // resets that close the styled body's open style and render "..." in bright
     // default. truncate once, measure the result once (Issue #018).
     const fit = truncateAndWidth(body, room);
     const content = arrow + fit.text;
-    const gap = Math.max(0, leftW - visibleWidth(arrow) - iconW - fit.width - visibleWidth(badge));
+    const gap = Math.max(0, leftW - visibleWidth(arrow) - fit.width - visibleWidth(badge));
     const line = content + " ".repeat(gap) + badge;
     return isCursor ? T.selectedBg(this.padTo(line, leftW)) : this.padTo(line, leftW);
   }
@@ -2036,7 +2040,7 @@ export class NavigatorOverlay implements Focusable {
   private shortPath(path: string): string {
     const home = this.home;
     let shortened = path;
-    if (home && (path === home || path.startsWith(home))) {
+    if (home && (path === home || path.startsWith(home + "/"))) {
       shortened = "~" + path.slice(home.length);
     }
     if (shortened.length > 48) shortened = "\u2026" + shortened.slice(shortened.length - 47);

@@ -15,7 +15,7 @@
 
 import { open, readFile, stat } from "node:fs/promises";
 import { getLanguageFromPath, highlightCode } from "@earendil-works/pi-coding-agent";
-import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 import {
   BINARY_SNIFF_BYTES,
@@ -64,13 +64,15 @@ export function stripAnsi(text: string): string {
 }
 
 export function visibleTextWidth(text: string): number {
-  return Array.from(stripAnsi(text)).length;
+  return visibleWidth(stripAnsi(text));
 }
 
 /**
  * Column-slice a styled line for horizontal scrolling. Escape sequences are
  * preserved as encountered; the result is reset-terminated when any styling
- * was included. Wide characters count as one cell (v1 approximation).
+ * was included. Columns are terminal cells (Issue #059): a wide character
+ * occupies two of them, so a glyph whose first cell falls inside the window is
+ * emitted whole — callers hard-cut any transient one-cell overflow (padTo).
  */
 // Sticky CSI matcher reused by sliceStyled; `lastIndex` is set per call site so
 // it scans the full string without allocating a suffix copy per character.
@@ -90,14 +92,45 @@ export function sliceStyled(styled: string, start: number, end: number): string 
       i += esc[0].length;
       continue;
     }
-    const ch = styled[i]!;
+    const code = styled.codePointAt(i);
+    if (code === undefined) break; // unreachable: i walks valid code points
+    const ch = String.fromCodePoint(code);
     if (column >= start && column < end) out += ch;
-    column += 1;
-    i += 1;
+    column += visibleWidth(ch);
+    i += ch.length;
     if (column >= end) break;
   }
   if (styledOut && out.length > 0 && !out.endsWith("\x1b[0m")) out += "\x1b[0m";
   return out;
+}
+
+/**
+ * Per-position fold maps for a haystack whose `toLowerCase()` changes length
+ * (e.g. `İ` U+0130 folds to "i" + a combining dot, two folded chars). For every
+ * folded position f, `starts[f]`/`ends[f]` give the unfolded span of the code
+ * point that produced it, so folded indexOf offsets can be applied to the
+ * unfolded string without drifting (Issue #060; #035 fixed only the needle
+ * side). Returns null when folding is length preserving — the common case —
+ * keeping the fast path offset-identical.
+ */
+function foldMaps(styled: string): { starts: number[]; ends: number[] } | null {
+  const folded = styled.toLowerCase();
+  if (folded.length === styled.length) return null;
+  const starts: number[] = [];
+  const ends: number[] = [];
+  let i = 0;
+  while (i < styled.length) {
+    const code = styled.codePointAt(i);
+    if (code === undefined) break; // unreachable: i walks valid code points
+    const ch = String.fromCodePoint(code);
+    const lower = ch.toLowerCase();
+    for (let k = 0; k < lower.length; k++) {
+      starts.push(i);
+      ends.push(i + ch.length);
+    }
+    i += ch.length;
+  }
+  return { starts, ends };
 }
 
 /**
@@ -118,21 +151,26 @@ export function markMatches(
   const smartCase = /[A-Z]/.test(query);
   const haystack = smartCase ? styled : styled.toLowerCase();
   const needle = smartCase ? query : query.toLowerCase();
-  let from = 0;
+  const maps = smartCase ? null : foldMaps(styled);
+  let from = 0; // folded haystack cursor for indexOf
+  let fromUnfolded = 0; // unfolded cursor for slicing when maps is set
   let occurrence = 0;
   let out = "";
-  while (from <= styled.length) {
+  while (from <= haystack.length) {
     const idx = haystack.indexOf(needle, from);
     if (idx < 0) {
-      out += styled.slice(from);
+      out += styled.slice(fromUnfolded);
       break;
     }
-    out += styled.slice(from, idx);
-    const slice = styled.slice(idx, idx + needle.length);
+    const start = maps ? (maps.starts[idx] ?? idx) : idx;
+    const end = maps ? (maps.ends[idx + needle.length - 1] ?? styled.length) : idx + needle.length;
+    out += styled.slice(fromUnfolded, start);
+    const slice = styled.slice(start, end);
     const useCurrent = occurrence === currentOccurrence;
     out += useCurrent ? styleCurrent(slice) : styleMatch(slice);
     occurrence += 1;
     from = idx + Math.max(1, needle.length);
+    fromUnfolded = end;
   }
   return out;
 }
@@ -448,11 +486,14 @@ export function searchLines(lines: string[], query: string): SearchMatch[] {
     // throw on the .toLowerCase() below. Well-formed files never hit this.
     const raw = lines[line];
     if (raw === undefined) continue;
+    const maps = smartCase ? null : foldMaps(raw);
     const haystack = smartCase ? raw : raw.toLowerCase();
     let from = 0;
     let idx: number;
     while ((idx = haystack.indexOf(needle, from)) !== -1) {
-      matches.push({ line, start: idx, end: idx + needle.length });
+      const start = maps ? (maps.starts[idx] ?? idx) : idx;
+      const end = maps ? (maps.ends[idx + needle.length - 1] ?? idx + needle.length) : idx + needle.length;
+      matches.push({ line, start, end });
       from = idx + Math.max(1, needle.length);
     }
   }

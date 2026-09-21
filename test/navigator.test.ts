@@ -997,6 +997,56 @@ describe("shortPath", () => {
     const rendered = overlay.render(80).join("\n");
     expect(rendered).toContain("~/project");
   });
+
+  it("does not abbreviate sibling home-prefixed paths (Issue #060 finding 1)", () => {
+    // home /Users/testuser vs cwd /Users/testuserfake/project: bare
+    // startsWith matched the prefix and rendered "~fake/project" — a path
+    // that does not exist. The home boundary must require a path separator.
+    const theme = makeNavigatorTheme({
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+    } as never);
+    const overlay = new NavigatorOverlay({
+      cwd: "/Users/testuserfake/project",
+      theme,
+      home: "/Users/testuser",
+      getTerminalRows: () => 24,
+      requestRender: () => undefined,
+      onClose: () => undefined,
+      loadFile: async () => ({ kind: "text", relPath: "a.txt", lines: [] }),
+      refresh: () => undefined,
+    });
+    const rendered = overlay.render(120).join("\n");
+    expect(rendered).toContain("/Users/testuserfake/project");
+    expect(rendered).not.toContain("~fake");
+  });
+});
+
+describe("nowrap wide-char hscroll (Issue #059)", () => {
+  it("unlocks hscroll on a wide-char line and reaches the tail", async () => {
+    // 60 distinct CJK chars = 120 terminal cells. Under the v1 code-point
+    // model maxLineWidth was 60, maxH clamped to 0 and hscroll stayed pinned:
+    // the tail was unreachable. With cell counting, maxH > 0 and `l` reaches
+    // the last glyph.
+    const harness = makeHarness(36, async () => ({
+      kind: "text",
+      relPath: "wide.txt",
+      sizeBytes: 240,
+      lineCount: 1,
+      lines: [Array.from({ length: 60 }, (_, i) => String.fromCodePoint(0x4e00 + i)).join("")],
+    }));
+    const { overlay } = harness;
+    withTree(harness, ["wide.txt"]);
+    overlay.handleInput(KEYS.enter); // opens wide.txt, focus moves to viewer
+    await Promise.resolve(); // let the async load settle
+    expect(overlay.render(120).join("\n")).not.toContain("\u4e3b"); // tail glyph off-pane
+    for (let i = 0; i < 40; i++) overlay.handleInput("l");
+    const lines = overlay.render(120);
+    for (let i = 0; i < lines.length; i++) {
+      expect(visibleWidth(lines[i] ?? ""), `line ${i} overflows 120: ${JSON.stringify(lines[i])}`).toBeLessThanOrEqual(120);
+    }
+    expect(lines.join("\n")).toContain("\u4e3b"); // tail glyph reachable
+  });
 });
 
 describe("Issue #048: reloadOpenFile on commit diff", () => {

@@ -87,9 +87,12 @@ describe("stripAnsi / visibleTextWidth / sliceStyled", () => {
     expect(visibleTextWidth(sliced)).toBe(2);
   });
 
-  it("counts wide characters as one cell (v1 approximation)", () => {
-    const sliced = sliceStyled("日本語", 1, 2);
-    expect(sliced).toBe("本");
+  it("treats wide characters as two cells (Issue #059 cell model)", () => {
+    // 日 occupies cells 0–1, 本 cells 2–3, 語 cells 4–5. A window inside a
+    // glyph (no glyph's first cell falls in it) yields nothing.
+    expect(sliceStyled("日本語", 1, 2)).toBe("");
+    expect(sliceStyled("日本語", 2, 4)).toBe("本");
+    expect(sliceStyled("日本語", 0, 2)).toBe("日");
   });
 });
 
@@ -121,6 +124,14 @@ describe("markMatches", () => {
     expect(markMatches("a\u0069\u0307b", "\u0130", match, current, -1)).toBe("a<m>\u0069\u0307</m>b");
   });
 
+  it("maps haystack fold drift back to unfolded offsets (Issue #060 finding 2)", () => {
+    // İ (U+0130) folds to i + combining dot, so the folded haystack is LONGER
+    // than the styled one: folded indexOf offsets must map back to unfolded
+    // spans. The v1 drift bug highlighted "bc" here.
+    expect(markMatches("\u0130abc", "abc", match, current, -1)).toBe("\u0130<m>abc</m>");
+    expect(markMatches("\u0130abc", "abc", match, current, 0)).toBe("\u0130<c>abc</c>");
+  });
+
   it("returns the text unchanged for an empty query", () => {
     expect(markMatches("abc", "", match, current, -1)).toBe("abc");
   });
@@ -140,6 +151,12 @@ describe("searchLines", () => {
 
   it("is smart-case", () => {
     expect(searchLines(["abc", "AbC"], "AbC")).toEqual([{ line: 1, start: 0, end: 3 }]);
+  });
+
+  it("returns unfolded offsets when lowercasing changes the haystack length (Issue #060 finding 2)", () => {
+    // "İabc" folds to "i̇abc" (len 5 vs 4); the match at folded 2..5 spans
+    // unfolded 1..4 (the "abc" after the İ).
+    expect(searchLines(["\u0130abc"], "abc")).toEqual([{ line: 0, start: 1, end: 4 }]);
   });
 
   it("returns no matches for an empty query", () => {
@@ -220,6 +237,17 @@ describe("computeRows / maxLineWidth", () => {
 
   it("measures the longest visible line", () => {
     expect(maxLineWidth({ ...file, lines: ["\x1b[31mshort\x1b[0m", "this-is-longer"] })).toBe(14);
+  });
+
+  it("counts wide characters as two cells (Issue #059)", () => {
+    expect(maxLineWidth({ ...file, lines: ["日本語"] })).toBe(6);
+  });
+
+  it("nowrap hscroll reaches a wide-char line's tail (Issue #059)", () => {
+    // 日本語 occupies cells 0–5; slicing [2, 4) emits 本 whole. Under the v1
+    // code-point model this window was attributed to code points 2..3.
+    const rows = computeRows({ ...file, lines: ["日本語"] }, 2, false, 2);
+    expect(rows.map((r) => r.text)).toEqual(["本"]);
   });
 });
 

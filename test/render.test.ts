@@ -148,6 +148,14 @@ describe("render width safety", () => {
     expect(lines.join("\n")).not.toContain("FILES");
   });
 
+  it("stays width-safe with Nerd Font icons enabled (Issue #060 finding 6)", () => {
+    const harness = makeHarness(36, true);
+    const lines = expectWidthSafe(harness.overlay, 120);
+    expect(lines.join("\n")).toContain(mapExtensionToIcon("README.md", false));
+    expectWidthSafe(harness.overlay, 100);
+    expectWidthSafe(harness.overlay, 80);
+  });
+
   it("stays width-safe with help open, filter active and search active", () => {
     const harness = makeHarness(36);
     const { overlay } = harness;
