@@ -29,6 +29,8 @@ import {
   FAMILY_MAX_ROWS,
   GIT_MIN_ROWS,
   HALF_PAGE_DIVISOR,
+  IMAGE_EXTENSIONS,
+  IMAGE_RESIZE_DEBOUNCE_MS,
   LEFT_COLUMN_HIDE_BELOW,
   LEFT_COLUMN_MAX,
   LEFT_COLUMN_MIN,
@@ -36,11 +38,12 @@ import {
   MIN_OVERLAY_HEIGHT,
   MIN_OVERLAY_WIDTH,
 } from "./constants";
+import { makeDeferredImageSupport, resolveChafaGeometry, type ImageSupport } from "./images";
 import { mapExtensionToIcon } from "./icons";
 import { expandAncestors, filterRows, findNode, flattenVisible, hasChanges, moveCursor, pageJump } from "./tree";
 import type { NavigatorTheme } from "./theme";
 import type { FileNode, FilesRow, Focus, GitCommit, GitRow, GitState, InputMode, SearchMatch, ViewerFile } from "./types";
-import { computeRows, formatSize, isMarkdownPath, markMatches, maxLineWidth, searchLines, type DisplayRow } from "./viewer";
+import { computeRows, extOf, formatSize, isMarkdownPath, markMatches, maxLineWidth, searchLines, type DisplayRow, type LoadFileOptions } from "./viewer";
 
 /**
  * Truncate a (possibly styled) string to a visible width and return both the
@@ -57,13 +60,33 @@ function truncateAndWidth(text: string, maxWidth: number): { text: string; width
   return { text: out, width: visibleWidth(out) };
 }
 
+/**
+ * Support fingerprint for setImageSupport upgrade detection (D9): the knobs
+ * that change what a chafa render looks like. A fingerprint change on an
+ * already-rendered image triggers a debounced reflow; loading uses the
+ * variant key in index.ts for the cache.
+ */
+function supportFingerprint(s: ImageSupport): string {
+  return [
+    s.active ? "1" : "0",
+    s.config.binaryPath ?? "",
+    s.config.colors,
+    s.config.symbolsSet,
+    s.config.dither,
+    String(s.config.timeoutMs),
+    String(s.config.cellWidth),
+    String(s.config.maxRows),
+  ].join(":");
+}
+
 export interface NavigatorOptions {
   cwd: string;
   theme: NavigatorTheme;
   getTerminalRows: () => number;
   requestRender: () => void;
   onClose: () => void;
-  loadFile: (relPath: string) => Promise<ViewerFile>;
+  /** Optional geometry hint for image loads (chafa render seam). */
+  loadFile: (relPath: string, opts?: LoadFileOptions) => Promise<ViewerFile>;
   /** v3: open a commit's diff in the viewer. Optional — when absent, Enter on
    *  a commit falls back to toggling its family (keeps harnesses green). */
   loadCommit?: (shortHash: string) => Promise<ViewerFile>;
@@ -72,6 +95,8 @@ export interface NavigatorOptions {
   enableIcons?: boolean;
   /** Home directory for tilde shortening (Issue #039). Defaults to empty string. */
   home?: string;
+  /** Initial image-support snapshot (tests inject; index.ts passes a deferred one). */
+  imageSupport?: ImageSupport;
 }
 
 const FOCUS_HINTS: Record<Focus, string> = {
@@ -102,6 +127,7 @@ const HELP_ROWS: Array<[string, string]> = [
   ["up/down, ^n/^p", "cycle matches (searching)"],
   ["w", "toggle word wrap"],
   ["m", "toggle markdown rendered / code view"],
+  ["i", "toggle image rendering / metadata card (chafa)"],
   ["h l", "horizontal scroll when wrap is off"],
   [".", "toggle hidden files"],
   ["y", "copy the selected path"],
@@ -129,7 +155,7 @@ export class NavigatorOverlay implements Focusable {
   private getTerminalRows: () => number;
   private requestRender: () => void;
   private onClose: () => void;
-  private loadFile: (relPath: string) => Promise<ViewerFile>;
+  private loadFile: (relPath: string, opts?: LoadFileOptions) => Promise<ViewerFile>;
   private loadCommit: ((shortHash: string) => Promise<ViewerFile>) | undefined;
   private refresh: () => void;
 
@@ -217,6 +243,17 @@ export class NavigatorOverlay implements Focusable {
   /** Home directory for path shortening; never read from env here (Issue #039). */
   private home: string;
 
+  /** Resolved image-support snapshot (§6.4); deferred until index.ts resolves. */
+  private imageSupport: ImageSupport;
+  /** Session-only `i` toggle: show the metadata card for a chafa-capable image. */
+  private imageAsCard = false;
+  /** Pane snapshot recorded by the last layout pass (pure bookkeeping, §7.5). */
+  private lastViewerLayout: { cols: number; rows: number } | null = null;
+  /** Debounced re-render timer (D10); cleared by dispose(). */
+  private reflowTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Fingerprint of the last installed support (setImageSupport upgrade detection). */
+  private lastSupportFingerprint: string;
+
   constructor(options: NavigatorOptions) {
     this.cwd = options.cwd;
     this.T = options.theme;
@@ -228,6 +265,8 @@ export class NavigatorOverlay implements Focusable {
     this.refresh = options.refresh;
     this.enableIcons = options.enableIcons ?? false;
     this.home = options.home ?? "";
+    this.imageSupport = options.imageSupport ?? makeDeferredImageSupport("off");
+    this.lastSupportFingerprint = supportFingerprint(this.imageSupport);
   }
 
   // ── Public API ──
@@ -247,6 +286,29 @@ export class NavigatorOverlay implements Focusable {
   setGitState(git: GitState): void {
     this.git = git;
     this.gitCursor = moveCursor(this.gitNavRows().length, this.gitCursor, 0);
+    this.touch();
+  }
+
+  /**
+   * Install a resolved image-support snapshot (D9). Matches the setter
+   * contract: assign, then reflow a displayed image when the change can
+   * upgrade its rendering (deferred → ok, or a knob fingerprint change on an
+   * already-rendered image); always touch so the header badge and card hints
+   * refresh. The reflow is debounced and no-ops if the file changed.
+   */
+  setImageSupport(support: ImageSupport): void {
+    const previousFingerprint = this.lastSupportFingerprint;
+    this.imageSupport = support;
+    const fingerprint = supportFingerprint(support);
+    this.lastSupportFingerprint = fingerprint;
+    if (
+      support.active &&
+      this.viewFile?.kind === "image" &&
+      !this.imageAsCard &&
+      (this.viewFile.imageTier !== "chafa" || fingerprint !== previousFingerprint)
+    ) {
+      this.scheduleReflow(this.viewFile.relPath);
+    }
     this.touch();
   }
 
@@ -291,6 +353,8 @@ export class NavigatorOverlay implements Focusable {
       this.viewScroll = 0;
       this.viewHscroll = 0;
       if (!sameFile) {
+        // The `i` toggle is session-only and scoped to one open file (D8).
+        this.imageAsCard = false;
         this.searchQuery = "";
         this.searchMatches = [];
         this.searchIndex = 0;
@@ -300,7 +364,12 @@ export class NavigatorOverlay implements Focusable {
     this.requestRender();
 
     try {
-      const file = await this.loadFile(relPath);
+      const geometry = this.currentImageGeometry();
+      const loadOpts =
+        this.imageSupport.active && IMAGE_EXTENSIONS.has(extOf(relPath)) && geometry !== null
+          ? { image: geometry }
+          : undefined;
+      const file = await this.loadFile(relPath, loadOpts);
       if (this.disposed || this.loadSeq !== seq) return;
       this.viewFile = file;
       this.mdCache = null;
@@ -391,6 +460,10 @@ export class NavigatorOverlay implements Focusable {
     if (this.noticeTimer) {
       clearTimeout(this.noticeTimer);
       this.noticeTimer = null;
+    }
+    if (this.reflowTimer) {
+      clearTimeout(this.reflowTimer);
+      this.reflowTimer = null;
     }
   }
 
@@ -822,8 +895,18 @@ export class NavigatorOverlay implements Focusable {
   }
 
   private handleViewerInput(data: string): void {
+    const file = this.viewFile;
     const area = this.viewerArea();
     const half = Math.max(1, Math.ceil(area / HALF_PAGE_DIVISOR));
+    // A rendered chafa image is pre-styled content: wrap/hscroll/search are
+    // meaningless, so w, h/l, /, n/N are inert on it (rendered-markdown
+    // precedent, Issue #053); only the scrolling keys and `i` act (§7.5).
+    const renderedImage =
+      file !== null &&
+      file.kind === "image" &&
+      file.imageTier === "chafa" &&
+      !this.imageAsCard &&
+      (file.imageLines?.length ?? 0) > 0;
     if (matchesKey(data, Key.up) || data === "k") {
       this.viewScroll = Math.max(0, this.viewScroll - 1);
     } else if (matchesKey(data, Key.down) || data === "j") {
@@ -837,15 +920,22 @@ export class NavigatorOverlay implements Focusable {
     } else if (data === "G") {
       this.viewScroll = Number.MAX_SAFE_INTEGER;
     } else if (data === "/") {
+      if (renderedImage) {
+        this.showNotice("search is not available for rendered images");
+        return;
+      }
       this.mode = "search";
       this.searchQuery = "";
       this.searchMatches = [];
       this.searchIndex = 0;
     } else if (data === "n") {
+      if (renderedImage) return;
       this.cycleSearch(1);
     } else if (data === "N") {
+      if (renderedImage) return;
       this.cycleSearch(-1);
     } else if (data === "w") {
+      if (renderedImage) return;
       if (this.viewRenderMarkdown && this.canRenderMarkdown(this.viewFile)) {
         return;
       }
@@ -870,10 +960,26 @@ export class NavigatorOverlay implements Focusable {
         this.showNotice("rendered view only available for markdown files");
       }
       return;
+    } else if (data === "i") {
+      // D8 toggle: chafa render ⇄ metadata card (session-only, reset on file
+      // change). A card showing under active support re-requests the render
+      // instead of toggling, so `i` is always the "image rendering" verb.
+      if (!file || file.kind !== "image") return;
+      if (file.imageTier === "chafa" && (file.imageLines?.length ?? 0) > 0) {
+        this.imageAsCard = !this.imageAsCard;
+      } else if (this.imageSupport.active) {
+        this.imageAsCard = false;
+        void this.openRelPath(file.relPath, true);
+        return;
+      } else {
+        return;
+      }
     } else if (matchesKey(data, Key.left) || data === "h") {
+      if (renderedImage) return;
       if (this.viewRenderMarkdown && this.canRenderMarkdown(this.viewFile)) return;
       this.viewHscroll = Math.max(0, this.viewHscroll - 4);
     } else if (matchesKey(data, Key.right) || data === "l") {
+      if (renderedImage) return;
       if (this.viewRenderMarkdown && this.canRenderMarkdown(this.viewFile)) return;
       this.viewHscroll += 4;
     } else {
@@ -1054,6 +1160,65 @@ export class NavigatorOverlay implements Focusable {
     return Math.max(2, this.bodyRows(overlayH) - 1);
   }
 
+  /**
+   * Chafa geometry for the current pane snapshot (§7.2). The chafa branch
+   * has no gutter, so paneCols is the full right panel width (rev. 2
+   * amendment 3). Null when no frame has been laid out yet (render() records
+   * lastViewerLayout) or when the pane rejects the render (narrow/short) —
+   * the card wins in both cases. Pane-only: support capability is judged by
+   * the callers (openRelPath gates on active; imageCardHints ladders from
+   * the pane before the capability states).
+   */
+  private currentImageGeometry(): { cols: number; rows: number } | null {
+    if (!this.lastViewerLayout) return null;
+    const resolved = resolveChafaGeometry({
+      paneCols: this.lastViewerLayout.cols,
+      paneRows: this.lastViewerLayout.rows,
+      preferredCols: this.imageSupport.config.cellWidth,
+      maxRows: this.imageSupport.config.maxRows,
+    });
+    return resolved.ok ? { cols: resolved.cols, rows: resolved.rows } : null;
+  }
+
+  /**
+   * Debounced re-open of a chafa image at the current pane geometry (D10).
+   * One timer at a time; the callback re-checks everything that could have
+   * changed since scheduling (dispose, support, file), so a stale reflow is
+   * a no-op. dispose() clears the timer outright.
+   */
+  private scheduleReflow(relPath: string): void {
+    if (this.disposed || this.reflowTimer !== null) return;
+    this.reflowTimer = setTimeout(() => {
+      this.reflowTimer = null;
+      if (
+        !this.disposed &&
+        this.imageSupport.active &&
+        this.viewFile?.relPath === relPath &&
+        this.viewFile.kind === "image"
+      ) {
+        void this.openRelPath(relPath, true);
+      }
+    }, IMAGE_RESIZE_DEBOUNCE_MS);
+  }
+
+  /**
+   * Resize detection (D10): when the open file is a rendered chafa image
+   * whose recorded geometry no longer matches the pane, schedule a debounced
+   * re-render. Runs at the end of a fresh render pass; schedules only — no
+   * user-visible state is mutated during render (Issue #053). Stale rows stay
+   * clipped by the render clamp until the reflow lands.
+   */
+  private maybeScheduleResizeReflow(): void {
+    const file = this.viewFile;
+    if (!file || this.viewLoading || this.imageAsCard) return;
+    if (file.kind !== "image" || file.imageTier !== "chafa" || (file.imageLines?.length ?? 0) === 0) return;
+    if (!this.imageSupport.active) return;
+    const geometry = this.currentImageGeometry();
+    if (!geometry) return;
+    if (geometry.cols === file.imageCols && geometry.rows === file.imageRows) return;
+    this.scheduleReflow(file.relPath);
+  }
+
   private splitRows(body: number): { filesH: number; gitH: number } {
     let filesH = Math.max(6, Math.floor(body * 0.55));
     let gitH = body - filesH - 1;
@@ -1104,6 +1269,7 @@ export class NavigatorOverlay implements Focusable {
 
     const leftRows = withLeft ? this.buildLeftRows(leftW, filesH, body) : null;
     const rightRows = this.buildRightRows(rightW, body);
+    this.maybeScheduleResizeReflow();
 
     const lines: string[] = [];
     lines.push(T.frame("\u250c" + "\u2500".repeat(innerW) + "\u2510"));
@@ -1459,6 +1625,11 @@ export class NavigatorOverlay implements Focusable {
     rows.push(headerRow);
 
     const area = Math.max(1, body - 1);
+    // Pane snapshot for chafa geometry. The chafa branch has no gutter, so
+    // the pane is the full right panel width (rev. 2 amendment 3). Pure
+    // bookkeeping — no user-visible state is touched during render (Issue
+    // #053).
+    this.lastViewerLayout = { cols: rightW, rows: area };
 
     if (!file && this.viewLoading) {
       for (let i = 0; i < area; i++) rows.push(this.padTo(i === 0 ? " " + this.T.dim("(loading\u2026)") : "", rightW));
@@ -1469,7 +1640,28 @@ export class NavigatorOverlay implements Focusable {
       return rows;
     }
 
-    if (file.kind === "binary" || file.kind === "image" || file.kind === "error") {
+    // Chafa render branch: no gutter, no wrap, no hscroll, no search (§7.5).
+    // Rows are pre-styled and content-stable, each carrying its own trailing
+    // reset (§8), so every row is truncated to the full pane width with an
+    // empty ellipsis (Issue #010) and padded. viewScroll clamps exactly like
+    // the text path (render-time clamp keeps the frame valid between a resize
+    // and its debounced reflow, D10).
+    if (
+      file.kind === "image" &&
+      file.imageTier === "chafa" &&
+      (file.imageLines?.length ?? 0) > 0 &&
+      !this.imageAsCard
+    ) {
+      const imageLines = file.imageLines ?? [];
+      this.viewScroll = Math.max(0, Math.min(this.viewScroll, Math.max(0, imageLines.length - area)));
+      for (let i = 0; i < area; i++) {
+        const line = imageLines[this.viewScroll + i];
+        rows.push(line === undefined ? this.padTo("", rightW) : this.padTo(truncateToWidth(line, rightW, ""), rightW));
+      }
+      return rows;
+    }
+
+    if (file.kind === "binary" || file.kind === "error" || (file.kind === "image" && (file.imageTier !== "chafa" || this.imageAsCard))) {
       rows.push(...this.buildCard(file, rightW, area));
       return rows;
     }
@@ -1578,6 +1770,16 @@ export class NavigatorOverlay implements Focusable {
       if (file.kind === "truncated") meta.push("truncated");
       if (this.canRenderMarkdown(file)) {
         meta.push(this.viewRenderMarkdown ? "m code" : "m render");
+      }
+      if (file.kind === "image" && this.imageSupport.active) {
+        // Header badge (spec §7.5): a chafa render shows the toggle affordance;
+        // a chafa-capable card shows how to get back to the render.
+        if (file.imageTier === "chafa" && !this.imageAsCard) {
+          meta.push("chafa");
+          meta.push("i card");
+        } else {
+          meta.push("i render");
+        }
       }
       if (!this.viewRenderMarkdown && this.viewWrap) meta.push("wrap");
       if (this.viewHscroll > 0) meta.push(`col ${this.viewHscroll + 1}`);
@@ -1702,8 +1904,7 @@ export class NavigatorOverlay implements Focusable {
     const body: string[] = [file.relPath];
     if (file.message) body.push(file.message);
     if (file.kind === "binary") body.push("binary content is not rendered");
-    if (file.kind === "image") body.push("metadata card in v1; native protocol and chafa");
-    if (file.kind === "image") body.push("rendering is the plan section 8 spike");
+    if (file.kind === "image") body.push(...this.imageCardHints(file));
     if (file.kind === "error") body.push("press Tab, then pick another file");
 
     const contentWidth = Math.max(
@@ -1737,6 +1938,31 @@ export class NavigatorOverlay implements Focusable {
     out.push(borderRow("\u2514", "\u2500", "\u2518"));
     while (out.length < area) out.push(this.padTo("", rightW));
     return out.slice(0, area).map((row) => this.padTo(row, rightW));
+  }
+
+  /**
+   * Image-card guidance rows (spec §9): the first applicable hint in
+   * priority order — render failure, pane too small, pi-chafa absent, chafa
+   * missing/too-old/error, still resolving, mode off with chafa ok, host
+   * images disabled, else nothing (the header badge carries the affordance).
+   * Rows stay short; buildCard hard-cuts safely at narrow widths.
+   */
+  private imageCardHints(file: ViewerFile): string[] {
+    const support = this.imageSupport;
+    if (file.imageError) return [`chafa failed: ${file.imageError}`];
+    if (this.currentImageGeometry() === null) return ["pane too small for a rendered image"];
+    if (!support.piChafa.present) {
+      // Kept within the card's content clamp (rightW - 6) so the default
+      // 120-column layout shows the whole hint, not a hard cut.
+      return ["optional: install chafa + pi-chafa (pi install npm:pi-chafa)"];
+    }
+    if (support.chafa.state === "missing") return ["chafa not found - install it, or set CHAFA_BIN / binaryPath"];
+    if (support.chafa.state === "too-old") return ["chafa is older than 1.10 - upgrade to render images"];
+    if (support.chafa.state === "error") return [`chafa probe failed: ${support.chafa.detail}`];
+    if (support.chafa.state === "deferred") return ["checking image support\u2026"];
+    if (support.mode !== "chafa") return ["optional: enable images.mode=chafa to render images here"];
+    if (!support.hostShowImages) return ["terminal.showImages is false - image rendering disabled"];
+    return [];
   }
 
   // ── Help modal ──

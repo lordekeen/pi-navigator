@@ -32,9 +32,11 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => ({
 
 import { mapExtensionToIcon } from "../icons";
 import { MIN_OVERLAY_HEIGHT, MIN_OVERLAY_WIDTH } from "../constants";
+import { DEFAULT_PI_CHAFA_SUBSET, type ImageSupport } from "../images";
 import { makeNavigatorTheme } from "../theme";
 import { buildTree, entriesFromPaths } from "../tree";
 import type { GitState, ViewerFile } from "../types";
+import type { LoadFileOptions } from "../viewer";
 import { NavigatorOverlay } from "../navigator";
 
 const KEYS = {
@@ -677,5 +679,111 @@ describe("rendered markdown width safety", () => {
     const lines = expectWidthSafe(overlay, 100);
     expect(lines.join("\n")).toContain("/long");
     expect(lines.join("\n")).not.toMatch(/\x1b\[0m\.\.\./);
+  });
+});
+describe("chafa image render width safety (§12.5)", () => {
+  const activeChafaSupport = (): ImageSupport => ({
+    mode: "chafa",
+    piChafa: { present: true, via: "settings" },
+    chafa: { state: "ok", binary: "chafa", version: { major: 1, minor: 18 } },
+    config: { ...DEFAULT_PI_CHAFA_SUBSET },
+    hostShowImages: true,
+    active: true,
+  });
+
+  // Synthetic SANITIZED chafa payload (post-sanitizer imageLines): an
+  // exact-fit line, an over-wide line, a line without a trailing reset,
+  // nested SGR colors, and a wide CJK glyph. Every escape is SGR-only by
+  // construction (§8).
+  const CHAFA_PAYLOAD: string[] = [
+    "\x1b[31m" + "\u2588".repeat(60) + "\x1b[0m", // exact fit at the preferred cell width
+    "\x1b[32m" + "\u2588".repeat(200) + "\x1b[0m", // over-wide: hard-cut at the pane width
+    "\x1b[33mno trailing reset", // sanitizer guarantees resets; the branch stays safe regardless
+    "\x1b[1;35mouter \x1b[2;36mnested \x1b[0m inner\x1b[0m", // nested SGR colors
+    "\u754c".repeat(26), // wide CJK glyphs: 52 cells, truncation must be column-aware
+  ];
+
+  function makeChafaHarness(rows: number, support: ImageSupport): NavigatorOverlay {
+    const theme = makeNavigatorTheme({
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+      underline: (text: string) => text,
+      inverse: (text: string) => text,
+    } as never);
+
+    const overlay = new NavigatorOverlay({
+      cwd: "/work/repo",
+      theme,
+      getTerminalRows: () => rows,
+      requestRender: () => undefined,
+      onClose: () => undefined,
+      loadFile: async (relPath: string, opts?: LoadFileOptions): Promise<ViewerFile> => {
+        if (!opts?.image) {
+          return { kind: "image", relPath, imageTier: "metadata", lines: [], sizeBytes: 1024, message: "1.0 KB \u00b7 40x40", mtimeMs: 0 };
+        }
+        return {
+          kind: "image",
+          relPath,
+          imageTier: "chafa",
+          imageLines: CHAFA_PAYLOAD,
+          imageCols: opts.image.cols,
+          imageRows: opts.image.rows,
+          lines: [],
+          sizeBytes: 1024,
+          message: "1.0 KB \u00b7 40x40",
+          mtimeMs: 0,
+        };
+      },
+      refresh: () => undefined,
+      imageSupport: support,
+    });
+
+    overlay.setTree(buildTree("/work/repo", entriesFromPaths(["sample.png"]), new Map()), "git");
+    return overlay;
+  }
+
+  it("renders a sanitized chafa payload width-safely at every suite size", async () => {
+    const sizes = [
+      [120, 36],
+      [100, 28],
+      [80, 24],
+      [60, 24],
+      [50, 24],
+    ] as const;
+    for (const [width, rows] of sizes) {
+      const overlay = makeChafaHarness(rows, activeChafaSupport());
+      overlay.render(width); // first frame records the pane snapshot
+      await overlay.openRelPath("sample.png");
+      const lines = overlay.render(width);
+      // The chafa rows actually reached the frame.
+      expect(lines.join("\n"), `chafa payload missing at ${width}`).toContain("\x1b[31m");
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i] ?? "";
+        expect(visibleWidth(line), `line ${i} overflows width ${width}: ${JSON.stringify(line)}`).toBeLessThanOrEqual(width);
+        expect(line, `line ${i} contains a carriage return`).not.toContain("\r");
+        // Every escape in the frame is a plain SGR (`\x1b[…m`): no cursor
+        // ops, no OSC/DCS, no lone ESC (spec §8 whitelist).
+        expect(line, `line ${i} has a non-SGR escape: ${JSON.stringify(line)}`).not.toMatch(/\x1b(?!\[[0-9;]*m)/);
+        // No bright-ellipsis artifact: truncateToWidth's default "..." reset
+        // pair must never leak into a chafa row (Issue #010).
+        expect(line, `line ${i} leaks a bright ellipsis`).not.toMatch(/\x1b\[0m\.\.\./);
+      }
+    }
+  });
+
+  it("renders a card-only frame when image rendering is not active", async () => {
+    // Inactive support (mode off) is the real card-only path: openRelPath
+    // passes no image opts, so the loader serves the metadata card and no
+    // chafa payload can reach the frame.
+    const overlay = makeChafaHarness(24, { ...activeChafaSupport(), mode: "off", active: false });
+    await overlay.openRelPath("sample.png");
+    const lines = expectWidthSafe(overlay, 60);
+    const joined = lines.join("\n");
+    expect(joined).toContain("Image"); // the metadata card title
+    expect(joined).not.toContain("\u2588"); // no exact-fit / over-wide payload rows
+    expect(joined).not.toContain("\u754c"); // no CJK payload row
+    // Truncation injects SGR resets (allowed); no other escape may appear.
+    expect(joined).not.toMatch(/\x1b(?!\[[0-9;]*m)/);
   });
 });

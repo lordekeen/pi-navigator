@@ -1,9 +1,10 @@
 /**
  * pi-navigator file viewing pipeline.
  *
- * loadFile(): stat, binary sniff, image tier, size caps, tab expansion and
- * pi-native syntax highlighting (highlightCode + getLanguageFromPath; no
- * external binaries, no npm dependencies).
+ * loadFile(): stat, binary sniff, image tier (optionally rendered through an
+ * injected renderImage seam, degrading to the metadata card on failure), size
+ * caps, tab expansion and pi-native syntax highlighting (highlightCode +
+ * getLanguageFromPath; no external binaries, no npm dependencies).
  *
  * Search note: matches are located inside the already highlighted line using
  * the technique proven by pi-skill-gate (visible search over a styled string;
@@ -18,6 +19,7 @@ import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 import {
   BINARY_SNIFF_BYTES,
+  IMAGE_ERROR_MAX_CHARS,
   IMAGE_EXTENSIONS,
   MARKDOWN_EXTENSIONS,
   MAX_HIGHLIGHT_BYTES,
@@ -243,11 +245,36 @@ async function highlightText(text: string, relPath: string): Promise<string[]> {
   }
 }
 
+/** Optional geometry hint for an image load through the render seam. */
+export interface LoadFileOptions {
+  image?: { cols: number; rows: number };
+}
+
+/**
+ * Injected image renderer seam: renders an image file into chafa ANSI rows at
+ * the requested geometry. loadFile treats any throw as a failed render.
+ */
+export type ImageRenderer = (
+  absPath: string,
+  req: { cols: number; rows: number },
+) => Promise<{ ok: true; lines: string[]; cols: number; rows: number } | { ok: false; reason: string }>;
+
+/** Bound a renderer failure reason so the card hint stays within the cap. */
+function boundImageError(reason: string): string {
+  return reason.length > IMAGE_ERROR_MAX_CHARS
+    ? reason.slice(0, IMAGE_ERROR_MAX_CHARS - 1) + "\u2026"
+    : reason;
+}
+
 /**
  * Load a file for display. Never throws; every failure mode returns a typed
  * ViewerFile the UI can render (error, binary, image, or truncated).
  */
-export async function loadFile(absPath: string, relPath: string): Promise<ViewerFile> {
+export async function loadFile(
+  absPath: string,
+  relPath: string,
+  opts?: { image?: { cols: number; rows: number }; renderImage?: ImageRenderer },
+): Promise<ViewerFile> {
   let sizeBytes: number;
   let mtimeMs: number;
   try {
@@ -275,13 +302,58 @@ export async function loadFile(absPath: string, relPath: string): Promise<Viewer
     } catch {
       dims = undefined;
     }
+    const message = [formatSize(sizeBytes), dims].filter(Boolean).join(" \u00b7 ");
+    // Optional injected chafa render seam: render the image into ANSI rows,
+    // falling back to the metadata card (with a bounded hint) on any failure.
+    if (opts?.renderImage && opts.image) {
+      try {
+        const out = await opts.renderImage(absPath, opts.image);
+        if (out.ok) {
+          return {
+            kind: "image",
+            relPath,
+            sizeBytes,
+            mtimeMs,
+            lines: [],
+            message,
+            imageTier: "chafa",
+            imageLines: out.lines,
+            imageCols: out.cols,
+            imageRows: out.rows,
+          };
+        }
+        return {
+          kind: "image",
+          relPath,
+          sizeBytes,
+          mtimeMs,
+          lines: [],
+          message,
+          imageTier: "metadata",
+          imageError: boundImageError(out.reason),
+        };
+      } catch (err) {
+        return {
+          kind: "image",
+          relPath,
+          sizeBytes,
+          mtimeMs,
+          lines: [],
+          message,
+          imageTier: "metadata",
+          imageError: boundImageError(
+            err instanceof Error ? err.message : "unexpected renderer failure",
+          ),
+        };
+      }
+    }
     return {
       kind: "image",
       relPath,
       sizeBytes,
       mtimeMs,
       lines: [],
-      message: [formatSize(sizeBytes), dims].filter(Boolean).join(" \u00b7 "),
+      message,
       imageTier: "metadata",
     };
   }

@@ -29,6 +29,7 @@ import {
   stripAnsi,
   visibleTextWidth,
 } from "../viewer";
+import type { ImageRenderer } from "../viewer";
 
 // ── Text helpers ──
 
@@ -370,6 +371,114 @@ describe("loadFile", () => {
       const file = await loadFile(p, `sample.${ext}`);
       expect(file.rawText).toBe(`# Heading in ${ext}\n\ncontent`);
     }
+  });
+
+  // ── Image renderer seam (chafa) ──
+
+  /** Minimal PNG header fixture: stat-able and dimension-probeable. */
+  async function writePng(name: string): Promise<string> {
+    const header = Buffer.alloc(64);
+    header[0] = 0x89;
+    header.write("PNG", 1);
+    header[4] = 0x0d;
+    header[5] = 0x0a;
+    header[6] = 0x1a;
+    header[7] = 0x0a;
+    header.writeUInt32BE(13, 8);
+    header.write("IHDR", 12);
+    header.writeUInt32BE(10, 16);
+    header.writeUInt32BE(20, 20);
+    const path = join(dir, name);
+    await writeFile(path, header);
+    return path;
+  }
+
+  it("renders through the injected renderer on ok: chafa tier, rows, geometry, message preserved", async () => {
+    const path = await writePng("pic.png");
+    const renderer: ImageRenderer = async (_absPath, req) => ({
+      ok: true,
+      lines: ["\x1b[31m██\x1b[0m", "\x1b[32m░░\x1b[0m"],
+      cols: req.cols,
+      rows: req.rows,
+    });
+    const card = await loadFile(path, "pic.png");
+    const file = await loadFile(path, "pic.png", {
+      renderImage: renderer,
+      image: { cols: 80, rows: 24 },
+    });
+    expect(file.kind).toBe("image");
+    expect(file.imageTier).toBe("chafa");
+    expect(file.imageLines).toEqual(["\x1b[31m██\x1b[0m", "\x1b[32m░░\x1b[0m"]);
+    expect(file.imageCols).toBe(80);
+    expect(file.imageRows).toBe(24);
+    expect(file.lines).toEqual([]);
+    expect(file.message).toBe(card.message);
+    expect(file.mtimeMs).toBe(card.mtimeMs);
+  });
+
+  it("falls back to the metadata card with a bounded imageError when the renderer reports failure", async () => {
+    const path = await writePng("sad.png");
+    const renderer: ImageRenderer = async () => ({ ok: false, reason: "x".repeat(500) });
+    const file = await loadFile(path, "sad.png", {
+      renderImage: renderer,
+      image: { cols: 40, rows: 10 },
+    });
+    expect(file.kind).toBe("image");
+    expect(file.imageTier).toBe("metadata");
+    expect(file.imageError).toBe("x".repeat(199) + "\u2026");
+    expect(file.imageError?.length ?? 0).toBeLessThanOrEqual(200);
+    expect(file.imageLines).toBeUndefined();
+  });
+
+  it("treats a throwing renderer as a failed render, never rejecting loadFile", async () => {
+    const path = await writePng("boom.png");
+    const file = await loadFile(path, "boom.png", {
+      renderImage: async () => {
+        throw new Error("chafa exploded");
+      },
+      image: { cols: 40, rows: 10 },
+    });
+    expect(file.kind).toBe("image");
+    expect(file.imageTier).toBe("metadata");
+    expect(file.imageError).toBe("chafa exploded");
+
+    // A non-Error throw degrades to a generic bounded reason.
+    const stringThrow = await loadFile(path, "boom.png", {
+      renderImage: async () => {
+        throw "not an error";
+      },
+      image: { cols: 40, rows: 10 },
+    });
+    expect(stringThrow.imageTier).toBe("metadata");
+    expect(stringThrow.imageError).toBe("unexpected renderer failure");
+  });
+
+  it("keeps today's metadata card byte-for-byte when no renderer is injected", async () => {
+    const path = await writePng("plain.png");
+    const file = await loadFile(path, "plain.png");
+    expect(file.kind).toBe("image");
+    expect(file.imageTier).toBe("metadata");
+    expect(file.message).toBe("64 B \u00b7 10x20");
+    expect(file.sizeBytes).toBe(64);
+    expect(file.lines).toEqual([]);
+    expect(file.mtimeMs).toBeGreaterThan(0);
+    // Byte-for-byte shape of the pre-chafa metadata card: no seam fields at all.
+    expect(Object.keys(file).sort()).toEqual(
+      ["imageTier", "kind", "lines", "message", "mtimeMs", "relPath", "sizeBytes"].sort(),
+    );
+  });
+
+  it("ignores the image params on markdown files (rawText regression)", async () => {
+    const path = join(dir, "doc.md");
+    const content = "# Title\n\t- tab item\n";
+    await writeFile(path, content);
+    const file = await loadFile(path, "doc.md", {
+      renderImage: async () => ({ ok: true, lines: ["unused"], cols: 1, rows: 1 }),
+      image: { cols: 80, rows: 24 },
+    });
+    expect(file.kind).toBe("text");
+    expect(file.rawText).toBe(content);
+    expect(file.imageLines).toBeUndefined();
   });
 });
 

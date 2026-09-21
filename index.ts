@@ -15,14 +15,23 @@
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 
-import type {
-  ExtensionAPI,
-  ExtensionCommandContext,
-  ExtensionContext,
-  Theme,
+import {
+  getAgentDir,
+  type ExtensionAPI,
+  type ExtensionCommandContext,
+  type ExtensionContext,
+  type Theme,
 } from "@earendil-works/pi-coding-agent";
 
-import { MAX_POLL_INTERVAL_MS, MAX_VIEWER_CACHE_ENTRIES, OVERLAY_OPTIONS, REFRESH_INTERVAL_MS } from "./constants";
+import {
+  IMAGE_EXTENSIONS,
+  MAX_POLL_INTERVAL_MS,
+  MAX_VIEWER_CACHE_ENTRIES,
+  NAVIGATOR_IMAGES_ENV,
+  NAVIGATOR_SETTINGS_FILE,
+  OVERLAY_OPTIONS,
+  REFRESH_INTERVAL_MS,
+} from "./constants";
 import {
   detectRepo,
   gitCodeMap,
@@ -33,6 +42,8 @@ import {
   toCwdRelative,
 } from "./git";
 import { ICONS_ENV, parseEnableIcons } from "./icons";
+import { makeDeferredImageSupport, resolveImageSupport, runChafaRender, type ImageSupport } from "./images";
+import { loadNavigatorSettings } from "./settings";
 import { styleDiffLines } from "./diff";
 import { NavigatorOverlay } from "./navigator";
 import { makeNavigatorTheme } from "./theme";
@@ -47,11 +58,11 @@ import {
   type TreeEntry,
 } from "./tree";
 import type { FileNode, GitState, ViewerFile } from "./types";
-import { loadFile } from "./viewer";
+import { extOf, loadFile, type LoadFileOptions } from "./viewer";
 
 type TuiLike = { terminal: { rows: number }; requestRender: () => void };
 
-async function runNavigator(ctx: ExtensionContext | ExtensionCommandContext): Promise<void> {
+async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionCommandContext): Promise<void> {
   if (!ctx.hasUI) {
     ctx.ui.notify("pi-navigator requires the interactive TUI", "warning");
     return;
@@ -81,12 +92,40 @@ async function runNavigator(ctx: ExtensionContext | ExtensionCommandContext): Pr
       let inFlight = false;
       let lastError: string | null = null;
 
+      // ── Image support (optional chafa rendering) — resolved per invocation ──
+      // Settings are read once here (never in the component, Issue #028/#039
+      // pattern); warnings notify once per distinct message (§5.2).
+      const agentDir = getAgentDir();
+      const loaded = loadNavigatorSettings({
+        userPath: join(agentDir, NAVIGATOR_SETTINGS_FILE),
+        env: { images: process.env[NAVIGATOR_IMAGES_ENV] },
+      });
+      const emittedWarnings = new Set<string>();
+      const notifyWarning = (message: string): void => {
+        if (emittedWarnings.has(message)) return;
+        emittedWarnings.add(message);
+        ctx.ui.notify("pi-navigator: " + message, "warning");
+      };
+      for (const warning of loaded.warnings) notifyWarning(warning);
+      const imagePaths = {
+        userSettings: join(agentDir, "settings.json"),
+        projectSettings: join(cwd, ".pi", "settings.json"),
+        agentDir,
+      };
+      // Deferred snapshot for overlay construction (D9): the overlay opens
+      // immediately and imageSupport is upgraded when resolution lands.
+      let imageSupport: ImageSupport = makeDeferredImageSupport(loaded.settings.images.mode);
+      let supportResolving = false;
+      let imageAbort: AbortController | null = null;
+
       /** Stop everything this overlay owns. Safe to call more than once. */
       const cleanup = (): void => {
         if (pollTimer) {
           clearTimeout(pollTimer);
           pollTimer = null;
         }
+        imageAbort?.abort();
+        imageAbort = null;
         overlay.dispose();
       };
 
@@ -117,8 +156,38 @@ async function runNavigator(ctx: ExtensionContext | ExtensionCommandContext): Pr
       // the stat → sniff → read → normalize → expandTabs → highlight pipeline.
       // A cheap stat decides validity; the full loadFile only runs on a real
       // change. Bounded by MAX_VIEWER_CACHE_ENTRIES (oldest insertion evicted).
-      const viewerCache = new Map<string, { mtimeMs: number; file: ViewerFile }>();
-      const loadFileCached = async (relPath: string): Promise<ViewerFile> => {
+      // Chafa renders add a variant key (D11) so a geometry or knob change is
+      // a cache miss; non-image entries keep variant "" and behave as today.
+      const viewerCache = new Map<string, { mtimeMs: number; variant: string; file: ViewerFile }>();
+
+      /** Variant key for a chafa cache entry: geometry + rendering knobs. */
+      const imageVariant = (g: { cols: number; rows: number }, s: ImageSupport): string =>
+        `${g.cols}x${g.rows}:${s.config.binaryPath ?? ""}:${s.config.colors}:${s.config.symbolsSet}:${s.config.dither}:${s.config.timeoutMs}`;
+
+      /**
+       * Injected render seam (viewer.ts ImageRenderer contract): owns the
+       * abort lifecycle (one controller per load; aborted on dispose and on
+       * a newer load) and the chafa availability check. The result carries
+       * the requested geometry back so the viewer stores imageCols/imageRows.
+       */
+      const renderImage = async (
+        absPath: string,
+        req: { cols: number; rows: number },
+      ): Promise<{ ok: true; lines: string[]; cols: number; rows: number } | { ok: false; reason: string }> => {
+        const support = imageSupport;
+        if (support.chafa.state !== "ok") return { ok: false, reason: "chafa is not available" };
+        imageAbort?.abort();
+        const controller = new AbortController();
+        imageAbort = controller;
+        const out = await runChafaRender(absPath, req, {
+          binary: support.chafa.binary,
+          config: support.config,
+          signal: controller.signal,
+        });
+        return out.ok ? { ok: true, lines: out.lines, cols: req.cols, rows: req.rows } : out;
+      };
+
+      const loadFileCached = async (relPath: string, opts?: LoadFileOptions): Promise<ViewerFile> => {
         const absPath = join(cwd, relPath);
         let mtimeMs: number;
         try {
@@ -129,11 +198,20 @@ async function runNavigator(ctx: ExtensionContext | ExtensionCommandContext): Pr
           viewerCache.delete(relPath);
           return loadFile(absPath, relPath);
         }
+        const image = opts?.image;
+        const isImage = IMAGE_EXTENSIONS.has(extOf(relPath));
+        const useChafa = isImage && image !== undefined && imageSupport.active;
+        const variant = useChafa && image ? imageVariant(image, imageSupport) : "";
         const cached = viewerCache.get(relPath);
-        if (cached && Math.abs(cached.mtimeMs - mtimeMs) <= 1) {
+        if (cached && Math.abs(cached.mtimeMs - mtimeMs) <= 1 && cached.variant === variant) {
           return cached.file;
         }
-        const file = await loadFile(absPath, relPath);
+        let file: ViewerFile;
+        if (useChafa && image) {
+          file = await loadFile(absPath, relPath, { image, renderImage });
+        } else {
+          file = await loadFile(absPath, relPath);
+        }
         // Cache only results that carry an mtime (text/binary/image/truncated);
         // error cards have none and are cheap to rebuild.
         if (file.mtimeMs !== undefined) {
@@ -141,7 +219,7 @@ async function runNavigator(ctx: ExtensionContext | ExtensionCommandContext): Pr
             const oldest = viewerCache.keys().next();
             if (!oldest.done) viewerCache.delete(oldest.value);
           }
-          viewerCache.set(relPath, { mtimeMs: file.mtimeMs, file });
+          viewerCache.set(relPath, { mtimeMs: file.mtimeMs, variant, file });
         }
         return file;
       };
@@ -163,6 +241,30 @@ async function runNavigator(ctx: ExtensionContext | ExtensionCommandContext): Pr
         };
       };
 
+      /**
+       * Resolve support once per /navigator invocation (D9, §6.4): host image
+       * settings, pi-chafa presence/config, and the bounded binary probe, then
+       * push the result into the overlay. The previous snapshot is passed so
+       * an already-ok probe is reused on `r` (self-heal only when it was not
+       * ok). Never blocks the overlay: called fire-and-forget.
+       */
+      const resolveSupport = async (): Promise<void> => {
+        if (supportResolving || closed) return;
+        supportResolving = true;
+        try {
+          const support = await resolveImageSupport(pi, imagePaths, loaded.settings, {
+            previous: imageSupport,
+            onWarning: notifyWarning,
+          });
+          if (closed) return;
+          imageSupport = support;
+          overlay.setImageSupport(support);
+          scheduleRender();
+        } finally {
+          supportResolving = false;
+        }
+      };
+
       const overlay = new NavigatorOverlay({
         cwd,
         theme,
@@ -173,6 +275,7 @@ async function runNavigator(ctx: ExtensionContext | ExtensionCommandContext): Pr
         loadCommit,
         refresh: () => {
           currentPollDelay = REFRESH_INTERVAL_MS;
+          void resolveSupport();
           void refreshData().then(() => {
             scheduleRender();
             scheduleNextPoll();
@@ -182,7 +285,13 @@ async function runNavigator(ctx: ExtensionContext | ExtensionCommandContext): Pr
         // touches process.env (Issues #028, #039).
         enableIcons: parseEnableIcons(process.env[ICONS_ENV]),
         home: process.env.HOME ?? process.env.USERPROFILE ?? "",
+        // Deferred snapshot; upgraded via setImageSupport when resolution lands.
+        imageSupport,
       });
+
+      // Fire-and-forget: the overlay opens immediately; a resolved snapshot
+      // upgrades a displayed image card through setImageSupport (D9).
+      void resolveSupport();
 
       const refreshData = async (): Promise<void> => {
         // One refresh at a time. A tick that fires while the previous one is
@@ -327,7 +436,7 @@ export default function (pi: ExtensionAPI): void {
   pi.registerCommand("navigator", {
     description: "Open the read-only project navigator (file tree, git state, viewer)",
     handler: async (_args, ctx) => {
-      await runNavigator(ctx);
+      await runNavigator(pi, ctx);
     },
   });
 }

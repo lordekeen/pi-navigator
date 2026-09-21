@@ -113,8 +113,17 @@ export interface ViewerFile {
   notice?: string;
   /** Message for binary, image, and error cards. */
   message?: string;
-  /** Image tier ladder outcome; reserved for the plan section 8 spike. */
+  /** Image tier ladder outcome: metadata card, chafa symbol art, or (reserved)
+   *  native protocol blocks. */
   imageTier?: "metadata" | "native" | "chafa";
+  /** chafa-rendered ANSI rows; set only with kind "image" and imageTier
+   *  "chafa" after sanitizeChafaPayload succeeded. `lines` stays empty. */
+  imageLines?: string[];
+  /** Geometry the chafa rows were rendered at (header badge + resize detect). */
+  imageCols?: number;
+  imageRows?: number;
+  /** Bounded chafa failure reason for the fallback card's hint row. */
+  imageError?: string;
   /** Diff-only: short hash the diff is for (v3 commit detail view). */
   commitHash?: string;
   /** Diff-only: parent short hashes, for the notice line. */

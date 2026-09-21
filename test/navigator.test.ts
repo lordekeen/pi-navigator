@@ -6,10 +6,14 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { visibleWidth } from "@earendil-works/pi-tui";
 
+import { IMAGE_RESIZE_DEBOUNCE_MS } from "../constants";
+import { DEFAULT_PI_CHAFA_SUBSET, type ImageSupport } from "../images";
 import { makeNavigatorTheme } from "../theme";
 import { buildTree, entriesFromPaths, findNode } from "../tree";
 import type { GitState, ViewerFile } from "../types";
+import type { LoadFileOptions } from "../viewer";
 
 const { copyToClipboard } = vi.hoisted(() => ({ copyToClipboard: vi.fn() }));
 vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => ({
@@ -54,19 +58,66 @@ const KEYS = {
   ctrlP: "\x10",
 } as const;
 
+/** Active chafa support snapshot for the image suites (§12.4). */
+function activeSupport(overrides: Partial<ImageSupport> = {}): ImageSupport {
+  return {
+    mode: "chafa",
+    piChafa: { present: true, via: "settings" },
+    chafa: { state: "ok", binary: "chafa", version: { major: 1, minor: 18 } },
+    config: { ...DEFAULT_PI_CHAFA_SUBSET },
+    hostShowImages: true,
+    active: true,
+    ...overrides,
+  };
+}
+
+/** Fake chafa render: imageTier "chafa" with imageRows plain rows. */
+function chafaImage(relPath: string, imageCols = 40, imageRows = 12): ViewerFile {
+  return {
+    kind: "image",
+    relPath,
+    imageTier: "chafa",
+    imageCols,
+    imageRows,
+    imageLines: Array.from({ length: imageRows }, (_, i) => `chafa-row-${i}`),
+    lines: [],
+    sizeBytes: 1024,
+    message: "1.0 KB \u00b7 32x32",
+  };
+}
+
+/** Fake metadata card (the pre-chafa image tier). */
+function metadataImage(relPath: string): ViewerFile {
+  return {
+    kind: "image",
+    relPath,
+    imageTier: "metadata",
+    lines: [],
+    sizeBytes: 1024,
+    message: "1.0 KB \u00b7 32x32",
+  };
+}
+
+/** Strip ANSI escapes for content assertions (theme is identity in harnesses). */
+const strip = (s: string): string => s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
+
 interface Harness {
   overlay: NavigatorOverlay;
   opened: string[];
+  /** Every loader call: (relPath, opts) — the opts carry the chafa geometry hint. */
+  loads: Array<{ relPath: string; opts?: LoadFileOptions }>;
   state: { closed: number; refreshed: number; renders: number };
 }
 
 function makeHarness(
   rows = 36,
-  customLoadFile?: (relPath: string) => Promise<ViewerFile>,
+  customLoadFile?: (relPath: string, opts?: LoadFileOptions) => Promise<ViewerFile>,
   customTheme?: (color: string, text: string) => string,
   loadCommit?: (shortHash: string) => Promise<ViewerFile>,
+  imageSupport?: ImageSupport,
 ): Harness {
   const opened: string[] = [];
+  const loads: Array<{ relPath: string; opts?: LoadFileOptions }> = [];
   const state = { closed: 0, refreshed: 0, renders: 0 };
 
   const theme = makeNavigatorTheme({
@@ -88,25 +139,27 @@ function makeHarness(
       state.closed += 1;
     },
     loadFile:
-      customLoadFile ??
-      (async (relPath: string): Promise<ViewerFile> => {
+      (relPath: string, opts?: LoadFileOptions): Promise<ViewerFile> => {
+        loads.push({ relPath, opts });
+        if (customLoadFile) return customLoadFile(relPath, opts);
         opened.push(relPath);
-        return {
+        return Promise.resolve({
           kind: "text",
           relPath,
           sizeBytes: 10,
           lineCount: 3,
           lines: ["alpha", "beta", "gamma"],
-        };
-      }),
+        });
+      },
     ...(loadCommit ? { loadCommit } : {}),
     refresh: () => {
       state.refreshed += 1;
     },
+    ...(imageSupport !== undefined ? { imageSupport } : {}),
   };
 
   const overlay = new NavigatorOverlay(options);
-  return { overlay, opened, state };
+  return { overlay, opened, loads, state };
 }
 
 function withTree(harness: Harness, relPaths: string[]): void {
@@ -1279,5 +1332,403 @@ describe("markdown rendered view", () => {
 
     expect(spy).toHaveBeenCalledTimes(1);
     spy.mockRestore();
+  });
+});
+// ── Chafa image rendering (§12.4) ──
+
+describe("chafa image rendering", () => {
+  /** Content row `bodyIndex` of a frame rendered at the default harness size. */
+  const bodyRow = (lines: string[], bodyIndex: number): string => {
+    // lines[0..2] are top border, title and separator; lines[3] is the viewer
+    // header, so content row 0 is lines[4].
+    const row = strip(lines[4 + bodyIndex] ?? "");
+    // The right pane sits between the last separator and the closing frame
+    // border; the left/right split row uses `┤`, other rows use `│`.
+    const end = row.length - 1;
+    const start = Math.max(row.lastIndexOf("\u2502", end - 1), row.lastIndexOf("\u2524", end - 1)) + 1;
+    return row.slice(start, end).trimEnd();
+  };
+
+  it("opens a chafa image with pane-derived geometry and renders width-safe rows without a gutter", async () => {
+    const harness = makeHarness(
+      36,
+      async (relPath, opts): Promise<ViewerFile> => chafaImage(relPath, opts?.image?.cols ?? 40, opts?.image?.rows ?? 24),
+      undefined,
+      undefined,
+      activeSupport(),
+    );
+    withTree(harness, ["sample.png"]);
+    harness.overlay.render(120); // first frame: records lastViewerLayout
+    harness.overlay.handleInput(KEYS.enter); // open sample.png
+    await Promise.resolve();
+
+    // At 120×36 the viewer pane is 82×24; the chafa preference (60 cols) caps
+    // the geometry, the pane caps the rows.
+    expect(harness.loads[0]?.relPath).toBe("sample.png");
+    expect(harness.loads[0]?.opts?.image).toEqual({ cols: 60, rows: 24 });
+
+    const lines = harness.overlay.render(120);
+    // Content row 0 starts directly after the frame border: no gutter column.
+    expect(bodyRow(lines, 0)).toBe("chafa-row-0");
+    expect(bodyRow(lines, 23)).toBe("chafa-row-23");
+    // Every row is exactly the frame width (content padded to rightW).
+    for (let i = 0; i < lines.length; i++) {
+      expect(visibleWidth(lines[i] ?? ""), `line ${i} overflows`).toBe(120);
+    }
+    expect(lines.join("\n")).toContain("chafa \u00b7 i card");
+  });
+
+  it("scrolls and clamps to the image height on j, G and Ctrl+d", async () => {
+    const harness = makeHarness(
+      36,
+      async (relPath): Promise<ViewerFile> => chafaImage(relPath, 40, 40), // 40 rows, taller than the 24-row area
+      undefined,
+      undefined,
+      activeSupport(),
+    );
+    withTree(harness, ["sample.png"]);
+    harness.overlay.render(120);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+
+    harness.overlay.handleInput("G"); // bottom: clamp at 40 - 24 = 16
+    let lines = harness.overlay.render(120);
+    expect(bodyRow(lines, 0)).toBe("chafa-row-16");
+    expect(bodyRow(lines, 23)).toBe("chafa-row-39");
+
+    harness.overlay.handleInput("j"); // stays clamped
+    lines = harness.overlay.render(120);
+    expect(bodyRow(lines, 23)).toBe("chafa-row-39");
+
+    harness.overlay.handleInput(KEYS.ctrlD); // +12 → 28 → clamped back to 16
+    lines = harness.overlay.render(120);
+    expect(bodyRow(lines, 0)).toBe("chafa-row-16");
+
+    harness.overlay.handleInput("g"); // top
+    lines = harness.overlay.render(120);
+    expect(bodyRow(lines, 0)).toBe("chafa-row-0");
+  });
+
+  it("fills blank rows below a short rendered image", async () => {
+    const harness = makeHarness(
+      36,
+      async (relPath, opts): Promise<ViewerFile> => chafaImage(relPath, opts?.image?.cols ?? 40, 12),
+      undefined,
+      undefined,
+      activeSupport(),
+    );
+    withTree(harness, ["sample.png"]);
+    harness.overlay.render(120);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+
+    const lines = harness.overlay.render(120);
+    expect(bodyRow(lines, 11)).toBe("chafa-row-11"); // last image row
+    expect(bodyRow(lines, 12)).toBe(""); // blank fill below the image
+    expect(bodyRow(lines, 23)).toBe("");
+  });
+
+  it("toggles between render and card with i, and resets the toggle on file change", async () => {
+    const harness = makeHarness(
+      36,
+      async (relPath, opts): Promise<ViewerFile> => chafaImage(relPath, opts?.image?.cols ?? 40, 40),
+      undefined,
+      undefined,
+      activeSupport(),
+    );
+    withTree(harness, ["sample.png", "other.png"]);
+    harness.overlay.render(120);
+    harness.overlay.handleInput(KEYS.enter); // sample.png
+    await Promise.resolve();
+
+    let joined = harness.overlay.render(120).join("\n");
+    expect(joined).toContain("chafa-row-0");
+    expect(joined).toContain("chafa \u00b7 i card");
+
+    // i → metadata card (header badge flips, no reload).
+    harness.overlay.handleInput("i");
+    joined = harness.overlay.render(120).join("\n");
+    expect(joined).not.toContain("chafa-row-");
+    expect(joined).toContain("i render");
+    expect(harness.loads).toHaveLength(1);
+
+    // i → back to the render.
+    harness.overlay.handleInput("i");
+    joined = harness.overlay.render(120).join("\n");
+    expect(joined).toContain("chafa-row-0");
+    expect(joined).toContain("chafa \u00b7 i card");
+    expect(harness.loads).toHaveLength(1);
+
+    // File change while the card is showing resets imageAsCard (D8): the new
+    // file opens as a render, not as a card.
+    harness.overlay.handleInput("i"); // sample.png → card
+    harness.overlay.handleInput(KEYS.tab); // viewer -> files
+    harness.overlay.handleInput("j"); // sample.png -> other.png
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+    joined = harness.overlay.render(120).join("\n");
+    expect(joined).toContain("chafa-row-0");
+    expect(harness.loads).toHaveLength(2);
+  });
+
+  it("re-requests the render when i is pressed on a card under active support", async () => {
+    const loads: Array<{ relPath: string; opts?: LoadFileOptions }> = [];
+    let serveCard = true;
+    const harness = makeHarness(
+      36,
+      async (relPath, opts): Promise<ViewerFile> => {
+        loads.push({ relPath, opts });
+        if (serveCard) return metadataImage(relPath);
+        return chafaImage(relPath, opts?.image?.cols ?? 40, opts?.image?.rows ?? 40);
+      },
+      undefined,
+      undefined,
+      activeSupport(),
+    );
+    withTree(harness, ["sample.png"]);
+    harness.overlay.render(120);
+    harness.overlay.handleInput(KEYS.enter); // loader serves a card
+    await Promise.resolve();
+    expect(loads).toHaveLength(1);
+    expect(harness.overlay.render(120).join("\n")).toContain("i render");
+
+    serveCard = false;
+    harness.overlay.handleInput("i"); // card + active support → re-request the render
+    await Promise.resolve();
+    expect(loads).toHaveLength(2);
+    expect(loads[1]?.opts?.image).toEqual({ cols: 60, rows: 24 });
+    expect(harness.overlay.render(120).join("\n")).toContain("chafa-row-0");
+  });
+
+  it("makes w, h, l, arrows, n and N inert on a rendered image and explains / is unavailable", async () => {
+    const harness = makeHarness(
+      36,
+      async (relPath): Promise<ViewerFile> => chafaImage(relPath, 40, 40),
+      undefined,
+      undefined,
+      activeSupport(),
+    );
+    withTree(harness, ["sample.png"]);
+    harness.overlay.render(120);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+
+    const overlay = harness.overlay as any;
+    harness.overlay.render(120);
+    const cached = overlay.cachedLines;
+    expect(cached).toBeDefined();
+    const hscrollBefore = overlay.viewHscroll;
+
+    // Inert keys never touch(): the render cache survives (Issue #053 pattern).
+    for (const key of ["w", "h", "l", KEYS.left, KEYS.right, "n", "N"]) {
+      overlay.handleInput(key);
+    }
+    expect(overlay.cachedLines).toBe(cached);
+    expect(overlay.viewHscroll).toBe(hscrollBefore);
+    expect(overlay.viewWrap).toBe(false);
+
+    // Scroll keys still work.
+    overlay.handleInput("G");
+    expect(harness.overlay.render(120).join("\n")).toContain("chafa-row-39");
+
+    // / explains search is unavailable and does not enter search mode.
+    overlay.handleInput("/");
+    expect(overlay.mode).toBe("normal");
+    expect(harness.overlay.render(120).join("\n")).toContain("search is not available for rendered images");
+  });
+
+  it("upgrades a deferred support: card first, then re-renders with geometry after the debounce", async () => {
+    vi.useFakeTimers();
+    try {
+      const loads: Array<{ relPath: string; opts?: LoadFileOptions }> = [];
+      const harness = makeHarness(
+        36,
+        async (relPath, opts): Promise<ViewerFile> => {
+          loads.push({ relPath, opts });
+          return opts?.image ? chafaImage(relPath, opts.image.cols, opts.image.rows) : metadataImage(relPath);
+        },
+      );
+      withTree(harness, ["sample.png"]);
+      harness.overlay.render(120); // layout recorded before the open
+      harness.overlay.handleInput(KEYS.enter); // support is deferred → metadata card
+      await Promise.resolve();
+      expect(loads[0]?.opts).toBeUndefined();
+      expect(harness.overlay.render(120).join("\n")).toContain("Image");
+
+      harness.overlay.setImageSupport(activeSupport());
+      expect(loads).toHaveLength(1); // debounced: no immediate re-request
+      vi.advanceTimersByTime(IMAGE_RESIZE_DEBOUNCE_MS);
+      await Promise.resolve();
+      expect(loads).toHaveLength(2);
+      expect(loads[1]?.opts?.image).toEqual({ cols: 60, rows: 24 });
+      expect(harness.overlay.render(120).join("\n")).toContain("chafa-row-23");
+      harness.overlay.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-renders at a new pane geometry after the debounce and cancels the reflow on dispose", async () => {
+    vi.useFakeTimers();
+    try {
+      const loads: Array<{ relPath: string; opts?: LoadFileOptions }> = [];
+      const support = activeSupport({
+        config: { ...DEFAULT_PI_CHAFA_SUBSET, cellWidth: 100, maxRows: 50 },
+      });
+      const harness = makeHarness(
+        36,
+        async (relPath, opts): Promise<ViewerFile> => {
+          loads.push({ relPath, opts });
+          return chafaImage(relPath, opts?.image?.cols ?? 40, opts?.image?.rows ?? 24);
+        },
+        undefined,
+        undefined,
+        support,
+      );
+      withTree(harness, ["sample.png"]);
+      harness.overlay.render(120);
+      harness.overlay.handleInput(KEYS.enter);
+      await Promise.resolve();
+      // Width 120 → rightW 82; preferred 100 → geometry {82, 24}.
+      expect(loads[0]?.opts?.image).toEqual({ cols: 82, rows: 24 });
+
+      // "Resize": a render at another width is a fresh pass (cache miss).
+      harness.overlay.render(100);
+      expect(loads).toHaveLength(1); // debounce: nothing yet
+      vi.advanceTimersByTime(IMAGE_RESIZE_DEBOUNCE_MS);
+      await Promise.resolve();
+      expect(loads).toHaveLength(2);
+      expect(loads[1]?.opts?.image).toEqual({ cols: 68, rows: 24 });
+
+      // Stable at the new geometry: no further re-request.
+      harness.overlay.render(100);
+      vi.advanceTimersByTime(IMAGE_RESIZE_DEBOUNCE_MS);
+      await Promise.resolve();
+      expect(loads).toHaveLength(2);
+
+      // A pending reflow is cancelled by dispose().
+      harness.overlay.render(80); // rightW 53 → schedules a reflow
+      expect(loads).toHaveLength(2);
+      harness.overlay.dispose();
+      vi.advanceTimersByTime(IMAGE_RESIZE_DEBOUNCE_MS * 2);
+      await Promise.resolve();
+      expect(loads).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows the header badge only when support is active", async () => {
+    const harness = makeHarness(36, async (relPath, opts): Promise<ViewerFile> => chafaImage(relPath, opts?.image?.cols ?? 40, 12));
+    withTree(harness, ["sample.png"]);
+    harness.overlay.render(120);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+    const joined = harness.overlay.render(120).join("\n");
+    expect(joined).not.toContain("i render");
+    expect(joined).not.toContain("i card");
+  });
+
+  it("guides the metadata card per support state (§9)", async () => {
+    const cases: Array<{ name: string; support: ImageSupport; expects: string[]; absent: string[] }> = [
+      {
+        name: "active",
+        support: activeSupport(),
+        expects: [],
+        absent: ["optional:", "chafa failed", "pane too small", "install chafa", "terminal.showImages"],
+      },
+      {
+        name: "mode off",
+        support: activeSupport({ mode: "off", active: false }),
+        expects: ["optional: enable images.mode=chafa to render images here"],
+        absent: [],
+      },
+      {
+        name: "pi-chafa absent",
+        support: activeSupport({ piChafa: { present: false, via: "none" }, active: false }),
+        expects: ["optional: install chafa + pi-chafa (pi install npm:pi-chafa)"],
+        absent: [],
+      },
+      {
+        name: "chafa missing",
+        support: activeSupport({ chafa: { state: "missing", detail: "not found" }, active: false }),
+        expects: ["chafa not found - install it, or set CHAFA_BIN / binaryPath"],
+        absent: [],
+      },
+      {
+        name: "chafa too old",
+        support: activeSupport({ chafa: { state: "too-old", detail: "old" }, active: false }),
+        expects: ["chafa is older than 1.10 - upgrade to render images"],
+        absent: [],
+      },
+      {
+        name: "chafa probe error",
+        support: activeSupport({ chafa: { state: "error", detail: "bogus" }, active: false }),
+        expects: ["chafa probe failed: bogus"],
+        absent: [],
+      },
+      {
+        name: "still resolving",
+        support: activeSupport({ chafa: { state: "deferred" }, active: false }),
+        expects: ["checking image support\u2026"],
+        absent: [],
+      },
+      {
+        name: "host images disabled",
+        support: activeSupport({ hostShowImages: false, active: false }),
+        expects: ["terminal.showImages is false - image rendering disabled"],
+        absent: [],
+      },
+    ];
+
+    for (const c of cases) {
+      const harness = makeHarness(36, async (relPath) => metadataImage(relPath), undefined, undefined, c.support);
+      withTree(harness, ["sample.png"]);
+      harness.overlay.render(120);
+      harness.overlay.handleInput(KEYS.enter);
+      await Promise.resolve();
+      const joined = harness.overlay.render(120).join("\n");
+      for (const expected of c.expects) {
+        expect(joined, `${c.name}: missing hint "${expected}"`).toContain(expected);
+      }
+      for (const absent of c.absent) {
+        expect(joined, `${c.name}: unexpected hint "${absent}"`).not.toContain(absent);
+      }
+      harness.overlay.dispose();
+    }
+  });
+
+  it("shows the chafa failure reason on the fallback card", async () => {
+    const harness = makeHarness(
+      36,
+      async (relPath): Promise<ViewerFile> => ({ ...metadataImage(relPath), imageError: "render aborted" }),
+      undefined,
+      undefined,
+      activeSupport(),
+    );
+    withTree(harness, ["sample.png"]);
+    harness.overlay.render(120);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+    expect(harness.overlay.render(120).join("\n")).toContain("chafa failed: render aborted");
+    harness.overlay.dispose();
+  });
+
+  it("hints pane-too-small when the pane rejects the render geometry", async () => {
+    const harness = makeHarness(36, async (relPath) => metadataImage(relPath), undefined, undefined, activeSupport());
+    withTree(harness, ["sample.png"]);
+    harness.overlay.render(120);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+
+    const overlay = harness.overlay as any;
+    const file = overlay.viewFile;
+    // No pane snapshot (nothing laid out): geometry unknown → pane hint.
+    overlay.lastViewerLayout = null;
+    expect(overlay.imageCardHints(file)).toEqual(["pane too small for a rendered image"]);
+    // A pane below IMAGE_CELLS_MIN also rejects (§7.2).
+    overlay.lastViewerLayout = { cols: 10, rows: 24 };
+    expect(overlay.imageCardHints(file)).toEqual(["pane too small for a rendered image"]);
+    harness.overlay.dispose();
   });
 });
