@@ -1,6 +1,6 @@
 {
   "name": "pi-navigator",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Read-only project file navigator overlay for pi: file tree, git state, and syntax-highlighted viewing without leaving the session.",
   "keywords": [
     "pi-package",
@@ -28,6 +28,8 @@
     "theme.ts",
     "types.ts",
     "constants.ts",
+    "settings.ts",
+    "images.ts",
     "README.md"
   ],
   "pi": {

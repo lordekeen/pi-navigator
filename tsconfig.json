@@ -12,5 +12,5 @@
     "noFallthroughCasesInSwitch": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["index.ts", "navigator.ts", "tree.ts", "git.ts", "viewer.ts", "diff.ts", "icons.ts", "theme.ts", "types.ts", "constants.ts", "test/**/*.ts", "vitest.config.ts"]
+  "include": ["index.ts", "navigator.ts", "tree.ts", "git.ts", "viewer.ts", "diff.ts", "icons.ts", "theme.ts", "types.ts", "constants.ts", "images.ts", "settings.ts", "test/**/*.ts", "vitest.config.ts"]
 }

@@ -155,6 +155,10 @@ All color is **semantic and theme-delegated**. The overlay calls `NavigatorTheme
 
 An agent adding a new surface should reuse the closest semantic role (e.g. a new "notice" → `warning`; a new badge → match the existing git badge palette) rather than introducing a new token.
 
+### Image tier (chafa)
+
+Rendered images are the **one sanctioned exception** to "no hardcoded colors": chafa-authored ANSI SGR colors pass through the overlay because they are produced by the user's **own** tool and configuration (`~/.pi/agent/pi-chafa.json` + `CHAFA_*` env), not by pi-navigator — pi-navigator itself hardcodes none. Every chafa row is contained by an enforced trailing `\x1b[0m` reset before padding, so a chafa color can never leak into the next row, the gutter, or the frame.
+
 ## Typography
 
 There is exactly **one typeface: the terminal's monospace cell.** There are no proportional fonts, no web font loading, no font stacks. All "typography" is expressed through ANSI emphasis (`bold`) and size-invariant emphasis only — the cell size is fixed by the terminal.

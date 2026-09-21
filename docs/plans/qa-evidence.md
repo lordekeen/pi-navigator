@@ -55,6 +55,37 @@ Drove `/navigator` in a real session against this repository itself:
   README behavior notes. The plan's section 4 conflict audit said `ctrl+n` was
   unbound — that was true for the pi version the plan was written against.
 
+### Chafa image tier live drive (v0.6.0 — Linux, tmux 120x36 ⇄ 80x24, nested pi 0.85.1)
+
+Environment: chafa 1.18.2 on PATH, pi-chafa registered as a local package
+(`../../Sources/pi-chafa`), throwaway PNGs at the repo root (removed after the
+run). Spec: [`docs/specs/chafa-image-rendering.md`](../specs/chafa-image-rendering.md).
+
+- **Default off**: `/navigator` → open a PNG → metadata card (`75 B · 8x8`) plus
+  `optional: enable images.mode=chafa to render images here`; no chafa spawn.
+- **Opt-in via `PI_NAV_IMAGES=1`**: the same file rendered as chafa symbol art
+  with the `chafa · i card` header badge. A raw `capture-pane -e` of the frame
+  contained only SGR escapes (no cursor/OSC/DCS), confirming the §8 sanitizer
+  containment end to end.
+- **`i`** toggled to the metadata card (badge `i render`) and back to the render
+  (badge `chafa · i card`).
+- **`/`** on a rendered image showed `search is not available for rendered
+  images` and did not enter search mode.
+- **Resize**: 80x24 → 120x36 re-rendered after the debounce at the new geometry
+  (a 64x64 gradient grew from ~28x14 cells to ~44x23 cells, consistent with the
+  pane-bounded 60x24 chafa box); every captured line was exactly the window
+  width and the frame stayed valid throughout.
+
+Automated companions in the same tree: `test/settings.test.ts` (42 cases),
+`test/images.test.ts` (55), plus the extended viewer/navigator/render suites —
+`npm run typecheck` and `npm test` (8 suites, 285 cases) green. A real-chafa
+smoke pass (probe → render → sanitize) and a hostile `\x1b[2J` payload rejection
+were exercised during implementation.
+
+Not covered by this live pass (unit-tested only): a bogus `CHAFA_BIN` and
+`terminal.showImages: false` in a live session; live `r` config-change pickup;
+very large images at small pane sizes.
+
 ## Earlier static pass (Windows 11, no Node)
 
 Environment for that pass: Windows 11, PowerShell. `node`, `npm` and `git` were **not on PATH**

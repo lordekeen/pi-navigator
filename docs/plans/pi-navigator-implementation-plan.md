@@ -270,6 +270,10 @@ Cursor navigation walks every rendered git row in order; `Enter` acts only on ch
 
 ## 8. Image handling tiers (verification spike)
 
+> **Status (v0.6.0):** the **chafa tier is implemented** — see
+> [`docs/specs/chafa-image-rendering.md`](../specs/chafa-image-rendering.md) for
+> the feature spec. The **native tier remains the open spike** (item 1 below and §14 item 1).
+
 Default tier is the metadata card: name, relative path, size, mtime, and dimensions when cheaply derivable.
 
 Spike tasks, in order:
@@ -367,7 +371,7 @@ a live interactive session.
 
 ## 14. Open verification items
 
-1. pi-tui Image rendering inside an overlay region.
-2. chafa output quality and latency at typical pane sizes.
+1. pi-tui Image rendering inside an overlay region (still open — see the chafa spec's §16 future-work list; native tier).
+2. chafa output quality and latency at typical pane sizes (**addressed** — implemented as the chafa tier; see [`docs/specs/chafa-image-rendering.md`](../specs/chafa-image-rendering.md)).
 3. `ctrl+n` delivery on Windows Terminal and VS Code terminal.
 4. Performance on very large repositories (10k plus files) for the fs walk fallback and flattening.

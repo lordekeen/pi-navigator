@@ -9,8 +9,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
 | **Pending / Open** | 1 | 0 | 0 | **1** |
-| **Resolved** | 8 | 16 | 31 | **55** |
-| **Total** | **9** | **16** | **31** | **56** |
+| **Resolved** | 8 | 17 | 31 | **56** |
+| **Total** | **9** | **17** | **31** | **57** |
 
 ---
 
@@ -26,6 +26,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | ID | Title | Type | Severity | Resolution Summary | Status |
 | :--- | :--- | :--- | :--- | :--- | :---: |
+| [#057](057-chafa-image-rendering.md) | Optional Chafa Image Rendering (pi-chafa delegation) | Feature | Medium | Opt-in chafa symbol-art rendering in the viewer via pi-chafa delegation (`images.mode: "chafa"` / `PI_NAV_IMAGES`), pane-bounded geometry, strict SGR-only sanitizer, `i` toggle, resize reflow, deferred async support, full degradation to the metadata card — see `docs/specs/chafa-image-rendering.md`. version 0.6.0. | **Resolved** |
 | [#052](052-search-index-out-of-bounds-mode-toggle.md) | `searchIndex` Out of Bounds When Toggling Markdown Rendered Mode (`m`) | Bug / UI Consistency | Medium | Clamped `searchIndex` to `Math.max(0, searchMatches.length - 1)` in `recomputeSearchOnLines` whenever `searchIndex >= searchMatches.length`, preventing out-of-bounds counters in `buildSearchBar`. | **Resolved** |
 | [#053](053-horizontal-scroll-rendered-markdown-mutation.md) | Horizontal Scroll Keys Mutate State During Render in Rendered Mode | Bug / UI Polish | Low | Guarded `h`, `l`, `Key.left`, and `Key.right` in `handleViewerInput` when rendered markdown mode is active; removed state-mutating `this.viewHscroll = 0` from `buildRightRows`. | **Resolved** |
 | [#054](054-redundant-rendered-markdown-line-call.md) | Redundant `getRenderedMarkdownLines` Invocation in `buildRightRows` | Performance / Code Hygiene | Low | Cached `mdLines` at the start of `buildRightRows` and reused it across search recomputation and viewport rendering, calling `getRenderedMarkdownLines` at most once per pass. | **Resolved** |
@@ -110,6 +111,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#050: Viewer Header Flickers Raw `commit:<hash>` Identity During Commit Transitions](050-viewer-header-commit-transition-flicker.md) *(resolved)*
 - [#052: `searchIndex` Out of Bounds When Toggling Markdown Rendered Mode (`m`)](052-search-index-out-of-bounds-mode-toggle.md) *(resolved)*
 - [#053: Horizontal Scroll Keys Mutate State During Render in Rendered Mode](053-horizontal-scroll-rendered-markdown-mutation.md) *(resolved)*
+- [#057: Optional Chafa Image Rendering (pi-chafa delegation)](057-chafa-image-rendering.md) *(resolved)*
 
 ### Performance & Resource Optimization
 - [#020: No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread](020-no-viewer-cache-blocking-highlight.md) *(partial — cache done)*

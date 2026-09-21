@@ -22,7 +22,7 @@ The overlay is a pure TUI component; it never touches the filesystem or git dire
 
 - **Runtime:** Node ≥ 22, ESM (`"type": "module"`). TypeScript strict mode with bundler resolution (`tsconfig.json`).
 - **Peer dependencies:** `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` are peer deps — they are provided by the host pi install, not bundled. Don't add them as regular dependencies.
-- **No external runtime deps.** The viewer uses pi-native `highlightCode` + `getLanguageFromPath` for syntax highlighting. No shelling out to external binaries, no npm highlighter deps. Keep it that way.
+- **No external runtime deps.** The viewer uses pi-native `highlightCode` + `getLanguageFromPath` for syntax highlighting. No shelling out to external binaries, no npm highlighter deps. Keep it that way — with one carve-out: **chafa** is an optional, user-installed renderer, used only when the user opts in (`images.mode: "chafa"` / `PI_NAV_IMAGES=1`) and the pi-chafa extension is installed; it is never required, never bundled, and never invoked for any other purpose.
 - **Local install for dogfooding:** this extension is registered as a local path in pi settings. To (re)install from this checkout:
   ```bash
   pi install .            # global (~/.pi/agent/settings.json)
@@ -66,6 +66,8 @@ The overlay is a pure TUI component; it never touches the filesystem or git dire
 | `theme.ts` | `makeNavigatorTheme` — maps semantic tokens (accent/muted/dim/…) onto pi `Theme` tokens. No hardcoded colors. |
 | `types.ts` | Shared structural types (FileNode, GitState, ViewerFile with `kind: "diff"`, rows). |
 | `constants.ts` | All tuning constants (caps, ratios, timeouts, ignored names, image extensions). |
+| `settings.ts` | pi-navigator settings schema/normalizer/loader/writer (`~/.pi/agent/pi-navigator.json`, `PI_NAV_IMAGES`). |
+| `images.ts` | pi-chafa detection, config mirror, chafa probe/render/sanitize, geometry. |
 
 **Data contract:** `setTree` / `setGitState` / `openRelPath` are the only ways data enters the component. Keep the render path pure. v3 adds `openCommit` + the optional `NavigatorOptions.loadCommit` injection (parallel to `loadFile`): when present, Enter on a commit opens its diff as a `ViewerFile` with `kind: "diff"` whose `relPath` is `commit:<hash>`; diffs skip the mtime poll in index.ts (`startsWith("commit:")` guard). When `loadCommit` is absent, Enter falls back to toggling the commit's family.
 
