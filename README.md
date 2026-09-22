@@ -2,7 +2,7 @@
 
 Read-only project file navigator for pi. Opens a centered overlay inside a running pi session with a file tree, git state, and a syntax-highlighted viewer. No file editing, no runtime dependencies; images optionally render natively (kitty/iTerm2) or through a user-installed `chafa` (see [Images](#images-optional)).
 
-![status](https://img.shields.io/badge/status-v0.8.0-green)
+![status](https://img.shields.io/badge/status-v0.9.0-green)
 
 ## Install
 
@@ -138,19 +138,20 @@ to pick a tier:
 | Mode | Behavior |
 | :--- | :--- |
 | `off` (default) | Metadata card only. |
-| `native` | Real terminal graphics when the terminal speaks kitty or iTerm2 and the file is renderable (kitty: PNG only; iTerm2: PNG/JPEG/GIF/WebP); otherwise the card explains why. No chafa or pi-chafa needed. |
+| `native` | Real terminal graphics when the terminal speaks kitty or iTerm2 and the file is renderable (kitty: PNG/JPEG/WebP; iTerm2: PNG/JPEG/GIF/WebP); otherwise the card explains why. No chafa or pi-chafa needed. |
 | `chafa` | chafa symbol art — requires **chafa ≥ 1.10** plus the **pi-chafa** extension — degrading to the card. |
-| `auto` | Native when capable, then chafa, then the card — decided per file (a non-PNG on kitty falls back to chafa when available). pi-chafa's `preferNative: false` (or `CHAFA_PREFER_NATIVE=0`) makes `auto` choose chafa. |
+| `auto` | Native when capable, then chafa, then the card — decided per file (JPEG/WebP render natively on kitty; formats the terminal cannot render fall back to chafa when available). pi-chafa's `preferNative: false` (or `CHAFA_PREFER_NATIVE=0`) makes `auto` choose chafa. |
 
 Native rendering reuses pi-tui's kitty/iTerm2 encoders (pi-navigator adds no
 protocol code and no runtime dependency) and reads at most 4 MiB per image. The
 image is bounded by the viewer pane and by pi's `terminal.imageWidthCells`
 preference. Fullscreen (`tuiMode: fullscreen`) supports kitty only — pi-tui
-disables iTerm2 images there. **tmux/screen**: pi-tui reports no image support
-under tmux, so native stays off unless you force `terminal.images`; a forced
-override is followed as-is, and tmux must pass the sequences through (kitty
-graphics need tmux ≥ 3.3 with `allow-passthrough on` and a kitty-family outer
-terminal).
+disables iTerm2 images there. **tmux/screen** and terminals without image
+support (Alacritty, VS Code, Zed, Windows Terminal, JetBrains) keep native
+off — not even a forced `terminal.images` or `PI_IMAGE_PROTOCOL` override
+re-enables it (issues #070, #100); images degrade to chafa or the card.
+Outside of that, tmux must pass the sequences through (kitty graphics need
+tmux ≥ 3.3 with `allow-passthrough on` and a kitty-family outer terminal).
 
 chafa knobs (colors, symbols, dither, cellWidth, maxRows, timeout, binaryPath)
 live in `~/.pi/agent/pi-chafa.json` and the `CHAFA_*` environment variables —
@@ -180,7 +181,7 @@ runtime dependencies, ever — `node_modules` is dev-only.
   than the plan's original "NodeNext" because pi loads extensions through jiti,
   which resolves the code's intentionally extensionless relative imports;
   NodeNext would demand `.js` extensions the runtime does not need.
-- `npm test` — nineteen vitest suites (558 cases): porcelain `-z` parsing plus a
+- `npm test` — nineteen vitest suites (595 cases): porcelain `-z` parsing plus a
   real-git scratch-repo integration pass, tree building/fs-walk fixtures
   (ignores, dot entries, symlink cycles), viewer caps and UTF-8 head decoding,
   the keymap reducer (escape precedence, focus cycling, copy), settings
