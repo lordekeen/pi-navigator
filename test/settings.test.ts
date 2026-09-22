@@ -24,6 +24,8 @@ import {
   writeNavigatorSettings,
 } from "../settings";
 
+import type { NavigatorImageMode } from "../settings";
+
 function deepFreeze<T>(value: T): T {
   if (value !== null && typeof value === "object") {
     for (const key of Object.keys(value)) {
@@ -36,7 +38,7 @@ function deepFreeze<T>(value: T): T {
 
 /** A complete settings object with the canonical shape (all four sections). */
 function fullSettings(overrides: Partial<{
-  images: { mode: "off" | "chafa" };
+  images: { mode: NavigatorImageMode };
   icons: { enabled: boolean };
   viewer: { wrap: boolean; markdown: "code" | "rendered" };
   tree: { showHidden: boolean };
@@ -52,7 +54,7 @@ function fullSettings(overrides: Partial<{
 
 function cloneDefaultsLike(): {
   version: 1;
-  images: { mode: "off" | "chafa" };
+  images: { mode: NavigatorImageMode };
   icons: { enabled: boolean };
   viewer: { wrap: boolean; markdown: "code" | "rendered" };
   tree: { showHidden: boolean };
@@ -77,11 +79,17 @@ describe("parseImageMode", () => {
     expect(parseImageMode(value)).toEqual({ mode: "off" });
   });
 
+  it.each(["native", "auto"])("resolves the new mode token %s", (value) => {
+    expect(parseImageMode(value)).toEqual({ mode: value });
+  });
+
   it("is case-insensitive and trims whitespace", () => {
     expect(parseImageMode(" TRUE ")).toEqual({ mode: "chafa" });
     expect(parseImageMode("  On  ")).toEqual({ mode: "chafa" });
     expect(parseImageMode("OFF")).toEqual({ mode: "off" });
     expect(parseImageMode("\tchafa\n")).toEqual({ mode: "chafa" });
+    expect(parseImageMode("NATIVE")).toEqual({ mode: "native" });
+    expect(parseImageMode(" Auto ")).toEqual({ mode: "auto" });
   });
 
   it("treats undefined, empty, and whitespace as no override, without a warning", () => {
@@ -91,18 +99,18 @@ describe("parseImageMode", () => {
   });
 
   it("rejects garbage with a bounded warning and falls back to the file/default", () => {
-    const result = parseImageMode("native");
+    const result = parseImageMode("sixel");
     expect(result.mode).toBeUndefined();
     expect(result.warning).toBeDefined();
-    expect(result.warning ?? "").toContain("native");
+    expect(result.warning ?? "").toContain("sixel");
     expect(result.warning ?? "").toContain("PI_NAV_IMAGES");
     expect(result.warning ?? "").toContain("file/default");
   });
 
   it("emits the exact warning string for invalid values", () => {
-    expect(parseImageMode("native")).toEqual({
+    expect(parseImageMode("sixel")).toEqual({
       mode: undefined,
-      warning: "native is not a valid PI_NAV_IMAGES value; using the file/default setting",
+      warning: "sixel is not a valid PI_NAV_IMAGES value; using the file/default setting",
     });
   });
 });
@@ -162,6 +170,14 @@ describe("normalizeNavigatorSettings", () => {
     expect(result.warnings).toEqual([]);
   });
 
+  it("accepts all four images.mode values without warnings", () => {
+    for (const mode of ["off", "chafa", "native", "auto"] as const) {
+      const result = normalizeNavigatorSettings(fullSettings({ images: { mode } }));
+      expect(result.settings.images.mode).toBe(mode);
+      expect(result.warnings).toEqual([]);
+    }
+  });
+
   it("treats a missing version as 1 without a warning", () => {
     const result = normalizeNavigatorSettings({ images: { mode: "chafa" } });
     expect(result.settings.version).toBe(1);
@@ -193,8 +209,8 @@ describe("normalizeNavigatorSettings", () => {
     }
   });
 
-  it("warns on invalid images.mode values and falls back to off, including reserved native", () => {
-    for (const mode of ["native", "kitty", "NATIVE"]) {
+  it("warns on invalid images.mode values and falls back to off", () => {
+    for (const mode of ["kitty", "SIXEL", "sixel"]) {
       const result = normalizeNavigatorSettings({ version: 1, images: { mode } });
       expect(result.settings.images.mode).toBe("off");
       expect(result.warnings.some((w) => w.includes("images.mode"))).toBe(true);
@@ -345,6 +361,8 @@ describe("serializeNavigatorSettings", () => {
     const samples = [
       DEFAULT_NAVIGATOR_SETTINGS,
       fullSettings({ images: { mode: "chafa" } }),
+      fullSettings({ images: { mode: "native" } }),
+      fullSettings({ images: { mode: "auto" } }),
       fullSettings({ icons: { enabled: true }, viewer: { wrap: true, markdown: "rendered" }, tree: { showHidden: true } }),
     ];
     for (const settings of samples) {
@@ -461,7 +479,7 @@ describe("loadNavigatorSettings", () => {
   it("warns on garbage env and falls back to the file/default setting", () => {
     const path = join(dir, "file.json");
     writeFileSync(path, JSON.stringify(fullSettings({ images: { mode: "off" }, icons: { enabled: false } })), "utf8");
-    const result = loadNavigatorSettings({ userPath: path, env: { images: "native", icons: "sometimes" } });
+    const result = loadNavigatorSettings({ userPath: path, env: { images: "sixel", icons: "sometimes" } });
     expect(result.settings.images.mode).toBe("off");
     expect(result.settings.icons.enabled).toBe(false);
     expect(result.warnings).toHaveLength(2);
@@ -487,9 +505,9 @@ describe("loadNavigatorSettings", () => {
     expect(result.settings.images.mode).toBe("chafa");
   });
 
-  it("falls back from a reserved images.mode with a warning", () => {
-    const path = join(dir, "native.json");
-    writeFileSync(path, JSON.stringify({ version: 1, images: { mode: "native" } }), "utf8");
+  it("falls back from an invalid images.mode with a warning", () => {
+    const path = join(dir, "sixel.json");
+    writeFileSync(path, JSON.stringify({ version: 1, images: { mode: "sixel" } }), "utf8");
     const result = loadNavigatorSettings({ userPath: path });
     expect(result.settings.images.mode).toBe("off");
     expect(result.warnings.some((w) => w.includes("images.mode"))).toBe(true);
@@ -584,7 +602,7 @@ describe("applyFieldEdit", () => {
   it("rejects a bad enum value", () => {
     const result = applyFieldEdit(fullSettings(), "images.mode", "kitty");
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("expected one of off, chafa");
+    if (!result.ok) expect(result.error).toContain("expected one of off, chafa, native, auto");
     const markdown = applyFieldEdit(fullSettings(), "viewer.markdown", "preview");
     expect(markdown.ok).toBe(false);
   });
@@ -611,7 +629,7 @@ describe("NAVIGATOR_CONFIG_FIELDS", () => {
       kind: "enum",
       section: "Images",
       label: "Image rendering",
-      options: ["off", "chafa"],
+      options: ["off", "chafa", "native", "auto"],
       live: false,
     });
     expect(NAVIGATOR_CONFIG_FIELDS[1]).toMatchObject({
@@ -682,10 +700,12 @@ describe("NAVIGATOR_CONFIG_FIELDS", () => {
     }
     // The registry options must match what the normalizer actually accepts.
     const modeField = NAVIGATOR_CONFIG_FIELDS[0];
-    expect(modeField?.options).toEqual(["off", "chafa"]);
+    expect(modeField?.options).toEqual(["off", "chafa", "native", "auto"]);
     expect(normalizeNavigatorSettings({ version: 1, images: { mode: "off" } }).warnings).toEqual([]);
     expect(normalizeNavigatorSettings({ version: 1, images: { mode: "chafa" } }).warnings).toEqual([]);
-    expect(normalizeNavigatorSettings({ version: 1, images: { mode: "native" } }).warnings.length).toBeGreaterThan(0);
+    expect(normalizeNavigatorSettings({ version: 1, images: { mode: "native" } }).warnings).toEqual([]);
+    expect(normalizeNavigatorSettings({ version: 1, images: { mode: "auto" } }).warnings).toEqual([]);
+    expect(normalizeNavigatorSettings({ version: 1, images: { mode: "sixel" } }).warnings.length).toBeGreaterThan(0);
     const markdownField = NAVIGATOR_CONFIG_FIELDS[3];
     expect(markdownField?.options).toEqual(["code", "rendered"]);
     expect(normalizeNavigatorSettings({ version: 1, viewer: { markdown: "rendered" } }).warnings).toEqual([]);

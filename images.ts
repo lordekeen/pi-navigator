@@ -36,6 +36,8 @@ import {
   PI_CHAFA_CONFIG_FILE,
 } from "./constants";
 
+import type { NavigatorImageMode } from "./settings";
+
 // ── shared plumbing ──
 
 export type ReadText = (path: string) => string | undefined;
@@ -741,7 +743,7 @@ export function resolveChafaGeometry(input: {
 // ── aggregate support ──
 
 export interface ImageSupport {
-  mode: "off" | "chafa";
+  mode: NavigatorImageMode;
   piChafa: PiChafaStatus;
   chafa: ChafaStatus | { state: "deferred" };
   config: PiChafaSubset;
@@ -751,7 +753,7 @@ export interface ImageSupport {
 }
 
 /** Deferred snapshot for overlay construction (D9): never blocks, never probes. */
-export function makeDeferredImageSupport(mode: "off" | "chafa"): ImageSupport {
+export function makeDeferredImageSupport(mode: NavigatorImageMode): ImageSupport {
   return {
     mode,
     piChafa: { present: false, via: "none" },
@@ -786,7 +788,7 @@ export interface ImageSupportDeps {
 export async function resolveImageSupport(
   api: PiChafaApi,
   paths: ImageSupportPaths,
-  settings: { images: { mode: "off" | "chafa" } },
+  settings: { images: { mode: NavigatorImageMode } },
   deps?: ImageSupportDeps,
 ): Promise<ImageSupport> {
   const readText = deps?.readText;

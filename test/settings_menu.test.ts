@@ -89,7 +89,7 @@ describe("buildSettingItems", () => {
       "viewer.markdown",
       "tree.showHidden",
     ]);
-    expect(items[0]).toMatchObject({ label: "Image rendering", currentValue: "off", values: ["off", "chafa"] });
+    expect(items[0]).toMatchObject({ label: "Image rendering", currentValue: "off", values: ["off", "chafa", "native", "auto"] });
     expect(items[1]).toMatchObject({ label: "Nerd Font icons", currentValue: "off", values: ["on", "off"] });
     expect(items[2]).toMatchObject({ label: "Word wrap", currentValue: "off", values: ["on", "off"] });
     expect(items[3]).toMatchObject({ label: "Markdown view", currentValue: "code", values: ["code", "rendered"] });
@@ -112,7 +112,7 @@ describe("buildSettingItems", () => {
     });
     expect(items[0]?.description).toContain("\u2014 overridden by PI_NAV_IMAGES (env wins)");
     expect(items[1]?.description).toContain("\u2014 overridden by PI_NAV_ICONS (env wins)");
-    expect(items[0]?.description.startsWith("Render image files as chafa symbol art")).toBe(true);
+    expect(items[0]?.description.startsWith("Render images as native terminal graphics")).toBe(true);
     expect(items[2]?.description).not.toContain("overridden");
     expect(items[4]?.description).not.toContain("overridden");
   });
@@ -154,9 +154,9 @@ describe("settings menu integration (real SettingsList)", () => {
     expect(commit).toHaveBeenCalledTimes(1);
     expect(commit.mock.calls[0]![0]!.images.mode).toBe("chafa");
 
-    component.handleInput?.(KEYS.enter); // chafa -> off (the saved value now drives the cycle)
+    component.handleInput?.(KEYS.enter); // chafa -> native (the saved value now drives the cycle)
     expect(commit).toHaveBeenCalledTimes(2);
-    expect(commit.mock.calls[1]![0]!.images.mode).toBe("off");
+    expect(commit.mock.calls[1]![0]!.images.mode).toBe("native");
     expect(onWarning).not.toHaveBeenCalled();
 
     component.handleInput?.(KEYS.down); // icons.enabled

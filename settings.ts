@@ -18,8 +18,10 @@ import { NAVIGATOR_IMAGES_ENV } from "./constants";
 import { parseIconMode } from "./icons";
 import { parseTruthyEnv } from "./env";
 
+export type NavigatorImageMode = "off" | "chafa" | "native" | "auto";
+
 export interface NavigatorImageSettings {
-  mode: "off" | "chafa";
+  mode: NavigatorImageMode;
 }
 
 export interface NavigatorIconSettings {
@@ -44,7 +46,7 @@ export interface NavigatorSettings {
 }
 
 const SETTINGS_VERSION = 1;
-const IMAGE_MODES = ["off", "chafa"] as const;
+const IMAGE_MODES = ["off", "chafa", "native", "auto"] as const;
 const VIEWER_MODES = ["code", "rendered"] as const;
 
 export interface NavigatorConfigField {
@@ -69,7 +71,7 @@ export const NAVIGATOR_CONFIG_FIELDS: readonly NavigatorConfigField[] = [
     kind: "enum",
     section: "Images",
     label: "Image rendering",
-    description: "Render image files as chafa symbol art in the viewer pane; off keeps the metadata card.",
+    description: "Render images as native terminal graphics (kitty/iTerm2), chafa symbols, or auto; off keeps the metadata card.",
     options: [...IMAGE_MODES],
     default: "off",
     live: false,
@@ -322,19 +324,21 @@ export function normalizeNavigatorSettings(raw: unknown): { settings: NavigatorS
 
 /**
  * Parses the PI_NAV_IMAGES env override: enable = 1/true/yes/on/chafa,
- * disable = 0/false/no/off, anything else ignored with one warning so the
- * file/default setting stands (§5.1). Case-insensitive, trimmed; empty input
- * is "no override", never a warning. The images-only `chafa` token is
- * recognized here, before delegating to the shared `parseTruthyEnv`
- * (env.ts), so the accepted value sets per env var stay byte-identical to
- * the pre-#063 truth tables.
+ * disable = 0/false/no/off, native = `native`, auto = `auto`; anything else
+ * ignored with one warning so the file/default setting stands (§5.1).
+ * Case-insensitive, trimmed; empty input is "no override", never a warning.
+ * The images-only `chafa`/`native`/`auto` tokens are recognized here, before
+ * delegating to the shared `parseTruthyEnv` (env.ts), so the accepted value
+ * sets per env var stay byte-identical to the pre-#063 truth tables.
  */
-export function parseImageMode(value: string | undefined): { mode: "off" | "chafa" | undefined; warning?: string } {
+export function parseImageMode(value: string | undefined): { mode: NavigatorImageMode | undefined; warning?: string } {
   if (value === undefined) return { mode: undefined };
   const trimmed = value.trim();
   if (trimmed === "") return { mode: undefined };
   const normalized = trimmed.toLowerCase();
   if (normalized === "chafa") return { mode: "chafa" };
+  if (normalized === "native") return { mode: "native" };
+  if (normalized === "auto") return { mode: "auto" };
   const parsed = parseTruthyEnv(normalized, NAVIGATOR_IMAGES_ENV);
   if (parsed.warning !== undefined) return { mode: undefined, warning: parsed.warning };
   return { mode: parsed.value ? "chafa" : "off" };
