@@ -111,6 +111,25 @@ export const IMAGE_RESIZE_DEBOUNCE_MS = 250;
 /** Bounded length for a chafa failure reason shown on the fallback card. */
 export const IMAGE_ERROR_MAX_CHARS = 200;
 
+/** Bounded read for native rendering (D7): at most this many bytes are read. */
+export const IMAGE_NATIVE_MAX_BYTES = 4 * 1024 * 1024;
+
+/** Max total char length of cached native rows; used in step 4. */
+export const IMAGE_NATIVE_CACHE_MAX_CHARS = 1_000_000;
+
+/**
+ * Extension → mime gate for native rendering (D5). "jpeg" not "jpg" because
+ * pi-tui's getImageDimensions rejects "image/jpg"; bmp/ico/avif are
+ * deliberately absent.
+ */
+export const NATIVE_IMAGE_MIME: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+};
+
 // ── Git ──
 
 /** Timeout for every git invocation. */

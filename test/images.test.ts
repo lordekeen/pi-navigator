@@ -5,10 +5,16 @@
  * real chafa, no real settings files.
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { visibleWidth } from "@earendil-works/pi-tui";
+import {
+  getCapabilities,
+  resetCapabilitiesCache,
+  setCapabilities,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 
+import { IMAGE_NATIVE_MAX_BYTES } from "../constants";
 import {
   DEFAULT_PI_CHAFA_SUBSET,
   buildSymbolsArgs,
@@ -21,6 +27,7 @@ import {
   resolveImageSupport,
   resolveNativeProtocol,
   runChafaRender,
+  runNativeRender,
   sanitizeChafaPayload,
 } from "../images";
 import type { ExecFn, PiChafaApi, ReadText } from "../images";
@@ -1439,5 +1446,183 @@ describe("resolveImageSupport", () => {
     );
     expect(support.nativeProtocol).toBe("iterm2");
     expect(support.tier).toBe("native");
+  });
+});
+describe("runNativeRender", () => {
+  // Real 1×1 image fixtures (spec §12.1): decode via pi-tui's own sniffers.
+  const PNG_1X1_BASE64 =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  const GIF_1X1_BASE64 =
+    "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+  const geometry = { cols: 40, rows: 10 };
+
+  type ReadBytes = (path: string) => Promise<Uint8Array>;
+
+  /** readBytes seam seeded with real bytes for a base64 fixture. */
+  const readBytesOf = (base64: string) =>
+    vi.fn<ReadBytes>(
+      async () => new Uint8Array(Buffer.from(base64, "base64")),
+    );
+
+  /** Point pi-tui's real encoders at a protocol, preserving the rest of the caps. */
+  const withProtocol = (images: "kitty" | "iterm2"): void => {
+    const saved = getCapabilities();
+    setCapabilities({ ...saved, images });
+  };
+
+  afterEach(() => {
+    resetCapabilitiesCache();
+  });
+
+  it("kitty: sequence header carries a=T,f=100,q=2,C=1 plus c=/r=/i= and filler rows are empty", async () => {
+    withProtocol("kitty");
+    const readBytes = readBytesOf(PNG_1X1_BASE64);
+    const result = await runNativeRender("/tmp/pixel.png", geometry, {
+      protocol: "kitty",
+      readBytes,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const sequence = result.lines[0] ?? "";
+    expect(sequence.startsWith("\x1b_G")).toBe(true);
+    expect(sequence).toContain("a=T,f=100,q=2,C=1");
+    expect(sequence).toContain("c=");
+    expect(sequence).toContain("r=");
+    expect(sequence).toContain("i=");
+    const c = Number(/c=(\d+)/.exec(sequence)?.[1]);
+    const r = Number(/r=(\d+)/.exec(sequence)?.[1]);
+    expect(c).toBeGreaterThan(0);
+    expect(r).toBeGreaterThan(0);
+    // Returned geometry is pi-tui's (aspect-fitted), not the request.
+    expect(result.cols).toBe(c);
+    expect(result.rows).toBe(r);
+    expect(result.rows).toBeGreaterThan(1);
+    expect(result.lines).toHaveLength(result.rows);
+    // Every line after the sequence is exactly "" (D9 row contract).
+    for (const filler of result.lines.slice(1)) {
+      expect(filler).toBe("");
+    }
+    expect(readBytes).toHaveBeenCalledWith("/tmp/pixel.png");
+  });
+
+  it("iterm2: fillers are empty and the last line is moveUp + File= with inline=1 and width=", async () => {
+    withProtocol("iterm2");
+    const readBytes = readBytesOf(PNG_1X1_BASE64);
+    const result = await runNativeRender("/tmp/pixel.png", geometry, {
+      protocol: "iterm2",
+      readBytes,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.rows).toBeGreaterThan(1);
+    expect(result.lines).toHaveLength(result.rows);
+    for (const filler of result.lines.slice(0, result.rows - 1)) {
+      expect(filler).toBe("");
+    }
+    const last = result.lines[result.rows - 1] ?? "";
+    expect(last.startsWith(`\x1b[${result.rows - 1}A`)).toBe(true);
+    expect(last).toContain("\x1b]1337;File=");
+    expect(last).toContain("inline=1");
+    expect(last).toContain("width=");
+    expect(last).toContain(`width=${result.cols}`);
+    expect(result.cols).toBeGreaterThan(0);
+  });
+
+  it("kitty rejects a GIF before any read (D5)", async () => {
+    withProtocol("kitty");
+    const readBytes = readBytesOf(GIF_1X1_BASE64);
+    const result = await runNativeRender("/tmp/pixel.gif", geometry, {
+      protocol: "kitty",
+      readBytes,
+    });
+    expect(result).toEqual({ ok: false, reason: "kitty requires PNG" });
+    expect(readBytes).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["bmp", "/tmp/pixel.bmp"],
+    ["svg", "/tmp/pixel.svg"],
+    ["no extension", "/tmp/pixel"],
+    ["leading dot", "/tmp/.pixel"],
+  ])("%s → unsupported format, never reads", async (_label, path) => {
+    withProtocol("iterm2");
+    const readBytes = vi.fn();
+    const result = await runNativeRender(path, geometry, {
+      protocol: "iterm2",
+      readBytes,
+    });
+    expect(result).toEqual({
+      ok: false,
+      reason: "native rendering does not support this image format",
+    });
+    expect(readBytes).not.toHaveBeenCalled();
+  });
+
+  it("iterm2 renders a real GIF fixture", async () => {
+    withProtocol("iterm2");
+    const readBytes = readBytesOf(GIF_1X1_BASE64);
+    const result = await runNativeRender("/tmp/pixel.gif", geometry, {
+      protocol: "iterm2",
+      readBytes,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.rows).toBeGreaterThan(0);
+    expect(result.cols).toBeGreaterThan(0);
+    expect(result.lines).toHaveLength(result.rows);
+    expect(result.lines[result.rows - 1]).toContain("\x1b]1337;File=");
+  });
+
+  it("oversized read fails with the exact 4 MiB cap reason (D7)", async () => {
+    withProtocol("kitty");
+    const readBytes = vi.fn(
+      async () => new Uint8Array(IMAGE_NATIVE_MAX_BYTES + 1),
+    );
+    const result = await runNativeRender("/tmp/pixel.png", geometry, {
+      protocol: "kitty",
+      readBytes,
+    });
+    expect(result).toEqual({
+      ok: false,
+      reason: "image exceeds the 4 MiB native rendering cap",
+    });
+    expect(readBytes).toHaveBeenCalledTimes(1);
+  });
+
+  it("a pre-aborted signal fails before any read", async () => {
+    withProtocol("kitty");
+    const readBytes = vi.fn();
+    const result = await runNativeRender("/tmp/pixel.png", geometry, {
+      protocol: "kitty",
+      signal: AbortSignal.abort(),
+      readBytes,
+    });
+    expect(result).toEqual({ ok: false, reason: "render aborted" });
+    expect(readBytes).not.toHaveBeenCalled();
+  });
+
+  it("garbage bytes under .png fail with could not read image dimensions", async () => {
+    withProtocol("kitty");
+    const readBytes = vi.fn(async () => new Uint8Array([1, 2, 3, 4, 5]));
+    const result = await runNativeRender("/tmp/pixel.png", geometry, {
+      protocol: "kitty",
+      readBytes,
+    });
+    expect(result).toEqual({
+      ok: false,
+      reason: "could not read image dimensions",
+    });
+  });
+
+  it("a rejecting readBytes becomes a clean failure, never a throw", async () => {
+    withProtocol("kitty");
+    const readBytes = vi.fn(async () => {
+      throw new Error("boom");
+    });
+    const result = await runNativeRender("/tmp/pixel.png", geometry, {
+      protocol: "kitty",
+      readBytes,
+    });
+    expect(result).toEqual({ ok: false, reason: "could not read the image file" });
   });
 });
