@@ -1,6 +1,6 @@
 # Issue #065: Viewer Header `col N` Badge Shows the Requested Offset, Not the Clamped One
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Bug / UI Consistency
 - **Severity**: Low
 - **Component**: [`navigator.ts`](file:///home/jhonny/Sources/pi-navigator/navigator.ts) (`buildRightRows`) / [`viewer_view.ts`](file:///home/jhonny/Sources/pi-navigator/viewer_view.ts) (`buildViewerHeader`)
@@ -39,11 +39,27 @@ Decide which side is the contract, then pin it directly:
 
 Either way the fix is small and localized; the only real work is choosing the contract and rewriting one assertion pair so it tests the behavior rather than the artifact.
 
+## Resolution
+
+**Contract chosen: the badge follows the content.** `buildRightRows` no longer captures a pre-clamp
+`hscrollForHeader`; the `ViewerPaneView` record is built after the text branch's clamp, so
+`hscroll: this.viewHscroll` is the offset the body rows were rendered at. The chafa / card / rendered
+branches never clamp and never scroll horizontally, so their badge behaviour is unchanged. A comment at
+the clamp and one on the record warn that building the record above the clamp re-introduces the
+divergence.
+
+Tests: the hscroll-reset test now uses a markdown fixture whose first line overflows the pane (a file
+that cannot scroll is no longer accepted as a stand-in for a scrolled one, and it asserts the body's
+`viewHscroll` alongside the badge); a new `Issue #065: col badge follows the clamped offset` suite pins
+the overshoot case (40 x `l` = 160 requested cells — the badge reports the clamped offset and `col 161`
+must not appear) and the narrow-file case (two `l` presses leave `viewHscroll` at 0 and render no badge).
+Both new tests were verified to **fail** against the pre-fix code before landing. version 0.7.3.
+
 ## Acceptance Criteria
 
-- [ ] Badge and body agree on the effective column offset (or the divergence is documented as intentional in `buildViewerHeader`).
-- [ ] The hscroll-reset test in `test/navigator.test.ts` asserts the chosen contract directly on a file wider than the pane, and on a narrow file asserts the badge/scroll are absent.
-- [ ] `npm run typecheck` and `npm test` green.
+- [x] Badge and body agree on the effective column offset (option 1 — the badge follows the clamped value).
+- [x] The hscroll-reset test asserts the chosen contract directly on a file wider than the pane; the new suite covers the narrow file (no badge, no scroll) and the request-past-the-tail overshoot.
+- [x] `npm run typecheck` and `npm test` green (19 suites / 498 cases).
 
 ## References
 

@@ -1,6 +1,6 @@
 # pi-navigator — Code Review
 
-**Status**: Tests pass (99/99), typecheck clean, all 5 suites green.
+> **Historical document.** This is a point-in-time review from the 5-suite / 99-case era, kept for provenance. Its findings were filed and are now tracked in [`docs/issues/issues_index.md`](issues/issues_index.md) — do not read this file as current conventions or current state.
 
 ---
 

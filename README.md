@@ -2,7 +2,7 @@
 
 Read-only project file navigator for pi. Opens a centered overlay inside a running pi session with a file tree, git state, and a syntax-highlighted viewer. No file editing, no runtime dependencies; images optionally render through a user-installed `chafa` (see [Images](#images-optional)).
 
-![status](https://img.shields.io/badge/status-v0.7.2-green)
+![status](https://img.shields.io/badge/status-v0.7.3-green)
 
 ## Install
 
@@ -164,7 +164,7 @@ runtime dependencies, ever — `node_modules` is dev-only.
   than the plan's original "NodeNext" because pi loads extensions through jiti,
   which resolves the code's intentionally extensionless relative imports;
   NodeNext would demand `.js` extensions the runtime does not need.
-- `npm test` — nineteen vitest suites (496 cases): porcelain `-z` parsing plus a
+- `npm test` — nineteen vitest suites (498 cases): porcelain `-z` parsing plus a
   real-git scratch-repo integration pass, tree building/fs-walk fixtures
   (ignores, dot entries, symlink cycles), viewer caps and UTF-8 head decoding,
   the keymap reducer (escape precedence, focus cycling, copy), settings
