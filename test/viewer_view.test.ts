@@ -48,6 +48,8 @@ function viewerFile(partial: Partial<ViewerFile> = {}): ViewerFile {
 function activeSupport(overrides: Partial<ImageSupport> = {}): ImageSupport {
   return {
     mode: "chafa",
+    nativeProtocol: null,
+    tier: "chafa",
     piChafa: { present: true, via: "settings" },
     chafa: { state: "ok", binary: "chafa", version: { major: 1, minor: 18 } },
     config: { ...DEFAULT_PI_CHAFA_SUBSET },
@@ -227,7 +229,7 @@ describe("imageCardHints", () => {
       "chafa probe failed: exit 1",
     ]);
     expect(imageCardHints(image, activeSupport({ chafa: { state: "deferred" } }), geometry)).toEqual(["checking image support\u2026"]);
-    expect(imageCardHints(image, activeSupport({ mode: "off", active: false }), geometry)).toEqual([
+    expect(imageCardHints(image, activeSupport({ mode: "off", tier: "none", active: false }), geometry)).toEqual([
       "optional: enable images.mode=chafa to render images here",
     ]);
     expect(imageCardHints(image, activeSupport({ hostShowImages: false }), geometry)).toEqual([

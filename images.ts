@@ -37,6 +37,15 @@ import {
 } from "./constants";
 
 import type { NavigatorImageMode } from "./settings";
+import { parseTruthyEnv } from "./env";
+
+// ── native-image tier types (spec §5.3) ──
+
+/** Effective image renderer for a session (spec §5.4, D10). */
+export type ImageTier = "native" | "chafa" | "none";
+
+/** Terminal image protocols pi-tui can render (closed union, D2). */
+export type NativeProtocol = "kitty" | "iterm2";
 
 // ── shared plumbing ──
 
@@ -269,9 +278,11 @@ export interface PiChafaSubset {
   symbolsSet: string;
   dither: ChafaDither;
   timeoutMs: number;
+  /** Mirrored pi-chafa preference (D6): honored by mode "auto"; default true. */
+  preferNative: boolean;
 }
 
-/** Defaults mirror pi-chafa's DEFAULT_CONFIG for the mirrored subset (§3.1); preferNative/formatOrder are not mirrored (D6). */
+/** Defaults mirror pi-chafa's DEFAULT_CONFIG for the mirrored subset (§3.1); preferNative is mirrored (D6), formatOrder stays ignored. */
 export const DEFAULT_PI_CHAFA_SUBSET: PiChafaSubset = {
   version: 1,
   binaryPath: null,
@@ -281,6 +292,7 @@ export const DEFAULT_PI_CHAFA_SUBSET: PiChafaSubset = {
   symbolsSet: "block+border",
   dither: "none",
   timeoutMs: 8000,
+  preferNative: true,
 };
 
 /** Validate an unknown raw config object; unknown keys and invalid values are skipped silently (pi-chafa parity). */
@@ -317,6 +329,11 @@ function validatePiChafaConfig(raw: unknown): Partial<PiChafaSubset> {
     record.binaryPath.trim() !== ""
   ) {
     out.binaryPath = record.binaryPath.trim();
+  }
+  // preferNative mirrors pi-chafa: only a real boolean counts (D6); anything
+  // else is skipped silently so the default stands.
+  if (typeof record.preferNative === "boolean") {
+    out.preferNative = record.preferNative;
   }
   return out;
 }
@@ -382,6 +399,13 @@ export function loadPiChafaConfig(deps?: {
   const colors = envValue(env, "CHAFA_COLORS");
   const symbolsSet = envValue(env, "CHAFA_SYMBOLS");
   const dither = envValue(env, "CHAFA_DITHER");
+  // pi-chafa's envBoolean semantics via the shared truth table; any warning
+  // parseTruthyEnv would emit is dropped — pi-chafa ignores invalid env
+  // silently, falling back to file/default (D6).
+  const preferNative = parseTruthyEnv(
+    env["CHAFA_PREFER_NATIVE"],
+    "CHAFA_PREFER_NATIVE",
+  ).value;
   return {
     ...config,
     binaryPath: bin ?? config.binaryPath,
@@ -391,6 +415,7 @@ export function loadPiChafaConfig(deps?: {
     colors: isColorMode(colors) ? colors : config.colors,
     symbolsSet: symbolsSet ?? config.symbolsSet,
     dither: isDitherMode(dither) ? dither : config.dither,
+    preferNative: preferNative ?? config.preferNative,
   };
 }
 
@@ -678,16 +703,18 @@ export async function runChafaRender(
 
 /**
  * Read pi's own terminal image settings (spec §6.3). Defaults
- * { showImages: true, imageWidthCells: 60 }; honors terminal.showImages
- * (boolean) and terminal.imageWidthCells (positive int). Missing or corrupt
- * files, and invalid values, fall back to defaults. Never throws.
+ * { showImages: true, imageWidthCells: 60, images: null }; honors
+ * terminal.showImages (boolean), terminal.imageWidthCells (positive int),
+ * and terminal.images (exact "kitty"/"iterm2" only — anything else,
+ * including false/"auto"/"none"/absent/non-string, is null). Missing or
+ * corrupt files, and invalid values, fall back to defaults. Never throws.
  */
 export function readHostImageSettings(
   paths: { userSettings: string },
   deps?: { readText?: ReadText },
-): { showImages: boolean; imageWidthCells: number } {
+): { showImages: boolean; imageWidthCells: number; images: NativeProtocol | null } {
   const readText = deps?.readText ?? nodeReadText;
-  const result = { showImages: true, imageWidthCells: 60 };
+  const result = { showImages: true, imageWidthCells: 60, images: null as NativeProtocol | null };
   const text = readText(paths.userSettings);
   if (text === undefined) return result;
   let parsed: unknown;
@@ -709,7 +736,42 @@ export function readHostImageSettings(
   if (typeof width === "number" && Number.isInteger(width) && width > 0) {
     result.imageWidthCells = width;
   }
+  if (t.images === "kitty" || t.images === "iterm2") result.images = t.images;
   return result;
+}
+
+/**
+ * Instance-independent native capability ladder (spec §5.3, D4; mirrors
+ * pi-chafa's resolveCapsImages):
+ * 1. deps.capabilities?.().images when non-null (host truth — survives a
+ *    non-shared pi-tui instance); 2. the settings file's terminal.images
+ *    ("kitty"/"iterm2" only) when deps.userSettings is provided;
+ * 3. trimmed PI_IMAGE_PROTOCOL ("kitty"/"iterm2") when set;
+ * 4. null. Positive-only: the ladder only ever returns kitty/iterm2 or null;
+ * "auto"/false/"none"/garbage in the settings step never block the env
+ * step. Pure; no terminal access; never throws.
+ */
+export function resolveNativeProtocol(deps?: {
+  capabilities?: () => { images: NativeProtocol | null };
+  readText?: ReadText;
+  env?: Record<string, string | undefined>;
+  userSettings?: string;
+}): NativeProtocol | null {
+  const caps = deps?.capabilities?.().images;
+  if (caps !== null && caps !== undefined) return caps;
+  if (deps?.userSettings !== undefined) {
+    const fromSettings = readHostImageSettings(
+      { userSettings: deps.userSettings },
+      { readText: deps?.readText },
+    ).images;
+    if (fromSettings !== null) return fromSettings;
+  }
+  const envProtocol = (deps?.env ?? process.env)["PI_IMAGE_PROTOCOL"];
+  if (typeof envProtocol === "string") {
+    const trimmed = envProtocol.trim();
+    if (trimmed === "kitty" || trimmed === "iterm2") return trimmed;
+  }
+  return null;
 }
 
 /**
@@ -744,11 +806,18 @@ export function resolveChafaGeometry(input: {
 
 export interface ImageSupport {
   mode: NavigatorImageMode;
+  /** Resolved native capability (spec §5.4, D10); null when not native-capable. */
+  nativeProtocol: NativeProtocol | null;
+  /** Effective renderer for this session (spec §5.4). */
+  tier: ImageTier;
   piChafa: PiChafaStatus;
   chafa: ChafaStatus | { state: "deferred" };
   config: PiChafaSubset;
   hostShowImages: boolean;
-  /** true ⇔ mode === "chafa" && piChafa.present && chafa.state === "ok" && hostShowImages */
+  /**
+   * #057-era flag kept temporarily: true ⇔ tier === "chafa". Removed when
+   * the view migrates to tier (step 5).
+   */
   active: boolean;
 }
 
@@ -756,6 +825,8 @@ export interface ImageSupport {
 export function makeDeferredImageSupport(mode: NavigatorImageMode): ImageSupport {
   return {
     mode,
+    nativeProtocol: null,
+    tier: "none",
     piChafa: { present: false, via: "none" },
     chafa: { state: "deferred" },
     config: { ...DEFAULT_PI_CHAFA_SUBSET },
@@ -776,6 +847,8 @@ export interface ImageSupportDeps {
   env?: Record<string, string | undefined>;
   previous?: ImageSupport;
   onWarning?: (message: string) => void;
+  /** pi-tui capabilities accessor for the native ladder (host truth, D4). */
+  capabilities?: () => { images: NativeProtocol | null };
 }
 
 /**
@@ -814,8 +887,21 @@ export async function resolveImageSupport(
     config = { ...DEFAULT_PI_CHAFA_SUBSET };
   }
 
+  // Native capability ladder (spec §6 step 3, D4): pure, no probe.
+  const nativeProtocol = resolveNativeProtocol({
+    capabilities: deps?.capabilities,
+    readText,
+    env: deps?.env,
+    userSettings: paths.userSettings,
+  });
+
+  const mode = settings.images.mode;
   let chafa: ImageSupport["chafa"];
-  if (!piChafa.present) {
+  if (mode === "native") {
+    // Spec §6 step 4: strict native never needs chafa — stay deferred, and
+    // skip the previous-probe reuse too.
+    chafa = { state: "deferred" };
+  } else if (!piChafa.present) {
     chafa = { state: "deferred" };
   } else if (
     deps?.previous &&
@@ -827,17 +913,32 @@ export async function resolveImageSupport(
     chafa = await probeChafa(config.binaryPath, deps?.exec);
   }
 
-  const active =
-    settings.images.mode === "chafa" &&
-    piChafa.present &&
-    chafa.state === "ok" &&
-    hostShowImages;
+  // Effective tier (spec §5.4). Host image settings always gate.
+  let tier: ImageTier;
+  if (!hostShowImages || mode === "off") {
+    tier = "none";
+  } else if (mode === "chafa") {
+    tier = piChafa.present && chafa.state === "ok" ? "chafa" : "none";
+  } else if (mode === "native") {
+    tier = nativeProtocol !== null ? "native" : "none";
+  } else {
+    // mode === "auto": native → chafa → none, honoring preferNative (D6).
+    tier =
+      nativeProtocol !== null && config.preferNative
+        ? "native"
+        : piChafa.present && chafa.state === "ok"
+          ? "chafa"
+          : "none";
+  }
+
   return {
-    mode: settings.images.mode,
+    mode,
+    nativeProtocol,
+    tier,
     piChafa,
     chafa,
     config,
     hostShowImages,
-    active,
+    active: tier === "chafa",
   };
 }

@@ -19,6 +19,7 @@ import {
   readHostImageSettings,
   resolveChafaGeometry,
   resolveImageSupport,
+  resolveNativeProtocol,
   runChafaRender,
   sanitizeChafaPayload,
 } from "../images";
@@ -79,6 +80,7 @@ describe("loadPiChafaConfig", () => {
       symbolsSet: "ascii",
       dither: "diffusion",
       timeoutMs: 12000,
+      preferNative: true,
     });
   });
 
@@ -126,11 +128,74 @@ describe("loadPiChafaConfig", () => {
     expect(config.symbolsSet).toBe("block+border");
   });
 
+  it("mirrors preferNative from the file and overlays CHAFA_PREFER_NATIVE (envBoolean semantics)", () => {
+    const fileWith = (preferNative: unknown): ReadText =>
+      readTextOf({ [configPath]: JSON.stringify({ preferNative }) });
+    // File value honored when no env override.
+    expect(
+      loadPiChafaConfig({ agentDir, readText: fileWith(false) }).preferNative,
+    ).toBe(false);
+    expect(
+      loadPiChafaConfig({ agentDir, readText: fileWith(true) }).preferNative,
+    ).toBe(true);
+    // Truthy env tokens win over the file (case-insensitive, trimmed).
+    for (const token of ["1", "true", "yes", "on", " TRUE ", "Yes"]) {
+      expect(
+        loadPiChafaConfig({
+          agentDir,
+          readText: fileWith(false),
+          env: { CHAFA_PREFER_NATIVE: token },
+        }).preferNative,
+      ).toBe(true);
+    }
+    // Falsy env tokens win over the file (case-insensitive, trimmed).
+    for (const token of ["0", "false", "no", "off", " FALSE ", "Off"]) {
+      expect(
+        loadPiChafaConfig({
+          agentDir,
+          readText: fileWith(true),
+          env: { CHAFA_PREFER_NATIVE: token },
+        }).preferNative,
+      ).toBe(false);
+    }
+  });
+
+  it("ignores invalid CHAFA_PREFER_NATIVE and non-boolean file values silently", () => {
+    // Invalid env falls back to the file value (pi-chafa ignores it silently).
+    const readText = readTextOf({
+      [configPath]: JSON.stringify({ preferNative: false }),
+    });
+    for (const garbage of ["maybe", "", "   ", "2", "nope"]) {
+      expect(
+        loadPiChafaConfig({
+          agentDir,
+          readText,
+          env: { CHAFA_PREFER_NATIVE: garbage },
+        }).preferNative,
+      ).toBe(false);
+    }
+    // Non-boolean file values are skipped → default true.
+    for (const value of ["yes", 1, null, "false", []]) {
+      expect(
+        loadPiChafaConfig({
+          agentDir,
+          readText: readTextOf({
+            [configPath]: JSON.stringify({ preferNative: value }),
+          }),
+        }).preferNative,
+      ).toBe(true);
+    }
+    // Absent everywhere → default true.
+    expect(loadPiChafaConfig({ agentDir, readText: readTextOf({}) }).preferNative).toBe(
+      true,
+    );
+  });
+
   it("skips unknown keys and invalid file values silently", () => {
     const readText = readTextOf({
       [configPath]: JSON.stringify({
         version: 2,
-        preferNative: false,
+        preferNative: "yes", // non-boolean → skipped, default stands
         formatOrder: ["native"],
         colors: "hotpink",
         cellWidth: -3,
@@ -146,6 +211,7 @@ describe("loadPiChafaConfig", () => {
     expect(config.symbolsSet).toBe("border");
     expect(config.binaryPath).toBeNull();
     expect(config.timeoutMs).toBe(8000);
+    expect(config.preferNative).toBe(true);
   });
 
   it("falls back to defaults on corrupt JSON and missing files", () => {
@@ -455,6 +521,7 @@ describe("buildSymbolsArgs", () => {
           symbolsSet: "block+border",
           dither: "none",
           timeoutMs: 8000,
+          preferNative: true,
         },
         { cols: 40, rows: 20 },
       ),
@@ -695,38 +762,74 @@ describe("runChafaRender", () => {
 });
 
 describe("readHostImageSettings", () => {
+  const path = "/home/user/.pi/agent/settings.json";
+
   it("honors terminal.showImages false", () => {
     expect(
       readHostImageSettings(
-        { userSettings: "/home/user/.pi/agent/settings.json" },
+        { userSettings: path },
         {
           readText: readTextOf({
-            "/home/user/.pi/agent/settings.json": JSON.stringify({
+            [path]: JSON.stringify({
               terminal: { showImages: false },
             }),
           }),
         },
       ),
-    ).toEqual({ showImages: false, imageWidthCells: 60 });
+    ).toEqual({ showImages: false, imageWidthCells: 60, images: null });
   });
 
   it("honors a positive integer imageWidthCells", () => {
     expect(
       readHostImageSettings(
-        { userSettings: "/home/user/.pi/agent/settings.json" },
+        { userSettings: path },
         {
           readText: readTextOf({
-            "/home/user/.pi/agent/settings.json": JSON.stringify({
+            [path]: JSON.stringify({
               terminal: { imageWidthCells: 120 },
             }),
           }),
         },
       ),
-    ).toEqual({ showImages: true, imageWidthCells: 120 });
+    ).toEqual({ showImages: true, imageWidthCells: 120, images: null });
+  });
+
+  it("parses terminal.images for exact kitty/iterm2 only", () => {
+    const read = (terminal: unknown, overrides: string = path) =>
+      readHostImageSettings(
+        { userSettings: overrides },
+        { readText: readTextOf({ [overrides]: JSON.stringify({ terminal }) }) },
+      );
+    expect(read({ images: "kitty" })).toEqual({
+      showImages: true,
+      imageWidthCells: 60,
+      images: "kitty",
+    });
+    expect(read({ images: "iterm2" })).toEqual({
+      showImages: true,
+      imageWidthCells: 60,
+      images: "iterm2",
+    });
+    // Everything else — false, "auto", "none", wrong case, non-string,
+    // absent — is null.
+    for (const images of [false, "auto", "none", "AUTO", "Kitty", 42, null]) {
+      expect(read({ images })).toEqual({
+        showImages: true,
+        imageWidthCells: 60,
+        images: null,
+      });
+    }
+    expect(read({})).toEqual({ showImages: true, imageWidthCells: 60, images: null });
+    // images is independent of showImages.
+    expect(read({ images: "kitty", showImages: false })).toEqual({
+      showImages: false,
+      imageWidthCells: 60,
+      images: "kitty",
+    });
   });
 
   it("falls back to defaults on missing, corrupt, or invalid settings", () => {
-    const defaults = { showImages: true, imageWidthCells: 60 };
+    const defaults = { showImages: true, imageWidthCells: 60, images: null };
     expect(
       readHostImageSettings(
         { userSettings: "/nope/settings.json" },
@@ -751,6 +854,133 @@ describe("readHostImageSettings", () => {
         },
       ),
     ).toEqual(defaults);
+  });
+});
+
+describe("resolveNativeProtocol", () => {
+  const userSettings = "/home/user/.pi/agent/settings.json";
+  const settingsWith = (images: unknown): ReadText =>
+    readTextOf({ [userSettings]: JSON.stringify({ terminal: { images } }) });
+
+  it("prefers the host capability over conflicting settings and env", () => {
+    expect(
+      resolveNativeProtocol({
+        capabilities: () => ({ images: "kitty" }),
+        readText: settingsWith("iterm2"),
+        env: { PI_IMAGE_PROTOCOL: "iterm2" },
+        userSettings,
+      }),
+    ).toBe("kitty");
+    expect(
+      resolveNativeProtocol({
+        capabilities: () => ({ images: "iterm2" }),
+        readText: settingsWith("kitty"),
+        env: { PI_IMAGE_PROTOCOL: "kitty" },
+        userSettings,
+      }),
+    ).toBe("iterm2");
+  });
+
+  it("falls back to the settings file when the host reports null", () => {
+    for (const images of ["kitty", "iterm2"] as const) {
+      expect(
+        resolveNativeProtocol({
+          capabilities: () => ({ images: null }),
+          readText: settingsWith(images),
+          env: {},
+          userSettings,
+        }),
+      ).toBe(images);
+    }
+  });
+
+  it("falls back to the env when host and settings are both absent or non-native", () => {
+    for (const protocol of ["kitty", "iterm2"] as const) {
+      // host null + settings false
+      expect(
+        resolveNativeProtocol({
+          capabilities: () => ({ images: null }),
+          readText: settingsWith(false),
+          env: { PI_IMAGE_PROTOCOL: protocol },
+          userSettings,
+        }),
+      ).toBe(protocol);
+      // host null + settings "auto"
+      expect(
+        resolveNativeProtocol({
+          capabilities: () => ({ images: null }),
+          readText: settingsWith("auto"),
+          env: { PI_IMAGE_PROTOCOL: protocol },
+          userSettings,
+        }),
+      ).toBe(protocol);
+      // no capabilities accessor at all + settings absent
+      expect(
+        resolveNativeProtocol({
+          readText: readTextOf({}),
+          env: { PI_IMAGE_PROTOCOL: protocol },
+          userSettings,
+        }),
+      ).toBe(protocol);
+    }
+  });
+
+  it("trims the env value before the exact match", () => {
+    expect(
+      resolveNativeProtocol({
+        capabilities: () => ({ images: null }),
+        readText: readTextOf({}),
+        env: { PI_IMAGE_PROTOCOL: "  kitty  " },
+        userSettings,
+      }),
+    ).toBe("kitty");
+  });
+
+  it("returns null when every source is absent or non-native", () => {
+    expect(resolveNativeProtocol()).toBeNull();
+    expect(
+      resolveNativeProtocol({ capabilities: () => ({ images: null }), env: {} }),
+    ).toBeNull();
+    expect(
+      resolveNativeProtocol({
+        capabilities: () => ({ images: null }),
+        readText: settingsWith("none"),
+        env: { PI_IMAGE_PROTOCOL: "auto" },
+        userSettings,
+      }),
+    ).toBeNull();
+    expect(
+      resolveNativeProtocol({
+        capabilities: () => ({ images: null }),
+        readText: settingsWith("AUTO"),
+        env: { PI_IMAGE_PROTOCOL: "false" },
+        userSettings,
+      }),
+    ).toBeNull();
+  });
+
+  it("never lets settings garbage block the env step (positive-only ladder)", () => {
+    for (const images of [false, "auto", "none", "AUTO", "kitty-ish", 42, "false"]) {
+      expect(
+        resolveNativeProtocol({
+          capabilities: () => ({ images: null }),
+          readText: settingsWith(images as unknown),
+          env: { PI_IMAGE_PROTOCOL: "iterm2" },
+          userSettings,
+        }),
+      ).toBe("iterm2");
+    }
+  });
+
+  it("uses only injected capabilities/readText/env — never the real $HOME or process env", () => {
+    expect(
+      resolveNativeProtocol({
+        capabilities: () => ({ images: null }),
+        readText: readTextOf({}),
+        env: {},
+        userSettings: "/not-real/settings.json",
+      }),
+    ).toBeNull();
   });
 });
 
@@ -799,9 +1029,11 @@ describe("resolveChafaGeometry", () => {
 });
 
 describe("makeDeferredImageSupport", () => {
-  it("returns the deferred snapshot for a mode", () => {
+  it("returns the deferred snapshot with no native capability or tier for a mode", () => {
     expect(makeDeferredImageSupport("chafa")).toEqual({
       mode: "chafa",
+      nativeProtocol: null,
+      tier: "none",
       piChafa: { present: false, via: "none" },
       chafa: { state: "deferred" },
       config: DEFAULT_PI_CHAFA_SUBSET,
@@ -809,6 +1041,21 @@ describe("makeDeferredImageSupport", () => {
       active: false,
     });
     expect(makeDeferredImageSupport("off").active).toBe(false);
+  });
+
+  it("never resolves a tier or probes for any mode", () => {
+    for (const mode of ["off", "chafa", "native", "auto"] as const) {
+      expect(makeDeferredImageSupport(mode)).toEqual({
+        mode,
+        nativeProtocol: null,
+        tier: "none",
+        piChafa: { present: false, via: "none" },
+        chafa: { state: "deferred" },
+        config: DEFAULT_PI_CHAFA_SUBSET,
+        hostShowImages: true,
+        active: false,
+      });
+    }
   });
 });
 
@@ -849,7 +1096,9 @@ describe("resolveImageSupport", () => {
       { readText: supportFiles(), exec: okProbeExec, env: {} },
     );
     expect(support.active).toBe(true);
+    expect(support.tier).toBe("chafa");
     expect(support.mode).toBe("chafa");
+    expect(support.nativeProtocol).toBeNull();
     expect(support.piChafa).toEqual({
       present: true,
       via: "runtime",
@@ -871,6 +1120,7 @@ describe("resolveImageSupport", () => {
       { readText: supportFiles(), exec: okProbeExec, env: {} },
     );
     expect(support.active).toBe(false);
+    expect(support.tier).toBe("none");
     expect(support.piChafa.present).toBe(true);
     expect(support.chafa.state).toBe("ok"); // still probed for the hint copy
   });
@@ -893,6 +1143,7 @@ describe("resolveImageSupport", () => {
       },
     );
     expect(support.active).toBe(false);
+    expect(support.tier).toBe("none");
     expect(support.chafa).toEqual({ state: "deferred" });
     expect(support.piChafa).toEqual({ present: false, via: "none" });
   });
@@ -911,6 +1162,7 @@ describe("resolveImageSupport", () => {
       },
     );
     expect(support.active).toBe(false);
+    expect(support.tier).toBe("none");
     expect(support.hostShowImages).toBe(false);
   });
 
@@ -922,6 +1174,7 @@ describe("resolveImageSupport", () => {
       { readText: supportFiles(), exec: failProbeExec, env: {} },
     );
     expect(support.active).toBe(false);
+    expect(support.tier).toBe("none");
     expect(support.chafa.state).toBe("missing");
   });
 
@@ -943,6 +1196,7 @@ describe("resolveImageSupport", () => {
     expect(exec).toHaveBeenCalledTimes(1);
     expect(second.chafa).toEqual(first.chafa);
     expect(second.active).toBe(true);
+    expect(second.tier).toBe("chafa");
   });
 
   it("re-probes when the resolved binary path changed", async () => {
@@ -1013,5 +1267,177 @@ describe("resolveImageSupport", () => {
     expect(support.config.colors).toBe("16");
     expect(onWarning).not.toHaveBeenCalled();
     expect(support.active).toBe(true);
+    expect(support.tier).toBe("chafa");
+  });
+
+  // ── tier truth table (spec §5.4) across modes × capability × preferNative
+  //    × chafa gates × showImages ──
+
+  it("mode native with a capable host resolves tier native without probing chafa", async () => {
+    const exec = vi.fn(okProbeExec);
+    const support = await resolveImageSupport(
+      chafaApi(),
+      paths,
+      { images: { mode: "native" } },
+      {
+        readText: supportFiles(),
+        exec,
+        env: {},
+        capabilities: () => ({ images: "kitty" }),
+      },
+    );
+    expect(support.tier).toBe("native");
+    expect(support.nativeProtocol).toBe("kitty");
+    expect(support.active).toBe(false);
+    expect(support.chafa).toEqual({ state: "deferred" });
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("mode native on a non-capable host resolves tier none (no chafa substitution)", async () => {
+    const exec = vi.fn(okProbeExec);
+    const support = await resolveImageSupport(
+      chafaApi(),
+      paths,
+      { images: { mode: "native" } },
+      {
+        readText: supportFiles(),
+        exec,
+        env: {},
+        capabilities: () => ({ images: null }),
+      },
+    );
+    expect(support.tier).toBe("none");
+    expect(support.nativeProtocol).toBeNull();
+    expect(support.active).toBe(false);
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("mode auto with a capable host and preferNative true resolves tier native", async () => {
+    const support = await resolveImageSupport(
+      chafaApi(),
+      paths,
+      { images: { mode: "auto" } },
+      {
+        readText: supportFiles(),
+        exec: okProbeExec,
+        env: {},
+        capabilities: () => ({ images: "kitty" }),
+      },
+    );
+    expect(support.tier).toBe("native");
+    expect(support.nativeProtocol).toBe("kitty");
+    expect(support.active).toBe(false);
+    expect(support.config.preferNative).toBe(true); // default
+  });
+
+  it("mode auto with a capable host and preferNative false falls back to chafa when the gates pass", async () => {
+    const support = await resolveImageSupport(
+      chafaApi(),
+      paths,
+      { images: { mode: "auto" } },
+      {
+        readText: supportFiles({
+          [paths.agentDir + "/pi-chafa.json"]: JSON.stringify({ preferNative: false }),
+        }),
+        exec: okProbeExec,
+        env: {},
+        capabilities: () => ({ images: "kitty" }),
+      },
+    );
+    expect(support.tier).toBe("chafa");
+    expect(support.nativeProtocol).toBe("kitty");
+    expect(support.active).toBe(true);
+    expect(support.chafa.state).toBe("ok");
+  });
+
+  it("mode auto with preferNative false and a failing chafa probe resolves tier none", async () => {
+    const support = await resolveImageSupport(
+      chafaApi(),
+      paths,
+      { images: { mode: "auto" } },
+      {
+        readText: supportFiles({
+          [paths.agentDir + "/pi-chafa.json"]: JSON.stringify({ preferNative: false }),
+        }),
+        exec: failProbeExec,
+        env: {},
+        capabilities: () => ({ images: "iterm2" }),
+      },
+    );
+    expect(support.tier).toBe("none");
+    expect(support.active).toBe(false);
+    expect(support.chafa.state).toBe("missing");
+  });
+
+  it("mode auto without native capability resolves chafa when the chafa gates pass", async () => {
+    const support = await resolveImageSupport(
+      chafaApi(),
+      paths,
+      { images: { mode: "auto" } },
+      {
+        readText: supportFiles(),
+        exec: okProbeExec,
+        env: {},
+        capabilities: () => ({ images: null }),
+      },
+    );
+    expect(support.tier).toBe("chafa");
+    expect(support.nativeProtocol).toBeNull();
+    expect(support.active).toBe(true);
+  });
+
+  it("mode off resolves tier none regardless of capability", async () => {
+    const support = await resolveImageSupport(
+      chafaApi(),
+      paths,
+      { images: { mode: "off" } },
+      {
+        readText: supportFiles(),
+        exec: okProbeExec,
+        env: {},
+        capabilities: () => ({ images: "kitty" }),
+      },
+    );
+    expect(support.tier).toBe("none");
+    expect(support.nativeProtocol).toBe("kitty");
+    expect(support.active).toBe(false);
+  });
+
+  it("host showImages false forces tier none for every mode", async () => {
+    for (const mode of ["off", "chafa", "native", "auto"] as const) {
+      const support = await resolveImageSupport(
+        chafaApi(),
+        paths,
+        { images: { mode } },
+        {
+          readText: supportFiles({
+            [paths.userSettings]: JSON.stringify({ terminal: { showImages: false } }),
+          }),
+          exec: okProbeExec,
+          env: {},
+          capabilities: () => ({ images: "kitty" }),
+        },
+      );
+      expect(support.tier).toBe("none");
+      expect(support.active).toBe(false);
+      expect(support.hostShowImages).toBe(false);
+    }
+  });
+
+  it("resolves nativeProtocol from the settings file when no capabilities accessor is injected", async () => {
+    const support = await resolveImageSupport(
+      chafaApi(),
+      paths,
+      { images: { mode: "native" } },
+      {
+        readText: supportFiles({
+          [paths.userSettings]: JSON.stringify({ terminal: { images: "iterm2" } }),
+        }),
+        exec: okProbeExec,
+        env: {},
+      },
+    );
+    expect(support.nativeProtocol).toBe("iterm2");
+    expect(support.tier).toBe("native");
   });
 });

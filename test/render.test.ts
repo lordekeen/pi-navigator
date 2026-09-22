@@ -770,6 +770,8 @@ describe("settings menu render width safety (Issue #061)", () => {
 describe("chafa image render width safety (§12.5)", () => {
   const activeChafaSupport = (): ImageSupport => ({
     mode: "chafa",
+    nativeProtocol: null,
+    tier: "chafa",
     piChafa: { present: true, via: "settings" },
     chafa: { state: "ok", binary: "chafa", version: { major: 1, minor: 18 } },
     config: { ...DEFAULT_PI_CHAFA_SUBSET },
@@ -862,7 +864,7 @@ describe("chafa image render width safety (§12.5)", () => {
     // Inactive support (mode off) is the real card-only path: openRelPath
     // passes no image opts, so the loader serves the metadata card and no
     // chafa payload can reach the frame.
-    const overlay = makeChafaHarness(24, { ...activeChafaSupport(), mode: "off", active: false });
+    const overlay = makeChafaHarness(24, { ...activeChafaSupport(), mode: "off", tier: "none", active: false });
     await overlay.openRelPath("sample.png");
     const lines = expectWidthSafe(overlay, 60);
     const joined = lines.join("\n");
