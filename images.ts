@@ -767,6 +767,24 @@ export function readHostImageSettings(
  * "auto"/false/"none"/garbage in the settings step never block the env
  * step. Pure; no terminal access; never throws.
  */
+/**
+ * Terminals pi-tui positively identifies as image-incapable (its negative
+ * detection table in `detectCapabilitiesFromEnvironment`). For these, honoring
+ * the `terminal.images` settings or `PI_IMAGE_PROTOCOL` overrides would emit
+ * protocol sequences the terminal ignores, leaving a blank viewer instead of
+ * the chafa/card fallback (Issue #100).
+ *
+ * Mirror of pi-tui's negative cases — keep in sync if pi-tui grows new ones.
+ */
+function knownNoImageSupport(env: Record<string, string | undefined>): boolean {
+  const termProgram = (env["TERM_PROGRAM"] ?? "").toLowerCase();
+  const terminalEmulator = (env["TERMINAL_EMULATOR"] ?? "").toLowerCase();
+  if (termProgram === "alacritty" || termProgram === "vscode" || termProgram === "zed") return true;
+  if (terminalEmulator === "jetbrains-jediterm") return true;
+  if (env["WT_SESSION"] !== undefined) return true;
+  return false;
+}
+
 export function resolveNativeProtocol(deps?: {
   capabilities?: () => { images: NativeProtocol | null };
   readText?: ReadText;
@@ -783,6 +801,14 @@ export function resolveNativeProtocol(deps?: {
   }
   const caps = deps?.capabilities?.().images;
   if (caps !== null && caps !== undefined) return caps;
+  // A terminal pi-tui positively identifies as image-incapable must not have
+  // the settings/env overrides forced on it — its sequences would be
+  // ignored and the viewer would render blank instead of falling back.
+  // Positive detections (above) still win, so explicit forcing through
+  // pi-tui's PI_IMAGE_PROTOCOL handling keeps working (Issue #100).
+  if (knownNoImageSupport(env)) {
+    return null;
+  }
   if (deps?.userSettings !== undefined) {
     const fromSettings = readHostImageSettings(
       { userSettings: deps.userSettings },
@@ -860,7 +886,9 @@ export async function runNativeRender(
     return { ok: false, reason: bounded("render aborted") };
   }
 
-  // Guard against multiplexer in case called directly
+  // Defensive guard for direct callers (tests pass `env`; production always
+  // resolves the protocol via resolveNativeProtocol first, which already
+  // applies both guard layers — Issue #100).
   if (ctx.env) {
     const term = (ctx.env["TERM"] ?? "").toLowerCase();
     if (ctx.env["TMUX"] || term.startsWith("tmux") || term.startsWith("screen")) {
@@ -868,6 +896,9 @@ export async function runNativeRender(
         ok: false,
         reason: bounded("image protocols disabled under tmux/screen"),
       };
+    }
+    if (knownNoImageSupport(ctx.env)) {
+      return { ok: false, reason: bounded("terminal does not support image protocols") };
     }
   }
 

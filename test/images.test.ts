@@ -966,6 +966,57 @@ describe("resolveNativeProtocol", () => {
     ).toBeNull();
   });
 
+  it("returns null for known no-image terminals even when settings or env declare a protocol (Issue #100)", () => {
+    for (const env of [
+      { TERM_PROGRAM: "alacritty", TERM: "xterm-256color" },
+      { TERM_PROGRAM: "vscode" },
+      { TERM_PROGRAM: "zed" },
+      { TERMINAL_EMULATOR: "jetbrains-jediterm" },
+      { WT_SESSION: "1" },
+    ]) {
+      expect(
+        resolveNativeProtocol({
+          capabilities: () => ({ images: null }),
+          readText: settingsWith("kitty"),
+          env,
+          userSettings,
+        }),
+      ).toBeNull();
+      expect(
+        resolveNativeProtocol({
+          capabilities: () => ({ images: null }),
+          readText: readTextOf({}),
+          env: { ...env, PI_IMAGE_PROTOCOL: "iterm2" },
+          userSettings,
+        }),
+      ).toBeNull();
+    }
+  });
+
+  it("still honors the settings override for unrecognized terminals (Konsole keeps native, Issue #100)", () => {
+    // Konsole is not in pi-tui's detection table → "unknown terminal" → the
+    // settings override is the only source of its native capability.
+    expect(
+      resolveNativeProtocol({
+        capabilities: () => ({ images: null }),
+        readText: settingsWith("kitty"),
+        env: { KONSOLE_VERSION: "240301", TERM: "xterm-256color" },
+        userSettings,
+      }),
+    ).toBe("kitty");
+  });
+
+  it("keeps positive detection authoritative over the no-image guard (Issue #100)", () => {
+    expect(
+      resolveNativeProtocol({
+        capabilities: () => ({ images: "kitty" }),
+        readText: settingsWith("iterm2"),
+        env: { TERM_PROGRAM: "alacritty", PI_IMAGE_PROTOCOL: "iterm2" },
+        userSettings,
+      }),
+    ).toBe("kitty");
+  });
+
   it("never lets settings garbage block the env step (positive-only ladder)", () => {
     for (const images of [false, "auto", "none", "AUTO", "kitty-ish", 42, "false"]) {
       expect(
@@ -1638,6 +1689,21 @@ describe("runNativeRender", () => {
       readBytes,
     });
     expect(result).toEqual({ ok: false, reason: "kitty requires PNG, JPEG, or WebP" });
+    expect(readBytes).not.toHaveBeenCalled();
+  });
+
+  it("runNativeRender refuses to render on known no-image terminals even when a protocol is forced (Issue #100)", async () => {
+    withProtocol("kitty");
+    const readBytes = readBytesOf(PNG_1X1_BASE64);
+    const result = await runNativeRender("/tmp/pixel.png", geometry, {
+      protocol: "kitty",
+      readBytes,
+      env: { TERM_PROGRAM: "alacritty" },
+    });
+    expect(result).toEqual({
+      ok: false,
+      reason: "terminal does not support image protocols",
+    });
     expect(readBytes).not.toHaveBeenCalled();
   });
 

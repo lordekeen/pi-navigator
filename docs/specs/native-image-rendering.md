@@ -67,8 +67,12 @@ The tier ladder becomes **native → chafa → metadata**, selected by a new
   image dimension sniffing, cell sizing, protocol encoding, kitty metadata and
   placement semantics. **pi-navigator generates no protocol bytes itself.**
 - Resolve native capability with a pi-chafa-style, instance-independent ladder
-  (`getCapabilities` → `terminal.images` settings → `PI_IMAGE_PROTOCOL`), so a
-  non-shared pi-tui instance cannot silently disable the tier.
+  (`getCapabilities` → settings/`PI_IMAGE_PROTOCOL` → null), so a non-shared
+  pi-tui instance cannot silently disable the tier. Terminals pi-tui
+  positively identifies as image-incapable (Alacritty/VS Code/Zed, Windows
+  Terminal, JetBrains) short-circuit the ladder steps 2–3 (Issue #100):
+  forcing a protocol on them would emit sequences the terminal ignores and
+  leave a blank viewer instead of the chafa/card fallback.
 - Keep `images.mode: "chafa"` byte-identical to today; add
   `native` (strict) and `auto` (best available) modes.
 - Preserve every existing invariant: zero runtime dependencies, read-only,
@@ -152,8 +156,9 @@ emits pi-tui-shaped image lines.**
   false; otherwise native. Forced `format=native` on a non-capable session
   throws; on a capable-but-images-off host it degrades to symbols.
 - Capability ladder (`src/detect.ts:36 resolveCapsImages`):
-  `getCapabilities().images` → settings `terminal.images` (`"kitty"|"iterm2"`
-  only) → `PI_IMAGE_PROTOCOL` (`kitty|iterm2`) → null.
+  `getCapabilities().images` → (known no-image terminal? null — Issue #100) →
+  settings `terminal.images` (`"kitty"|"iterm2"` only) → `PI_IMAGE_PROTOCOL`
+  (`kitty|iterm2`) → null.
 - Native-safe mime gate: only png/jpeg/gif/webp (a *provider* constraint for
   content blocks; not binding for us, but the same set is what pi-tui can size).
 - Documented hazard: a precompiled-ESM extension can bind its own pi-tui module
