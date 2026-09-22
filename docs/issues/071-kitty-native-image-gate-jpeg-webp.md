@@ -1,6 +1,6 @@
 # Issue #071: Kitty Native Image Mime Gate Restricts to PNG Only, Bypassing Native JPEG/WebP Support
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Enhancement
 - **Severity**: Medium
 - **Component**: [`images.ts`](file:///home/jhonny/Sources/pi-navigator/images.ts#L861-L863), [`constants.ts`](file:///home/jhonny/Sources/pi-navigator/constants.ts#L125-L131)
@@ -38,7 +38,11 @@ The implementation followed the formal Kitty graphics protocol specification con
 
 ## Acceptance Criteria
 
-- [ ] Decision made and documented on whether to align with pi-tui's broader format support or remain strictly PNG-spec-compliant.
-- [ ] If relaxed, JPEG and WebP files render natively without falling back to Chafa in Kitty terminals.
-- [ ] Width-safety and dimension extraction verified for non-PNG formats.
-- [ ] Tests in [`test/images.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/images.test.ts) pass.
+- [x] Decision made and documented on whether to align with pi-tui's broader format support or remain strictly PNG-spec-compliant.
+- [x] If relaxed, JPEG and WebP files render natively without falling back to Chafa in Kitty terminals.
+- [x] Width-safety and dimension extraction verified for non-PNG formats.
+- [x] Tests in [`test/images.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/images.test.ts) pass.
+
+## Resolution
+
+Expanded the Kitty MIME gate in `constants.ts` and `images.ts` to accept `image/png`, `image/jpeg`, and `image/webp`. Updated `runNativeRender` and `imageCardHints` to recognize supported Kitty image formats and provide accurate format hints on fallback cards. Verified with automated test cases in `test/images.test.ts`.

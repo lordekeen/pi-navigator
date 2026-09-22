@@ -1,6 +1,6 @@
 # Issue #093: Search Index Clamping Test Masked by Re-typing Query in `navigator.test.ts`
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Technical Debt / Test Quality
 - **Severity**: Low
 - **Component**: [`test/navigator.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/navigator.test.ts#L1444-L1487)
@@ -42,6 +42,10 @@ Verify the clamped state immediately after pressing `m`:
 
 ## Acceptance Criteria
 
-- [ ] Test directly verifies that toggling `m` clamps `searchIndex` from out-of-bounds to the last valid match index without re-typing the query.
-- [ ] Test fails if the clamping logic in `recomputeSearchOnLines` is removed.
-- [ ] `npm test` passes.
+- [x] Test directly verifies that toggling `m` clamps `searchIndex` from out-of-bounds to the last valid match index without re-typing the query.
+- [x] Test fails if the clamping logic in `recomputeSearchOnLines` is removed.
+- [x] `npm test` passes.
+
+## Resolution
+
+Exposed public `getSearchState(): { query: string; index: number; total: number }` method on `NavigatorOverlay` in `navigator.ts` and updated the search index clamping test in `test/navigator.test.ts` to directly verify clamped search state immediately upon toggling into rendered mode (`m`) without re-typing query characters.

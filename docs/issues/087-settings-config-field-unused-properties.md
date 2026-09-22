@@ -1,6 +1,6 @@
 # Issue #087: `NavigatorConfigField` Interface Declares Unused and Dead Properties
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Technical Debt / Code Hygiene
 - **Severity**: Low
 - **Component**: [`settings.ts`](file:///home/jhonny/Sources/pi-navigator/settings.ts#L52-L64)
@@ -43,6 +43,10 @@ Speculative or preparatory fields were added during initial schema definition (#
 
 ## Acceptance Criteria
 
-- [ ] Unused properties are either removed or explicitly documented as reserved for future schema versions.
-- [ ] TypeScript types in `settings.ts` and `settings_menu.ts` remain clean and accurate.
-- [ ] `npm run typecheck` and `npm test` pass.
+- [x] Unused properties are either removed or explicitly documented as reserved for future schema versions.
+- [x] TypeScript types in `settings.ts` and `settings_menu.ts` remain clean and accurate.
+- [x] `npm run typecheck` and `npm test` pass.
+
+## Resolution
+
+Added JSDoc documentation to `description`, `min`, `max`, and `options` on `NavigatorConfigField` in `settings.ts` clarifying their intended roles for documentation, number range validation, and enum enumeration in current and future UI components. Verified with `npm run typecheck`.

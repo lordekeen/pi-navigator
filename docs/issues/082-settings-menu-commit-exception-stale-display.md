@@ -1,6 +1,6 @@
 # Issue #082: Uncaught Exception in Settings Menu `commit` Leaves Stale Row Display
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Bug / Robustness
 - **Severity**: Medium
 - **Component**: [`settings_menu.ts`](file:///home/jhonny/Sources/pi-navigator/settings_menu.ts#L286-L301)
@@ -72,6 +72,10 @@ Wrap the body of `onChange` in a `try...catch` block:
 
 ## Acceptance Criteria
 
-- [ ] Uncaught errors thrown during settings commit are caught gracefully and reported via `deps.onWarning`.
-- [ ] `refreshRows` is always called to revert the row display to the persisted value on error.
-- [ ] Unit test in [`test/settings_menu.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings_menu.test.ts) verifies display rollback when `deps.commit` throws.
+- [x] Uncaught errors thrown during settings commit are caught gracefully and reported via `deps.onWarning`.
+- [x] `refreshRows` is always called to revert the row display to the persisted value on error.
+- [x] Unit test in [`test/settings_menu.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings_menu.test.ts) verifies display rollback when `deps.commit` throws.
+
+## Resolution
+
+Wrapped `deps.writeSettings` in `onChange` in `settings_menu.ts` in a `try...catch` block. On write exception, the error is notified to the user and `refreshRows()` is invoked to restore the displayed row value to the previous valid configuration state. Verified with automated tests in `test/settings_menu.test.ts`.

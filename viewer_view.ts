@@ -15,7 +15,7 @@ import type { ImageSupport, NativeProtocol } from "./images";
 import type { NavigatorTheme } from "./theme";
 import type { Focus, SearchMatch, ViewerFile } from "./types";
 import { NATIVE_IMAGE_MIME } from "./constants";
-import { formatSize, hardTruncate, isMarkdownPath, extOf, type DisplayRow } from "./viewer";
+import { formatSize, hardTruncate, isMarkdownPath, extOf, sliceStyled, type DisplayRow } from "./viewer";
 import { isImageLine, joinLeftRight, MODE_HINTS, padTo, shortPath, truncateAndWidth } from "./frame";
 
 /** Markdown files get an alternative rendered view (Issue #053). */
@@ -193,6 +193,7 @@ export function renderViewerPane(view: ViewerPaneView, width: number, area: numb
       rows.push(row === null ? padTo("", width) : padTo(" " + row, width));
     }
   } else if (view.display) {
+    const { contentW } = paneContentWidth(file, false, width);
     for (let i = 0; i < contentArea; i++) {
       const row = view.display[view.viewScroll + i];
       if (!row) {
@@ -200,7 +201,8 @@ export function renderViewerPane(view: ViewerPaneView, width: number, area: numb
         continue;
       }
       const gutter = row.line === null ? " ".repeat(view.digits) + " " : String(row.line + 1).padStart(view.digits) + " ";
-      const line = " " + T.dim(gutter) + T.frame("\u2502") + " " + row.text;
+      const text = view.wrap ? row.text : sliceStyled(row.text, view.hscroll, view.hscroll + contentW);
+      const line = " " + T.dim(gutter) + T.frame("\u2502") + " " + text;
       rows.push(padTo(line, width));
     }
   }

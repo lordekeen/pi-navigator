@@ -1,6 +1,6 @@
 # Issue #092: Obsolete v2 Commit-Family Row Cap Test Passes Ineffectively Under v3 Semantics
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Technical Debt / Test Quality
 - **Severity**: Low
 - **Component**: [`test/navigator.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/navigator.test.ts#L544-L569)
@@ -34,6 +34,10 @@ Update the test fixture to genuinely exceed `FAMILY_MAX_ROWS`:
 
 ## Acceptance Criteria
 
-- [ ] Test fails if `FAMILY_MAX_ROWS` row bounding logic is disabled.
-- [ ] Test verifies that commit family expansion correctly truncates when direct parent count exceeds the configured limit.
-- [ ] `npm test` passes.
+- [x] Test fails if `FAMILY_MAX_ROWS` row bounding logic is disabled.
+- [x] Test verifies that commit family expansion correctly truncates when direct parent count exceeds the configured limit.
+- [x] `npm test` passes.
+
+## Resolution
+
+Updated commit-family expansion cap test in `test/navigator.test.ts` to construct an octopus merge commit with 20 direct parents in history. The test asserts that exactly 16 child rows are rendered and that the ancestor truncation notice is explicitly present in the rendered output.

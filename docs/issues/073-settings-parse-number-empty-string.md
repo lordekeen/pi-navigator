@@ -1,6 +1,6 @@
 # Issue #073: `parseNumberField` Accepts Empty String as Zero and Accepts `Infinity`
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Bug
 - **Severity**: High
 - **Component**: [`settings.ts`](file:///home/jhonny/Sources/pi-navigator/settings.ts#L431-L442)
@@ -57,7 +57,11 @@ export function parseNumberField(
 
 ## Acceptance Criteria
 
-- [ ] `parseNumberField("")` and whitespace strings return `{ ok: false, error: ... }`.
-- [ ] `parseNumberField("Infinity")` and `parseNumberField("-Infinity")` return `{ ok: false, error: ... }`.
-- [ ] Valid numeric strings continue to parse and clamp correctly.
-- [ ] Unit tests in [`test/settings.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings.test.ts) cover empty strings, whitespace, and Infinity.
+- [x] `parseNumberField("")` and whitespace strings return `{ ok: false, error: ... }`.
+- [x] `parseNumberField("Infinity")` and `parseNumberField("-Infinity")` return `{ ok: false, error: ... }`.
+- [x] Valid numeric strings continue to parse and clamp correctly.
+- [x] Unit tests in [`test/settings.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings.test.ts) cover empty strings, whitespace, and Infinity.
+
+## Resolution
+
+Updated `parseNumberField` in `settings.ts` to check `trimmed.length > 0` before parsing and verified that `Number.isFinite(parsed)` holds. Empty or whitespace-only strings now trigger a validation warning and fall back to the default value. Verified with automated tests in `test/settings.test.ts`.

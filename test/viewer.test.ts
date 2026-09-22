@@ -95,6 +95,13 @@ describe("stripAnsi / visibleTextWidth / sliceStyled", () => {
     expect(sliceStyled("日本語", 2, 4)).toBe("本");
     expect(sliceStyled("日本語", 0, 2)).toBe("日");
   });
+
+  it("preserves OSC sequences without splitting mid-sequence (Issue #083)", () => {
+    const text = "\x1b]8;;https://example.com\x07ClickHere\x1b]8;;\x07";
+    const sliced = sliceStyled(text, 0, 5);
+    expect(sliced).toBe("\x1b]8;;https://example.com\x07Click\x1b[0m");
+    expect(visibleTextWidth(sliced)).toBe(5);
+  });
 });
 
 describe("hardTruncate", () => {
@@ -160,9 +167,14 @@ describe("markMatches", () => {
     expect(markMatches("foobar", "Bar", match, current, -1)).toBe("foobar");
   });
 
-  it("uses needle.length when lowercased query has different length (Issue #035)", () => {
-    // Turkish dotted capital I (\u0130, length 1) lowercases to i + combining dot (\u0069\u0307, length 2)
-    expect(markMatches("a\u0069\u0307b", "\u0130", match, current, -1)).toBe("a<m>\u0069\u0307</m>b");
+  it("treats non-ASCII Unicode uppercase as smart-case (Issue #091)", () => {
+    // Turkish dotted capital I (\u0130, length 1) is uppercase: triggers case-sensitive search
+    expect(markMatches("a\u0130b", "\u0130", match, current, -1)).toBe("a<m>\u0130</m>b");
+    expect(markMatches("a\u0069\u0307b", "\u0130", match, current, -1)).toBe("a\u0069\u0307b");
+    // Cyrillic / Greek uppercase triggers smart-case
+    expect(markMatches("Ωmega", "Ω", match, current, -1)).toBe("<m>Ω</m>mega");
+    expect(markMatches("ωmega", "Ω", match, current, -1)).toBe("ωmega");
+    expect(markMatches("Ωmega", "ω", match, current, -1)).toBe("<m>Ω</m>mega");
   });
 
   it("maps haystack fold drift back to unfolded offsets (Issue #060 finding 2)", () => {
@@ -192,6 +204,13 @@ describe("searchLines", () => {
 
   it("is smart-case", () => {
     expect(searchLines(["abc", "AbC"], "AbC")).toEqual([{ line: 1, start: 0, end: 3 }]);
+  });
+
+  it("treats non-ASCII Unicode uppercase as smart-case in searchLines (Issue #091)", () => {
+    expect(searchLines(["a\u0130b"], "\u0130")).toEqual([{ line: 0, start: 1, end: 2 }]);
+    expect(searchLines(["a\u0069\u0307b"], "\u0130")).toEqual([]);
+    expect(searchLines(["Ωmega"], "Ω")).toEqual([{ line: 0, start: 0, end: 1 }]);
+    expect(searchLines(["ωmega"], "Ω")).toEqual([]);
   });
 
   it("returns unfolded offsets when lowercasing changes the haystack length (Issue #060 finding 2)", () => {

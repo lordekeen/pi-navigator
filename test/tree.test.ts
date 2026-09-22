@@ -556,4 +556,53 @@ describe("walkTree", () => {
     });
     expect(visited).toEqual([".", "a.ts", "b.ts", "c.ts"]);
   });
+
+  it("supports subtree pruning with false or 'prune' without aborting sibling traversal (Issue #090)", () => {
+    const tree = buildTree(
+      CWD,
+      [
+        { relPath: "dir1/a.ts", isDir: false, symlink: false },
+        { relPath: "dir1/b.ts", isDir: false, symlink: false },
+        { relPath: "dir2/c.ts", isDir: false, symlink: false },
+      ],
+      new Map(),
+    );
+    const visited: string[] = [];
+    walkTree(tree, (n) => {
+      visited.push(n.name);
+      if (n.name === "dir1") return "prune";
+    });
+    expect(visited).toContain("dir1");
+    expect(visited).not.toContain("a.ts");
+    expect(visited).not.toContain("b.ts");
+    expect(visited).toContain("dir2");
+    expect(visited).toContain("c.ts");
+
+    const visitedFalse: string[] = [];
+    walkTree(tree, (n) => {
+      visitedFalse.push(n.name);
+      if (n.name === "dir1") return false;
+    });
+    expect(visitedFalse).toEqual(visited);
+  });
+
+  it("aborts entire traversal immediately with 'stop' (Issue #090)", () => {
+    const tree = buildTree(
+      CWD,
+      [
+        { relPath: "dir1/a.ts", isDir: false, symlink: false },
+        { relPath: "dir2/c.ts", isDir: false, symlink: false },
+      ],
+      new Map(),
+    );
+    const visited: string[] = [];
+    walkTree(tree, (n) => {
+      visited.push(n.name);
+      if (n.name === "dir1") return "stop";
+    });
+    expect(visited).toContain("dir1");
+    expect(visited).not.toContain("a.ts");
+    expect(visited).not.toContain("dir2");
+    expect(visited).not.toContain("c.ts");
+  });
 });

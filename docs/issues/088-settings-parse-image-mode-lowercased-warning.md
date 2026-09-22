@@ -1,6 +1,6 @@
 # Issue #088: `parseImageMode` Warning Uses Lowercased Input Contrary to `parseIconMode`
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Bug / UI Consistency
 - **Severity**: Low
 - **Component**: [`settings.ts`](file:///home/jhonny/Sources/pi-navigator/settings.ts#L334-L345), [`icons.ts`](file:///home/jhonny/Sources/pi-navigator/icons.ts#L119-L123), [`env.ts`](file:///home/jhonny/Sources/pi-navigator/env.ts#L32-L46)
@@ -48,6 +48,10 @@ Pass `trimmed` directly to `parseTruthyEnv`:
 
 ## Acceptance Criteria
 
-- [ ] Warnings for invalid `PI_NAV_IMAGES` values preserve the user's original casing.
-- [ ] Warning formatting matches `PI_NAV_ICONS` / `parseIconMode`.
-- [ ] Tests in [`test/settings.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings.test.ts) updated and passing.
+- [x] Warnings for invalid `PI_NAV_IMAGES` values preserve the user's original casing.
+- [x] Warning formatting matches `PI_NAV_ICONS` / `parseIconMode`.
+- [x] Tests in [`test/settings.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings.test.ts) updated and passing.
+
+## Resolution
+
+Updated `parseImageMode` in `settings.ts` to pass the original `trimmed` value to `parseTruthyEnv` so casing is preserved in unrecognized value warnings, matching `parseIconMode`. Verified with automated tests in `test/settings.test.ts`.

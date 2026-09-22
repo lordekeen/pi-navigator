@@ -1,6 +1,6 @@
 # Issue #083: `sliceStyled` Only Handles CSI Sequences, Ignoring OSC Hyperlink Sequences
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Technical Debt / Robustness
 - **Severity**: Low
 - **Component**: [`viewer.ts`](file:///home/jhonny/Sources/pi-navigator/viewer.ts#L79-L105)
@@ -53,6 +53,10 @@ Update `sliceStyled` to use `ANSI_ESCAPE_RE`.
 
 ## Acceptance Criteria
 
-- [ ] `sliceStyled` recognizes OSC sequences (including OSC 8 hyperlinks) and preserves them without splitting mid-sequence.
-- [ ] CSI sequence handling and performance remain unchanged.
-- [ ] Unit tests in [`test/viewer.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/viewer.test.ts) cover string slicing with OSC 8 sequences.
+- [x] `sliceStyled` recognizes OSC sequences (including OSC 8 hyperlinks) and preserves them without splitting mid-sequence.
+- [x] CSI sequence handling and performance remain unchanged.
+- [x] Unit tests in [`test/viewer.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/viewer.test.ts) cover string slicing with OSC 8 sequences.
+
+## Resolution
+
+Updated the `ANSI_ESCAPE_RE` sticky regular expression in `viewer.ts` to recognize Operating System Command (OSC) escape sequences (`\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`). OSC hyperlinks and title escapes are now preserved during line slicing without advancing visible column width. Verified with automated tests in `test/viewer.test.ts`.

@@ -1,6 +1,6 @@
 # Issue #077: Settings Menu Drops Mouse Events Outside List Bounds, Causing Stale Click State and Dead Scroll Zones
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Bug / UI Consistency
 - **Severity**: High
 - **Component**: [`settings_menu.ts`](file:///home/jhonny/Sources/pi-navigator/settings_menu.ts#L222-L229)
@@ -37,6 +37,10 @@ This strict bounding creates two bugs:
 
 ## Acceptance Criteria
 
-- [ ] Releasing the mouse button outside the list does not corrupt subsequent click selections.
-- [ ] Mouse wheel scrolling functions anywhere within the settings menu frame chrome (header and footer).
-- [ ] Unit tests in [`test/settings_menu.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings_menu.test.ts) cover mouse press inside followed by release outside, and wheel events on chrome rows.
+- [x] Releasing the mouse button outside the list does not corrupt subsequent click selections.
+- [x] Mouse wheel scrolling functions anywhere within the settings menu frame chrome (header and footer).
+- [x] Unit tests in [`test/settings_menu.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings_menu.test.ts) cover mouse press inside followed by release outside, and wheel events on chrome rows.
+
+## Resolution
+
+Updated `handleMouse` in `settings_menu.ts` to forward `wheel` events from chrome rows (header and footer) to the inner list using a translated `y` coordinate bounded to the list viewport. Added outside mouse release handling that resets `mousePressedIndex = undefined` to prevent stale click activations. Verified with automated tests in `test/settings_menu.test.ts`.

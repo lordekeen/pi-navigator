@@ -1,6 +1,6 @@
 # Issue #094: Git Availability Cache Test Does Not Assert Subprocess Caching
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Technical Debt / Test Quality
 - **Severity**: Low
 - **Component**: [`test/git.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/git.test.ts#L314-L320), [`git.ts`](file:///home/jhonny/Sources/pi-navigator/git.ts#L104-L118)
@@ -39,6 +39,10 @@ Use `vi.spyOn` on `child_process.execFile` (or an injected runner seam):
 
 ## Acceptance Criteria
 
-- [ ] Test fails if `isGitAvailable` executes subprocesses on subsequent calls for cached results.
-- [ ] Subprocess execution count is explicitly asserted.
-- [ ] `npm test` passes.
+- [x] Test fails if `isGitAvailable` executes subprocesses on subsequent calls for cached results.
+- [x] Subprocess execution count is explicitly asserted.
+- [x] `npm test` passes.
+
+## Resolution
+
+Exported `gitRunner = { execFile: childProcess.execFile }` from `git.ts` and added an automated test in `test/git.test.ts` spying on `gitRunner.execFile` to verify zero subprocess executions on cached `isGitAvailable` calls.

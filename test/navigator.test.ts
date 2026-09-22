@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { Markdown, visibleWidth } from "@earendil-works/pi-tui";
 
 import { IMAGE_RESIZE_DEBOUNCE_MS } from "../constants";
 import { DEFAULT_PI_CHAFA_SUBSET, resolveChafaGeometry, type ImageSupport } from "../images";
@@ -542,17 +542,26 @@ describe("git pane keys", () => {
   });
 
   it("limits commit-family expansion to the row cap (Issue #030)", () => {
-    const harness = makeHarness();
+    const harness = makeHarness(80);
     withTree(harness, ["a.ts"]);
     const deep: Array<{ shortHash: string; parents: string[]; dateRel: string; subject: string }> = [];
-    // A chain of 20 commits, each parent of the next (child first in history).
-    for (let i = 0; i < 20; i++) {
-      const hash = "c" + i.toString().padStart(6, "0");
+    // An octopus merge with 20 direct parents in history exceeding FAMILY_MAX_ROWS (16).
+    const parentHashes: string[] = [];
+    for (let i = 1; i <= 20; i++) {
+      parentHashes.push("p" + i.toString().padStart(6, "0"));
+    }
+    deep.push({
+      shortHash: "c000000",
+      parents: parentHashes,
+      dateRel: "1h ago",
+      subject: "octopus merge",
+    });
+    for (const p of parentHashes) {
       deep.push({
-        shortHash: hash,
-        parents: i < 19 ? ["c" + (i + 1).toString().padStart(6, "0")] : [],
-        dateRel: "1h ago",
-        subject: "commit " + i,
+        shortHash: p,
+        parents: [],
+        dateRel: "2h ago",
+        subject: "parent " + p,
       });
     }
     withGit(harness, { unstaged: [], staged: [], history: deep });
@@ -561,11 +570,11 @@ describe("git pane keys", () => {
     overlay.handleInput(KEYS.enter); // expand the first commit (history[0])
     const rendered = overlay.render(120);
     const joined = rendered.join("\n");
-    // FAMILY_MAX_ROWS caps the added family rows; the 20-deep chain must not
-    // render all 19 descendants. The expansion stops at the cap.
-    const childRows = joined.split("\n").filter((l) => l.includes("  c")) ;
-    // Only a bounded number of ancestor rows are rendered.
-    expect(childRows.length).toBeLessThan(20);
+    // FAMILY_MAX_ROWS (16) caps the added family rows; the 20 direct parents
+    // must be capped at 16, followed by the explicit truncation notice.
+    const childRows = joined.split("\n").filter((l) => l.includes("      p"));
+    expect(childRows.length).toBe(16);
+    expect(joined).toContain("… more ancestors (narrow the view");
   });
 
   // ── v3: commit diff view + family on l/h (plan commit-detail-family-tree) ──
@@ -883,7 +892,9 @@ describe("Issue #001: stale content race when opening file", () => {
 
     // 1. Open file A and let it resolve.
     harness.overlay.handleInput(KEYS.enter);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(harness.overlay.render(120).join("\n")).toContain("line-from-a-alpha");
+    });
 
     let rendered = harness.overlay.render(120).join("\n");
     expect(rendered).toContain("line-from-a-alpha");
@@ -923,7 +934,9 @@ describe("Issue #001: stale content race when opening file", () => {
       lineCount: 2,
       lines: ["line-from-b-one", "line-from-b-two"],
     });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(harness.overlay.render(120).join("\n")).toContain("line-from-b-one");
+    });
 
     rendered = harness.overlay.render(120).join("\n");
     expect(rendered).toContain("line-from-b-one");
@@ -954,7 +967,9 @@ describe("Issue #001: stale content race when opening file", () => {
 
     withTree(harness, ["a.ts"]);
     harness.overlay.handleInput(KEYS.enter); // open a.ts
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(harness.overlay.render(120).join("\n")).toContain("content-original");
+    });
 
     let rendered = harness.overlay.render(120).join("\n");
     expect(rendered).toContain("content-original");
@@ -980,7 +995,9 @@ describe("Issue #001: stale content race when opening file", () => {
       lineCount: 1,
       lines: ["content-reloaded"],
     });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(harness.overlay.render(120).join("\n")).toContain("content-reloaded");
+    });
 
     rendered = harness.overlay.render(120).join("\n");
     expect(rendered).toContain("content-reloaded");
@@ -1018,7 +1035,9 @@ describe("Issue #001: stale content race when opening file", () => {
       relPath: "b.ts",
       lines: ["file-b-content"],
     });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(harness.overlay.render(120).join("\n")).toContain("file-b-content");
+    });
 
     let rendered = harness.overlay.render(120).join("\n");
     expect(rendered).toContain("file-b-content");
@@ -1030,7 +1049,9 @@ describe("Issue #001: stale content race when opening file", () => {
       relPath: "a.ts",
       lines: ["file-a-content"],
     });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(harness.overlay.getOpenRelPath()).toBe("b.ts");
+    });
 
     // Viewer should STILL show file B!
     rendered = harness.overlay.render(120).join("\n");
@@ -1150,9 +1171,12 @@ describe("Issue #065: col badge follows the clamped offset", () => {
     // at the clamped one.
     for (let i = 0; i < 40; i++) overlay.handleInput("l");
     const rendered = overlay.render(120).join("\n");
-    const effective = (overlay as any).viewHscroll as number;
-    expect(effective).toBeGreaterThan(0);
-    expect(rendered).toContain(`col ${effective + 1}`);
+    const match = rendered.match(/col (\d+)/);
+    expect(match).not.toBeNull();
+    const col = Number(match![1]);
+    expect(col).toBeGreaterThan(1);
+    expect(col).toBeLessThan(161);
+    expect(rendered).toContain(`col ${col}`);
     expect(rendered).not.toContain("col 161");
   });
 
@@ -1172,7 +1196,6 @@ describe("Issue #065: col badge follows the clamped offset", () => {
     overlay.handleInput("l");
     overlay.handleInput("l");
     const rendered = overlay.render(120).join("\n");
-    expect((overlay as any).viewHscroll).toBe(0);
     expect(rendered).not.toContain("col ");
   });
 });
@@ -1372,13 +1395,11 @@ describe("markdown rendered view", () => {
     harness.overlay.handleInput("l");
     harness.overlay.handleInput("l");
     let rendered = harness.overlay.render(120).join("\n");
-    expect((harness.overlay as any).viewHscroll).toBe(8);
     expect(rendered).toContain("col 9");
 
     // Switch to rendered view: hscroll resets
     harness.overlay.handleInput("m");
     rendered = harness.overlay.render(120).join("\n");
-    expect((harness.overlay as any).viewHscroll).toBe(0);
     expect(rendered).not.toContain("col ");
 
     // Pressing 'w' in rendered view is a no-op (wrap stays off in code view, not shown in header)
@@ -1451,7 +1472,9 @@ describe("markdown rendered view", () => {
     const harness = makeHarness(24, async () => fileWithFewerRenderedMatches);
     withTree(harness, ["test.md"]);
     harness.overlay.handleInput(KEYS.enter);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(harness.overlay.render(120).join("\n")).toContain("item 1");
+    });
 
     harness.overlay.handleInput("/");
     for (const ch of "item") {
@@ -1463,6 +1486,7 @@ describe("markdown rendered view", () => {
       harness.overlay.handleInput(KEYS.down);
     }
     expect(harness.overlay.render(120).join("\n")).toContain("6/6 matches");
+    expect(harness.overlay.getSearchState()).toEqual({ query: "item", index: 5, total: 6 });
 
     harness.overlay.handleInput(KEYS.enter);
 
@@ -1470,60 +1494,51 @@ describe("markdown rendered view", () => {
     harness.overlay.handleInput("m");
     harness.overlay.render(120);
 
-    // Re-enter search mode and re-type the query: the match count is now 2 and
-    // the rendered counter must stay in range after cycling past the end.
-    harness.overlay.handleInput("/");
-    for (const ch of "item") {
-      harness.overlay.handleInput(ch);
-    }
-    expect(harness.overlay.render(120).join("\n")).toContain("1/2 matches");
+    // Directly assert searchIndex was clamped from 5 to 1 without re-typing query (#093)
+    expect(harness.overlay.getSearchState()).toEqual({ query: "item", index: 1, total: 2 });
 
-    for (let i = 0; i < 5; i++) {
-      harness.overlay.handleInput(KEYS.down);
-    }
-    const rendered = harness.overlay.render(120).join("\n");
-    expect(rendered).toContain("2/2 matches");
-    expect(rendered).not.toContain("6/2 matches");
+    // Cycling match navigates within the clamped range [0, 1]
+    harness.overlay.handleInput("n");
+    expect(harness.overlay.getSearchState()).toEqual({ query: "item", index: 0, total: 2 });
+    harness.overlay.handleInput("N");
+    expect(harness.overlay.getSearchState()).toEqual({ query: "item", index: 1, total: 2 });
   });
 
   it("guards horizontal scroll keys in rendered markdown mode (#053)", async () => {
     const harness = makeHarness(24, async () => mdFile);
     withTree(harness, ["README.md"]);
     harness.overlay.handleInput(KEYS.enter);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(harness.overlay.render(120).join("\n")).toContain("Heading");
+    });
 
     // Toggle to rendered view
     harness.overlay.handleInput("m");
-    harness.overlay.render(120);
+    const frameRendered = harness.overlay.render(120);
 
-    // After rendering, cachedLines is populated
-    expect((harness.overlay as any).cachedLines).toBeDefined();
-    expect((harness.overlay as any).viewHscroll).toBe(0);
-
-    // Pressing h, l, left, right in rendered mode are no-ops: touch() is not called and viewHscroll is untouched
+    // Pressing h, l, left, right in rendered mode are no-ops: touch() is not called and horizontal scroll is untouched
     harness.overlay.handleInput("h");
     harness.overlay.handleInput("l");
     harness.overlay.handleInput(KEYS.left);
     harness.overlay.handleInput(KEYS.right);
 
-    expect((harness.overlay as any).cachedLines).toBeDefined(); // touch() was not called
-    expect((harness.overlay as any).viewHscroll).toBe(0);
+    // Render cache survived: returns the exact same array reference
+    expect(harness.overlay.render(120)).toBe(frameRendered);
 
-    // Render pass in rendered mode does not mutate viewHscroll
+    // Render pass in rendered mode does not introduce hscroll
     const rendered = harness.overlay.render(120).join("\n");
     expect(rendered).not.toContain("col ");
 
-    // In code view, horizontal scroll keys still work and call touch()
+    // In code view, horizontal scroll keys still work and invalidate render cache
     harness.overlay.handleInput("m");
-    harness.overlay.render(120);
-    expect((harness.overlay as any).cachedLines).toBeDefined();
+    const frameCode = harness.overlay.render(120);
 
     harness.overlay.handleInput("l");
-    expect((harness.overlay as any).viewHscroll).toBe(4);
-    expect((harness.overlay as any).cachedLines).toBeUndefined(); // touch() was called
+    // touch() was called: render cache was invalidated and re-derived
+    expect(harness.overlay.render(120)).not.toBe(frameCode);
   });
 
-  it("invokes getRenderedMarkdownLines at most once per render pass (#054)", async () => {
+  it("invokes Markdown render at most once per render pass (#054)", async () => {
     const harness = makeHarness(24, async () => mdFile);
     withTree(harness, ["README.md"]);
     harness.overlay.handleInput(KEYS.enter);
@@ -1531,7 +1546,7 @@ describe("markdown rendered view", () => {
 
     harness.overlay.handleInput("m");
 
-    const spy = vi.spyOn(harness.overlay as any, "getRenderedMarkdownLines");
+    const spy = vi.spyOn(Markdown.prototype, "render");
     harness.overlay.render(120);
 
     expect(spy).toHaveBeenCalledTimes(1);
@@ -1715,30 +1730,31 @@ describe("chafa image rendering", () => {
     withTree(harness, ["sample.png"]);
     harness.overlay.render(120);
     harness.overlay.handleInput(KEYS.enter);
-    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(harness.overlay.render(120).join("\n")).toContain("chafa-row-0");
+    });
 
-    const overlay = harness.overlay as any;
-    harness.overlay.render(120);
-    const cached = overlay.cachedLines;
-    expect(cached).toBeDefined();
-    const hscrollBefore = overlay.viewHscroll;
+    const frameBefore = harness.overlay.render(120);
 
     // Inert keys never touch(): the render cache survives (Issue #053 pattern).
     for (const key of ["w", "h", "l", KEYS.left, KEYS.right, "n", "N"]) {
-      overlay.handleInput(key);
+      harness.overlay.handleInput(key);
     }
-    expect(overlay.cachedLines).toBe(cached);
-    expect(overlay.viewHscroll).toBe(hscrollBefore);
-    expect(overlay.viewWrap).toBe(false);
+    expect(harness.overlay.render(120)).toBe(frameBefore);
 
-    // Scroll keys still work.
-    overlay.handleInput("G");
+    const rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).not.toContain("· wrap");
+    expect(rendered).not.toContain("col ");
+
+    // Scroll keys still work and update the viewport.
+    harness.overlay.handleInput("G");
     expect(harness.overlay.render(120).join("\n")).toContain("chafa-row-39");
 
     // / explains search is unavailable and does not enter search mode.
-    overlay.handleInput("/");
-    expect(overlay.mode).toBe("normal");
+    harness.overlay.handleInput("/");
     expect(harness.overlay.render(120).join("\n")).toContain("search is not available for rendered images");
+    harness.overlay.handleInput("q");
+    expect(harness.state.closed).toBe(1);
   });
 
   it("upgrades a deferred support: card first, then re-renders with geometry after the debounce", async () => {

@@ -1,6 +1,6 @@
 # Issue #095: Test Coverage Gap: Extension Entry Point `index.ts` Is 93% Untested
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Technical Debt / Test Coverage
 - **Severity**: Medium
 - **Component**: [`index.ts`](file:///home/jhonny/Sources/pi-navigator/index.ts), [`test/index.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/index.test.ts)
@@ -36,7 +36,11 @@ Expand [`test/index.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/inde
 
 ## Acceptance Criteria
 
-- [ ] Automated tests cover subcommand dispatch in `index.ts`.
-- [ ] Argument completion function is unit-tested.
-- [ ] Transcript entry renderer is unit-tested.
-- [ ] `npm test` passes.
+- [x] Automated tests cover subcommand dispatch in `index.ts`.
+- [x] Argument completion function is unit-tested.
+- [x] Transcript entry renderer is unit-tested.
+- [x] `npm test` passes.
+
+## Resolution
+
+Added unit tests in `test/index.test.ts` covering `parseNavigatorArgs`, `navigatorCompletions`, command registration and routing (`help`, `settings`, `unknown`), the headless environment guard, and the durable help entry renderer.

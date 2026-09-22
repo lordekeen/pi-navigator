@@ -1,6 +1,6 @@
 # Issue #076: `fieldValue` Throws `TypeError` on Partial Settings or Missing Sections
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Bug / Robustness
 - **Severity**: High
 - **Component**: [`settings_menu.ts`](file:///home/jhonny/Sources/pi-navigator/settings_menu.ts#L29-L35)
@@ -55,6 +55,10 @@ function fieldValue(
 
 ## Acceptance Criteria
 
-- [ ] `fieldValue` safely resolves defaults without throwing `TypeError` when an intermediate section is undefined or null.
-- [ ] The settings menu opens successfully even if passed a partial settings object.
-- [ ] Unit test in [`test/settings_menu.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings_menu.test.ts) covers partial/empty settings objects.
+- [x] `fieldValue` safely resolves defaults without throwing `TypeError` when an intermediate section is undefined or null.
+- [x] The settings menu opens successfully even if passed a partial settings object.
+- [x] Unit test in [`test/settings_menu.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings_menu.test.ts) covers partial/empty settings objects.
+
+## Resolution
+
+Updated `fieldValue` in `settings_menu.ts` to safely traverse nested path segments with nullish and object checks, falling back to field-level defaults or default settings if a section or property is missing. Verified with automated tests in `test/settings_menu.test.ts`.

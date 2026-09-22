@@ -1,6 +1,6 @@
 # Issue #078: Unknown Settings Warning Cap Is Per-Section Rather Than Global
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Bug / Robustness
 - **Severity**: Medium
 - **Component**: [`settings.ts`](file:///home/jhonny/Sources/pi-navigator/settings.ts#L186-L197), [`settings.ts`](file:///home/jhonny/Sources/pi-navigator/settings.ts#L295-L320)
@@ -61,5 +61,9 @@ Or collect all unknown keys across all sections first, then run a single capped 
 
 ## Acceptance Criteria
 
-- [ ] The maximum number of unknown key warnings emitted by `normalizeNavigatorSettings` across all sections does not exceed a global cap (e.g. 5 individual + 1 overflow summary).
-- [ ] Tests in [`test/settings.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings.test.ts) verify that a file with many unknown keys across multiple sections is bounded globally.
+- [x] The maximum number of unknown key warnings emitted by `normalizeNavigatorSettings` across all sections does not exceed a global cap (e.g. 5 individual + 1 overflow summary).
+- [x] Tests in [`test/settings.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings.test.ts) verify that a file with many unknown keys across multiple sections is bounded globally.
+
+## Resolution
+
+Updated `normalizeNavigatorSettings` in `settings.ts` to aggregate unknown keys across all sections and the root level globally, applying the `MAX_UNKNOWN_KEY_WARNINGS` (5) cap across the entire configuration rather than per-section. Verified with automated tests in `test/settings.test.ts`.

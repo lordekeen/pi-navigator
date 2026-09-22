@@ -1,6 +1,6 @@
 # Issue #097: Test Coverage Gap: Tmux Native Image Degradation Untested in `images.test.ts`
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Technical Debt / Test Coverage
 - **Severity**: Medium
 - **Component**: [`images.ts`](file:///home/jhonny/Sources/pi-navigator/images.ts), [`test/images.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/images.test.ts)
@@ -28,6 +28,10 @@ Add a dedicated test block in [`test/images.test.ts`](file:///home/jhonny/Source
 
 ## Acceptance Criteria
 
-- [ ] Tmux and screen environment detection is thoroughly tested in `test/images.test.ts`.
-- [ ] Tests verify that settings and environment overrides do not activate native graphics protocols under multiplexers.
-- [ ] `npm test` passes.
+- [x] Tmux and screen environment detection is thoroughly tested in `test/images.test.ts`.
+- [x] Tests verify that settings and environment overrides do not activate native graphics protocols under multiplexers.
+- [x] `npm test` passes.
+
+## Resolution
+
+Added comprehensive unit tests in `test/images.test.ts` verifying that `resolveNativeProtocol` returns `null` and image support gracefully degrades to chafa or metadata card when `TMUX` is set or `TERM` indicates a terminal multiplexer.

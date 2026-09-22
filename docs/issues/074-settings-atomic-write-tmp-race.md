@@ -1,6 +1,6 @@
 # Issue #074: Fixed `.tmp` Filename in `writeNavigatorSettings` Creates Concurrency Race and File Leak
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Bug / Reliability
 - **Severity**: High
 - **Component**: [`settings.ts`](file:///home/jhonny/Sources/pi-navigator/settings.ts#L417-L423)
@@ -57,7 +57,11 @@ export function writeNavigatorSettings(path: string, settings: NavigatorSettings
 
 ## Acceptance Criteria
 
-- [ ] Temporary file path uses a unique per-write suffix to avoid collisions across processes.
-- [ ] Temporary file is deleted if write or rename fails.
-- [ ] Atomic replacement of the target file via `renameSync` remains intact.
-- [ ] Tests in [`test/settings.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings.test.ts) pass.
+- [x] Temporary file path uses a unique per-write suffix to avoid collisions across processes.
+- [x] Temporary file is deleted if write or rename fails.
+- [x] Atomic replacement of the target file via `renameSync` remains intact.
+- [x] Tests in [`test/settings.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings.test.ts) pass.
+
+## Resolution
+
+Updated `writeNavigatorSettings` in `settings.ts` to generate a unique temporary filename using `crypto.randomBytes(6).toString("hex")` in the destination directory and wrapped file operations in a `try...finally` block that removes the temporary file if atomic rename fails. Verified with automated tests in `test/settings.test.ts`.

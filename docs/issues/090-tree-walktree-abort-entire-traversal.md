@@ -1,6 +1,6 @@
 # Issue #090: `walkTree` Abort Semantics Terminates Entire Traversal Rather Than Skipping Subtree
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Technical Debt / API Design
 - **Severity**: Low
 - **Component**: [`tree.ts`](file:///home/jhonny/Sources/pi-navigator/tree.ts#L320-L331)
@@ -49,6 +49,10 @@ Refine the visitor return contract:
 
 ## Acceptance Criteria
 
-- [ ] Tree walk semantics support subtree pruning without aborting sibling traversal.
-- [ ] Existing callers in `tree.ts` and other modules remain functional.
-- [ ] Unit tests in [`test/tree.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/tree.test.ts) verify both pruning and termination.
+- [x] Tree walk semantics support subtree pruning without aborting sibling traversal.
+- [x] Existing callers in `tree.ts` and other modules remain functional.
+- [x] Unit tests in [`test/tree.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/tree.test.ts) verify both pruning and termination.
+
+## Resolution
+
+Introduced `WalkAction` type (`boolean | "prune" | "stop"`) to `walkTree` in `tree.ts`. Returning `false` or `"prune"` prunes the current subtree while continuing sibling traversal, whereas returning `"stop"` aborts the entire walk immediately. Updated `findNode` to return `"stop"`. Verified with automated tests in `test/tree.test.ts`.

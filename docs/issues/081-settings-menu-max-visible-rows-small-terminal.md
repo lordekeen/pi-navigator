@@ -1,6 +1,6 @@
 # Issue #081: Fixed `MAX_VISIBLE_ROWS = 10` Overflows Small Viewports in Settings Menu
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Bug / UI Consistency
 - **Severity**: Medium
 - **Component**: [`settings_menu.ts`](file:///home/jhonny/Sources/pi-navigator/settings_menu.ts#L172), [`settings_menu.ts`](file:///home/jhonny/Sources/pi-navigator/settings_menu.ts#L303)
@@ -33,6 +33,10 @@ Static constant `MAX_VISIBLE_ROWS = 10` is passed to `SettingsList` regardless o
 
 ## Acceptance Criteria
 
-- [ ] Settings menu adapts its visible row count to avoid overflowing small terminal viewports.
-- [ ] Frame chrome (top/bottom rules, title, footer) remains visible on constrained terminal heights.
-- [ ] Tests in [`test/settings_menu.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings_menu.test.ts) verify height calculation and rendering on small terminal geometries.
+- [x] Settings menu adapts its visible row count to avoid overflowing small terminal viewports.
+- [x] Frame chrome (top/bottom rules, title, footer) remains visible on constrained terminal heights.
+- [x] Tests in [`test/settings_menu.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings_menu.test.ts) verify height calculation and rendering on small terminal geometries.
+
+## Resolution
+
+Updated `settings_menu.ts` to dynamically compute `maxVisible` list rows using `Math.max(3, Math.min(10, termRows - 6))`, allowing the settings list to scale down cleanly on small terminal heights without overflowing the viewport. Added support for injected `deps.termRows`. Verified with automated tests in `test/settings_menu.test.ts`.

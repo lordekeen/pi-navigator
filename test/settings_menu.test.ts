@@ -8,7 +8,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import type { NavigatorSettings } from "../settings";
+import { NAVIGATOR_CONFIG_FIELDS, type NavigatorConfigField, type NavigatorSettings } from "../settings";
 import { buildSettingItems, buildSettingsMenuTheme, openSettingsMenu, type SettingsMenuDeps, type SettingsMenuTheme, type SettingsMenuUi } from "../settings_menu";
 
 interface ComponentLike {
@@ -121,6 +121,46 @@ describe("buildSettingItems", () => {
     const items = buildSettingItems(fullSettings(), {});
     for (const item of items) expect(item.description).not.toContain("overridden");
   });
+
+  it("safely handles partial or empty settings without throwing TypeError", () => {
+    expect(() => buildSettingItems({} as any, {})).not.toThrow();
+    const items = buildSettingItems({} as any, {});
+    expect(items).toHaveLength(5);
+    expect(items[0]?.currentValue).toBe("off");
+    expect(items[1]?.currentValue).toBe("off");
+  });
+
+  it("supports numeric fields with submenu and text input", () => {
+    const numberField: NavigatorConfigField = {
+      id: "viewer.tabWidth",
+      path: ["viewer", "tabWidth"],
+      kind: "number",
+      section: "Viewer",
+      label: "Tab width",
+      description: "Spaces per tab stop",
+      min: 1,
+      max: 8,
+      default: 4,
+      live: false,
+    };
+    (NAVIGATOR_CONFIG_FIELDS as any).push(numberField);
+    try {
+      const items = buildSettingItems(fullSettings(), {});
+      const numItem = items.find((i) => i.id === "viewer.tabWidth");
+      expect(numItem).toBeDefined();
+      expect(numItem?.submenu).toBeDefined();
+      let submitted: string | undefined;
+      const inputComp = numItem!.submenu!("4", (val) => {
+        submitted = val;
+      }) as any;
+      expect(inputComp).toBeDefined();
+      expect(typeof inputComp.onSubmit).toBe("function");
+      inputComp.onSubmit("6");
+      expect(submitted).toBe("6");
+    } finally {
+      (NAVIGATOR_CONFIG_FIELDS as any).pop();
+    }
+  });
 });
 
 describe("buildSettingsMenuTheme (host settings-list roles)", () => {
@@ -216,13 +256,10 @@ describe("settings menu integration (real SettingsList)", () => {
     expect(lines[lines.length - 1]).toBe("\u2500".repeat(80));
     expect(lines[1]).toContain("pi-navigator \u00b7 settings");
 
-    // Chrome rows (rule/title/blank) are not forwarded to the list.
-    expect(component.handleMouse?.({ type: "wheel", wheelDelta: 1, y: 1, height: lines.length })).toBeUndefined();
-
-    // A wheel inside the list region scrolls the selection; the frame's
-    // three header rows are subtracted before dispatch.
+    // Wheel on chrome rows scrolls the list.
     const before = lines.findIndex((line) => line.startsWith("\u2192 "));
-    component.handleMouse?.({ type: "wheel", wheelDelta: 1, y: 5, height: lines.length });
+    const wheelRes = component.handleMouse?.({ type: "wheel", wheelDelta: 1, y: 1, height: lines.length }) as any;
+    expect(wheelRes?.handled).toBe(true);
     const after = component.render(80).findIndex((line) => line.startsWith("\u2192 "));
     expect(after).toBe(before + 1);
 
@@ -230,6 +267,58 @@ describe("settings menu integration (real SettingsList)", () => {
     await closed;
     expect(commit).not.toHaveBeenCalled();
     expect(onWarning).not.toHaveBeenCalled();
+  });
+
+  it("clears mousePressedIndex when mouse is released outside list bounds", async () => {
+    const commit = vi.fn((next: NavigatorSettings): CommitResult => ({ ok: true, settings: next }));
+    const onWarning = vi.fn();
+    const { component, closed } = await openMenu({ settings: fullSettings(), overrides: {}, commit, onWarning });
+    const lines = component.render(80);
+    // Press on second item (y=6 in frame coords)
+    component.handleMouse?.({ type: "press", button: "left", y: 6, height: lines.length });
+    // Release outside list bounds (e.g. y=0)
+    component.handleMouse?.({ type: "release", button: "left", y: 0, height: lines.length });
+    // Now click on first item (y=5 in frame coords)
+    component.handleMouse?.({ type: "click", button: "left", y: 5, height: lines.length });
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(commit.mock.calls[0]![0]!.images.mode).toBe("chafa");
+    component.handleInput?.(KEYS.escape);
+    await closed;
+  });
+
+  it("catches exception thrown by commit and reverts row display", async () => {
+    const commit = vi.fn(() => {
+      throw new Error("EACCES: permission denied");
+    });
+    const onWarning = vi.fn();
+    const { component, closed } = await openMenu({ settings: fullSettings(), overrides: {}, commit, onWarning });
+    component.handleInput?.(KEYS.enter);
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining("failed to save images.mode"));
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining("permission denied"));
+    // Display reverted: the row still shows "off"
+    const lines = component.render(80);
+    const row = lines.find((line) => line.includes("Image rendering"));
+    expect(row).toContain("off");
+    component.handleInput?.(KEYS.escape);
+    await closed;
+  });
+
+  it("adapts maxVisible for small terminals", async () => {
+    const commit = vi.fn((next: NavigatorSettings): CommitResult => ({ ok: true, settings: next }));
+    const onWarning = vi.fn();
+    const { component, closed } = await openMenu({
+      settings: fullSettings(),
+      overrides: {},
+      commit,
+      onWarning,
+      termRows: 10,
+    });
+    const lines = component.render(80);
+    expect(lines[0]).toBe("\u2500".repeat(80));
+    expect(lines[lines.length - 1]).toBe("\u2500".repeat(80));
+    component.handleInput?.(KEYS.escape);
+    await closed;
   });
 
   it("calls ctx.ui.custom with no options object so the menu docks above the input", async () => {

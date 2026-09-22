@@ -773,6 +773,14 @@ export function resolveNativeProtocol(deps?: {
   env?: Record<string, string | undefined>;
   userSettings?: string;
 }): NativeProtocol | null {
+  const env = deps?.env ?? process.env;
+  const term = (env["TERM"] ?? "").toLowerCase();
+  const isMultiplexer = Boolean(
+    env["TMUX"] || term.startsWith("tmux") || term.startsWith("screen"),
+  );
+  if (isMultiplexer) {
+    return null;
+  }
   const caps = deps?.capabilities?.().images;
   if (caps !== null && caps !== undefined) return caps;
   if (deps?.userSettings !== undefined) {
@@ -782,7 +790,7 @@ export function resolveNativeProtocol(deps?: {
     ).images;
     if (fromSettings !== null) return fromSettings;
   }
-  const envProtocol = (deps?.env ?? process.env)["PI_IMAGE_PROTOCOL"];
+  const envProtocol = env["PI_IMAGE_PROTOCOL"];
   if (typeof envProtocol === "string") {
     const trimmed = envProtocol.trim();
     if (trimmed === "kitty" || trimmed === "iterm2") return trimmed;
@@ -798,6 +806,8 @@ export interface NativeRenderCtx {
   signal?: AbortSignal;
   /** Test seam; default node fs read. */
   readBytes?: (path: string) => Promise<Uint8Array>;
+  /** Optional environment dictionary (test seam; default process.env). */
+  env?: Record<string, string | undefined>;
 }
 
 /**
@@ -850,7 +860,18 @@ export async function runNativeRender(
     return { ok: false, reason: bounded("render aborted") };
   }
 
-  // b) Mime gate (D5): unknown extension, or kitty with a non-PNG mime — no read.
+  // Guard against multiplexer in case called directly
+  if (ctx.env) {
+    const term = (ctx.env["TERM"] ?? "").toLowerCase();
+    if (ctx.env["TMUX"] || term.startsWith("tmux") || term.startsWith("screen")) {
+      return {
+        ok: false,
+        reason: bounded("image protocols disabled under tmux/screen"),
+      };
+    }
+  }
+
+  // b) Mime gate (D5): unknown extension, or kitty with a non-PNG/JPEG/WebP mime — no read.
   const mime = mimeOfPath(absPath);
   if (mime === undefined) {
     return {
@@ -858,8 +879,13 @@ export async function runNativeRender(
       reason: bounded("native rendering does not support this image format"),
     };
   }
-  if (ctx.protocol === "kitty" && mime !== "image/png") {
-    return { ok: false, reason: bounded("kitty requires PNG") };
+  if (
+    ctx.protocol === "kitty" &&
+    mime !== "image/png" &&
+    mime !== "image/jpeg" &&
+    mime !== "image/webp"
+  ) {
+    return { ok: false, reason: bounded("kitty requires PNG, JPEG, or WebP") };
   }
 
   // c) Bounded read (D7); any read error is a clean failure.

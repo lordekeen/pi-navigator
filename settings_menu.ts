@@ -3,8 +3,7 @@
  * pattern).
  *
  * `buildSettingItems` is pure and pi-free (unit-tested directly); the TUI
- * layer lazily imports pi-tui behind a dynamic shape check and wraps its
- * `SettingsList` in a host-framed wrapper following the settings-panel
+ * layer wraps `SettingsList` in a host-framed wrapper following the settings-panel
  * convention (top/bottom full-width rule in the `border` token, like pi's
  * own `/settings` and pi-overseer). Mouse events are forwarded to the list
  * with y translated past the frame chrome. The menu renders as a plain
@@ -15,6 +14,17 @@
  * colors — the SettingsListTheme is built from the injected pi `Theme` tokens.
  */
 
+import {
+  type Component,
+  Input,
+  type SettingItem,
+  SettingsList,
+  type SettingsListTheme,
+  truncateToWidth,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
+} from "@earendil-works/pi-tui";
+
 import { applyFieldEdit, NAVIGATOR_CONFIG_FIELDS, type NavigatorSettings } from "./settings";
 
 export interface SettingItemData {
@@ -23,15 +33,23 @@ export interface SettingItemData {
   description: string; // field.description + env-override note when shadowed
   currentValue: string; // "on"/"off" for booleans, raw value for enums
   values: string[]; // ["on","off"] for booleans, field.options for enums
+  submenu?: (currentValue: string, done: (selectedValue?: string) => void) => Component;
 }
 
 /** Read `field.path` out of settings; every registry path resolves. */
-function fieldValue(settings: NavigatorSettings, path: readonly string[]): string | number | boolean {
+function fieldValue(
+  settings: NavigatorSettings,
+  path: readonly string[],
+  fallback?: string | number | boolean,
+): string | number | boolean {
   let current: unknown = settings;
   for (const segment of path) {
+    if (typeof current !== "object" || current === null) {
+      return fallback ?? "";
+    }
     current = (current as Record<string, unknown>)[segment];
   }
-  return current as string | number | boolean;
+  return (current ?? fallback ?? "") as string | number | boolean;
 }
 
 /**
@@ -46,9 +64,10 @@ export function buildSettingItems(
 ): readonly SettingItemData[] {
   const items: SettingItemData[] = [];
   for (const field of NAVIGATOR_CONFIG_FIELDS) {
-    const value = fieldValue(settings, field.path);
+    const value = fieldValue(settings, field.path, field.default);
     let currentValue: string;
     let values: string[];
+    let submenu: ((currentValue: string, done: (selectedValue?: string) => void) => Component) | undefined;
     switch (field.kind) {
       case "boolean":
         currentValue = value === true ? "on" : "off";
@@ -60,13 +79,24 @@ export function buildSettingItems(
         break;
       case "number":
         currentValue = String(value);
-        values = [String(value)];
+        if (field.options && field.options.length > 0) {
+          values = [...field.options];
+        } else {
+          values = [String(value)];
+          submenu = (curVal, done) => {
+            const input = new Input({ prompt: `${field.label}: ` });
+            input.setValue(curVal);
+            input.onSubmit = (val) => done(val);
+            input.onEscape = () => done(undefined);
+            return input;
+          };
+        }
         break;
     }
     const envVar = overrides[field.id];
     const description =
       envVar !== undefined ? `${field.description} \u2014 overridden by ${envVar} (env wins)` : field.description;
-    items.push({ id: field.id, label: field.label, description, currentValue, values });
+    items.push({ id: field.id, label: field.label, description, currentValue, values, submenu });
   }
   return items;
 }
@@ -88,58 +118,14 @@ export interface SettingsMenuDeps {
   overrides: Readonly<Record<string, string>>;
   commit: (next: NavigatorSettings) => { ok: true; settings: NavigatorSettings } | { ok: false; error: string };
   onWarning: (message: string) => void;
+  termRows?: number;
 }
-
-// ── Lazy TUI types (pi-tui imported only at call time) ──
-
-interface ComponentLike {
-  render(width: number): string[];
-  handleInput?(data: string): void;
-  handleMouse?(event: PituiMouseEvent): PituiMouseResult | undefined;
-  invalidate(): void;
-}
-
-type SettingsListLike = ComponentLike & { updateValue(id: string, newValue: string): void };
-
-type PituiSettingItem = {
-  id: string;
-  label: string;
-  description?: string;
-  currentValue: string;
-  values?: string[];
-};
-
-// pi-tui TuiMouseEvent / TuiMouseEventResult (structural mirrors, as for the
-// SettingsList types above — pi-tui is imported only at call time).
-type PituiMouseEventType = "press" | "release" | "move" | "drag" | "click" | "wheel";
-type PituiMouseButton = "left" | "middle" | "right" | "none";
-type PituiMouseEvent = {
-  type: PituiMouseEventType;
-  button: PituiMouseButton;
-  x: number;
-  y: number;
-  screenX: number;
-  screenY: number;
-  width: number;
-  height: number;
-  shift: boolean;
-  alt: boolean;
-  ctrl: boolean;
-  wheelDelta?: number;
-  clickCount?: number;
-};
-type PituiMouseResult = {
-  handled?: boolean;
-  capture?: boolean;
-  focus?: boolean;
-  render?: boolean;
-};
 
 /**
  * Host settings-list theme roles (pi's `getSettingsListTheme`): unselected
  * labels stay plain, unselected values are muted, the selection is accent.
  */
-export function buildSettingsMenuTheme(theme: SettingsMenuTheme): SettingsListThemeLike {
+export function buildSettingsMenuTheme(theme: SettingsMenuTheme): SettingsListTheme {
   return {
     label: (t, selected) => (selected ? theme.fg("accent", t) : t),
     value: (t, selected) => (selected ? theme.fg("accent", t) : theme.fg("muted", t)),
@@ -149,27 +135,7 @@ export function buildSettingsMenuTheme(theme: SettingsMenuTheme): SettingsListTh
   };
 }
 
-export type SettingsListThemeLike = {
-  label(text: string, selected: boolean): string;
-  value(text: string, selected: boolean): string;
-  description(text: string): string;
-  cursor: string;
-  hint(text: string): string;
-};
-
-type PituiModule = {
-  SettingsList: new (
-    items: PituiSettingItem[],
-    maxVisible: number,
-    theme: SettingsListThemeLike,
-    onChange: (id: string, newValue: string) => void,
-    onCancel: () => void,
-    options?: { enableSearch?: boolean },
-  ) => SettingsListLike;
-  truncateToWidth: (text: string, maxWidth: number, ellipsis?: string, pad?: boolean) => string;
-};
-
-const MAX_VISIBLE_ROWS = 10;
+export type SettingsListThemeLike = SettingsListTheme;
 
 /** Rows the frame renders before the SettingsList (rule, title, blank). */
 const FRAME_HEADER_ROWS = 3;
@@ -184,15 +150,15 @@ const FRAME_RULE = "\u2500";
  * the SettingsList truncates its own lines. Rendered in the editor dock, so
  * it fills whatever width the editor area has.
  */
-class SettingsMenuFrame implements ComponentLike {
-  private readonly list: SettingsListLike;
+class SettingsMenuFrame implements Component {
+  private readonly list: SettingsList;
   private readonly title: string;
   private readonly footer: string;
   private readonly truncate: (text: string, maxWidth: number) => string;
   private readonly rule: (text: string) => string;
   private listHeight = 0;
 
-  constructor(list: SettingsListLike, theme: SettingsMenuTheme, truncate: (text: string, maxWidth: number) => string) {
+  constructor(list: SettingsList, theme: SettingsMenuTheme, truncate: (text: string, maxWidth: number) => string) {
     this.list = list;
     this.title = theme.fg("accent", theme.bold("pi-navigator \u00b7 settings"));
     this.footer = theme.fg("dim", "changes apply the next time /navigator opens");
@@ -219,12 +185,19 @@ class SettingsMenuFrame implements ComponentLike {
     this.list.handleInput?.(data);
   }
 
-  handleMouse(event: PituiMouseEvent): PituiMouseResult | undefined {
-    // Mirror pi-tui Container's child dispatch: only rows inside the list
-    // receive the event, with y translated past the frame chrome. The
-    // SettingsList owns wheel scroll and click selection itself.
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (event.type === "wheel") {
+      const minY = (this.list as unknown as { searchEnabled?: boolean }).searchEnabled ? 2 : 0;
+      const y = Math.max(minY, Math.min(Math.max(minY, this.listHeight - 1), event.y - FRAME_HEADER_ROWS));
+      return this.list.handleMouse?.({ ...event, y, height: this.listHeight });
+    }
     const y = event.y - FRAME_HEADER_ROWS;
-    if (y < 0 || y >= this.listHeight) return undefined;
+    if (y < 0 || y >= this.listHeight) {
+      if (event.type === "release" || event.type === "click") {
+        ((this.list as unknown) as { mousePressedIndex?: number }).mousePressedIndex = undefined;
+      }
+      return undefined;
+    }
     return this.list.handleMouse?.({ ...event, y, height: this.listHeight });
   }
 
@@ -241,25 +214,11 @@ class SettingsMenuFrame implements ComponentLike {
  * may canonicalize more than the edited field).
  */
 export async function openSettingsMenu(ui: SettingsMenuUi, deps: SettingsMenuDeps): Promise<void> {
-  let pitui: PituiModule;
-  try {
-    // SAFETY: the shape check below guards the cast at call time; the module
-    // is provided by the pi host which aliases @earendil-works/pi-tui.
-    pitui = (await import("@earendil-works/pi-tui")) as unknown as PituiModule;
-  } catch {
-    deps.onWarning("pi-navigator settings unavailable: the TUI library could not be loaded.");
-    return;
-  }
-  if (pitui.SettingsList === undefined || pitui.truncateToWidth === undefined) {
-    deps.onWarning("pi-navigator settings unavailable: the TUI library could not be loaded.");
-    return;
-  }
-  const { SettingsList, truncateToWidth } = pitui;
   const truncate = (text: string, width: number): string => truncateToWidth(text, width, "");
 
   let current = deps.settings;
 
-  const refreshRows = (items: PituiSettingItem[], list: SettingsListLike): void => {
+  const refreshRows = (items: SettingItem[], list: SettingsList): void => {
     const rows = buildSettingItems(current, deps.overrides);
     for (const item of items) {
       const row = rows.find((candidate) => candidate.id === item.id);
@@ -267,6 +226,7 @@ export async function openSettingsMenu(ui: SettingsMenuUi, deps: SettingsMenuDep
       item.currentValue = row.currentValue;
       item.values = [...row.values];
       item.description = row.description;
+      item.submenu = row.submenu;
       list.updateValue(item.id, item.currentValue);
     }
   };
@@ -275,32 +235,41 @@ export async function openSettingsMenu(ui: SettingsMenuUi, deps: SettingsMenuDep
     (_tui, theme, _keybindings, done) => {
       const settingsTheme = buildSettingsMenuTheme(theme);
 
-      const items: PituiSettingItem[] = buildSettingItems(current, deps.overrides).map((data) => ({
+      const items: SettingItem[] = buildSettingItems(current, deps.overrides).map((data) => ({
         id: data.id,
         label: data.label,
         description: data.description,
         currentValue: data.currentValue,
         values: [...data.values],
+        submenu: data.submenu,
       }));
 
       const onChange = (id: string, rawValue: string): void => {
-        const edited = applyFieldEdit(current, id, rawValue);
-        if (!edited.ok) {
-          deps.onWarning(`pi-navigator: ${id}: ${edited.error}`);
-          refreshRows(items, settingsList); // revert display to the still-current value
-          return;
+        try {
+          const edited = applyFieldEdit(current, id, rawValue);
+          if (!edited.ok) {
+            deps.onWarning(`pi-navigator: ${edited.error}`);
+            refreshRows(items, settingsList); // revert display to the still-current value
+            return;
+          }
+          const committed = deps.commit(edited.settings);
+          if (!committed.ok) {
+            deps.onWarning(`pi-navigator: ${id}: ${committed.error}`);
+            refreshRows(items, settingsList); // revert display to the still-current value
+            return;
+          }
+          current = committed.settings;
+          refreshRows(items, settingsList); // normalization may canonicalize more rows
+        } catch (err) {
+          deps.onWarning(`pi-navigator: failed to save ${id}: ${err instanceof Error ? err.message : String(err)}`);
+          refreshRows(items, settingsList);
         }
-        const committed = deps.commit(edited.settings);
-        if (!committed.ok) {
-          deps.onWarning(`pi-navigator: ${id}: ${committed.error}`);
-          refreshRows(items, settingsList); // revert display to the still-current value
-          return;
-        }
-        current = committed.settings;
-        refreshRows(items, settingsList); // normalization may canonicalize more rows
       };
 
-      const settingsList = new SettingsList(items, MAX_VISIBLE_ROWS, settingsTheme, onChange, () => done(), {
+      const termRows = deps.termRows ?? (typeof process.stdout?.rows === "number" && process.stdout.rows > 0 ? process.stdout.rows : 24);
+      const maxVisible = Math.max(3, Math.min(10, termRows - 6));
+
+      const settingsList = new SettingsList(items, maxVisible, settingsTheme, onChange, () => done(), {
         enableSearch: true,
       });
       return new SettingsMenuFrame(settingsList, theme, truncate);

@@ -1,6 +1,6 @@
 # Issue #080: Duplicate Field ID in Settings Menu Warning Notifications
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Bug / UI Consistency
 - **Severity**: Medium
 - **Component**: [`settings_menu.ts`](file:///home/jhonny/Sources/pi-navigator/settings_menu.ts#L289), [`settings.ts`](file:///home/jhonny/Sources/pi-navigator/settings.ts#L462-L475)
@@ -37,6 +37,10 @@ Choose one consistent pattern:
 
 ## Acceptance Criteria
 
-- [ ] Validation failure warnings display the field ID exactly once.
-- [ ] Warning formats are aligned between `settings.ts` and `settings_menu.ts`.
-- [ ] Unit tests in [`test/settings_menu.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings_menu.test.ts) and [`test/settings.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings.test.ts) pass.
+- [x] Validation failure warnings display the field ID exactly once.
+- [x] Warning formats are aligned between `settings.ts` and `settings_menu.ts`.
+- [x] Unit tests in [`test/settings_menu.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings_menu.test.ts) and [`test/settings.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings.test.ts) pass.
+
+## Resolution
+
+Updated `onChange` in `settings_menu.ts` to format warning messages as `pi-navigator: ${edited.error}` without prefixing with duplicate field ID, as `validateFieldValue` already includes the field path in error strings. Verified with automated tests in `test/settings_menu.test.ts`.

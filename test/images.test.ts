@@ -979,6 +979,38 @@ describe("resolveNativeProtocol", () => {
     }
   });
 
+  it("returns null when running under tmux or screen multiplexer (#070, #097)", () => {
+    // TMUX env variable set
+    expect(
+      resolveNativeProtocol({
+        capabilities: () => ({ images: "kitty" }),
+        env: { TMUX: "1", PI_IMAGE_PROTOCOL: "kitty" },
+        userSettings,
+        readText: settingsWith("kitty"),
+      }),
+    ).toBeNull();
+
+    // TERM starting with tmux
+    expect(
+      resolveNativeProtocol({
+        capabilities: () => ({ images: "iterm2" }),
+        env: { TERM: "tmux-256color" },
+        userSettings,
+        readText: settingsWith("iterm2"),
+      }),
+    ).toBeNull();
+
+    // TERM starting with screen
+    expect(
+      resolveNativeProtocol({
+        capabilities: () => ({ images: "kitty" }),
+        env: { TERM: "screen.xterm-256color" },
+        userSettings,
+        readText: settingsWith("kitty"),
+      }),
+    ).toBeNull();
+  });
+
   it("uses only injected capabilities/readText/env — never the real $HOME or process env", () => {
     expect(
       resolveNativeProtocol({
@@ -1417,6 +1449,38 @@ describe("resolveImageSupport", () => {
     }
   });
 
+  it("degrades under tmux to chafa under auto mode or none under native mode (#070, #097)", async () => {
+    // Under mode: "native", tmux forces tier: "none"
+    const nativeSupport = await resolveImageSupport(
+      chafaApi(),
+      paths,
+      { images: { mode: "native" } },
+      {
+        readText: supportFiles({}),
+        exec: okProbeExec,
+        env: { TMUX: "1", PI_IMAGE_PROTOCOL: "kitty" },
+        capabilities: () => ({ images: "kitty" }),
+      },
+    );
+    expect(nativeSupport.tier).toBe("none");
+    expect(nativeSupport.nativeProtocol).toBeNull();
+
+    // Under mode: "auto", tmux falls back to chafa
+    const autoSupport = await resolveImageSupport(
+      chafaApi(),
+      paths,
+      { images: { mode: "auto" } },
+      {
+        readText: supportFiles({}),
+        exec: okProbeExec,
+        env: { TMUX: "1", PI_IMAGE_PROTOCOL: "kitty" },
+        capabilities: () => ({ images: "kitty" }),
+      },
+    );
+    expect(autoSupport.tier).toBe("chafa");
+    expect(autoSupport.nativeProtocol).toBeNull();
+  });
+
   it("resolves nativeProtocol from the settings file when no capabilities accessor is injected", async () => {
     const support = await resolveImageSupport(
       chafaApi(),
@@ -1458,6 +1522,10 @@ describe("runNativeRender", () => {
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
   const GIF_1X1_BASE64 =
     "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+  const JPEG_1X1_BASE64 =
+    "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=";
+  const WEBP_1X1_BASE64 =
+    "UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAD8D+JaQAA3AA/ua1AAA=";
   const geometry = { cols: 40, rows: 10 };
 
   type ReadBytes = (path: string) => Promise<Uint8Array>;
@@ -1509,6 +1577,36 @@ describe("runNativeRender", () => {
     expect(readBytes).toHaveBeenCalledWith("/tmp/pixel.png");
   });
 
+  it("kitty renders a real JPEG fixture (#071)", async () => {
+    withProtocol("kitty");
+    const readBytes = readBytesOf(JPEG_1X1_BASE64);
+    const result = await runNativeRender("/tmp/pixel.jpg", geometry, {
+      protocol: "kitty",
+      readBytes,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.rows).toBeGreaterThan(0);
+    expect(result.cols).toBeGreaterThan(0);
+    expect(result.lines[0]).toContain("\x1b_G");
+    expect(readBytes).toHaveBeenCalledWith("/tmp/pixel.jpg");
+  });
+
+  it("kitty renders a real WebP fixture (#071)", async () => {
+    withProtocol("kitty");
+    const readBytes = readBytesOf(WEBP_1X1_BASE64);
+    const result = await runNativeRender("/tmp/pixel.webp", geometry, {
+      protocol: "kitty",
+      readBytes,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.rows).toBeGreaterThan(0);
+    expect(result.cols).toBeGreaterThan(0);
+    expect(result.lines[0]).toContain("\x1b_G");
+    expect(readBytes).toHaveBeenCalledWith("/tmp/pixel.webp");
+  });
+
   it("iterm2: fillers are empty and the last line is moveUp + File= with inline=1 and width=", async () => {
     withProtocol("iterm2");
     const readBytes = readBytesOf(PNG_1X1_BASE64);
@@ -1539,7 +1637,22 @@ describe("runNativeRender", () => {
       protocol: "kitty",
       readBytes,
     });
-    expect(result).toEqual({ ok: false, reason: "kitty requires PNG" });
+    expect(result).toEqual({ ok: false, reason: "kitty requires PNG, JPEG, or WebP" });
+    expect(readBytes).not.toHaveBeenCalled();
+  });
+
+  it("runNativeRender refuses to render under multiplexer (#070)", async () => {
+    withProtocol("kitty");
+    const readBytes = readBytesOf(PNG_1X1_BASE64);
+    const result = await runNativeRender("/tmp/pixel.png", geometry, {
+      protocol: "kitty",
+      readBytes,
+      env: { TMUX: "1" },
+    });
+    expect(result).toEqual({
+      ok: false,
+      reason: "image protocols disabled under tmux/screen",
+    });
     expect(readBytes).not.toHaveBeenCalled();
   });
 

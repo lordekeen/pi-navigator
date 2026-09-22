@@ -1,6 +1,6 @@
 # Issue #096: Test Coverage Gap: Git Edge States Untested in `git.test.ts`
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Technical Debt / Test Coverage
 - **Severity**: Low
 - **Component**: [`git.ts`](file:///home/jhonny/Sources/pi-navigator/git.ts), [`test/git.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/git.test.ts)
@@ -33,8 +33,12 @@ Add test cases in [`test/git.test.ts`](file:///home/jhonny/Sources/pi-navigator/
 
 ## Acceptance Criteria
 
-- [ ] Detached HEAD parsing is covered by an automated test.
-- [ ] Ahead and behind branch counters are tested.
-- [ ] Empty repository handling is verified.
-- [ ] Buffer overflow error path is verified.
-- [ ] `npm test` passes.
+- [x] Detached HEAD parsing is covered by an automated test.
+- [x] Ahead and behind branch counters are tested.
+- [x] Empty repository handling is verified.
+- [x] Buffer overflow error path is verified.
+- [x] `npm test` passes.
+
+## Resolution
+
+Added unit tests in `test/git.test.ts` covering detached HEAD states, ahead and behind commit counts, unborn/empty repository states, and maxBuffer overflow error handling in `readGitState`.

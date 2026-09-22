@@ -1,6 +1,6 @@
 # Issue #091: Smart-Case Search Fails to Detect Non-ASCII Unicode Uppercase Characters
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Bug
 - **Severity**: Medium
 - **Component**: [`viewer.ts`](file:///home/jhonny/Sources/pi-navigator/viewer.ts#L168), [`viewer.ts`](file:///home/jhonny/Sources/pi-navigator/viewer.ts#L550), [`test/viewer.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/viewer.test.ts#L163-L166)
@@ -45,7 +45,11 @@ Update [`test/viewer.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/vie
 
 ## Acceptance Criteria
 
-- [ ] Queries containing non-ASCII uppercase characters trigger case-sensitive search.
-- [ ] Queries containing only lowercase characters remain case-insensitive.
-- [ ] Unit tests verify Unicode smart-case behavior across accented and non-Latin alphabets.
-- [ ] `npm run typecheck` and `npm test` pass.
+- [x] Queries containing non-ASCII uppercase characters trigger case-sensitive search.
+- [x] Queries containing only lowercase characters remain case-insensitive.
+- [x] Unit tests verify Unicode smart-case behavior across accented and non-Latin alphabets.
+- [x] `npm run typecheck` and `npm test` pass.
+
+## Resolution
+
+Updated `markMatches` and `searchLines` in `viewer.ts` to use `/\p{Lu}/u.test(query)` for Unicode-aware uppercase detection. Smart-case search now activates case-sensitive matching for non-ASCII Unicode uppercase characters (such as Cyrillic, Greek, accented Latin). Verified with automated tests in `test/viewer.test.ts`.

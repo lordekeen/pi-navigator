@@ -4,18 +4,20 @@
  * which the plan's QA log explicitly waited for.
  */
 
+import * as childProcess from "node:child_process";
 import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MAX_HIGHLIGHT_BYTES } from "../constants";
 import {
   detectRepo,
   gitCodeMap,
+  gitRunner,
   gitTreeProbe,
   isGitAvailable,
   parsePorcelain,
@@ -311,12 +313,84 @@ describe("git integration on a scratch repository", () => {
     }
   });
 
-  it("returns the cached git-on-path result", async () => {
+  it("returns the cached git-on-path result without spawning subprocess (Issue #094)", async () => {
     // Two calls to isGitAvailable for the same cwd return the cached result.
-    // runGit's ENOENT self-healing (Issue #021) handles the real invalidation
-    // path; this test exercises the normal cache-hit branch.
     expect(await isGitAvailable(repo)).toBe(true);
-    expect(await isGitAvailable(repo)).toBe(true);
+    const spy = vi.spyOn(gitRunner, "execFile");
+    try {
+      expect(await isGitAvailable(repo)).toBe(true);
+      expect(spy).toHaveBeenCalledTimes(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("reports detached HEAD when checked out on a commit (Issue #096)", async () => {
+    await writeFile(join(repo, "a.txt"), "hello\n");
+    await commit(repo, "first");
+    const stateBefore = await readGitState(repo);
+    const hash = stateBefore.history[0]?.shortHash;
+    expect(hash).toBeDefined();
+    await git(repo, ["checkout", "-q", hash!]);
+    const state = await readGitState(repo);
+    expect(state.available).toBe(true);
+    expect(state.detached).toBe(true);
+    expect(state.branch).toBeNull();
+  });
+
+  it("reports ahead and behind counts relative to upstream (Issue #096)", async () => {
+    const remote = await mkdtemp(join(tmpdir(), "pi-nav-remote-"));
+    try {
+      await git(remote, ["init", "--bare", "-q"]);
+      await git(repo, ["remote", "add", "origin", remote]);
+      await writeFile(join(repo, "a.txt"), "1\n");
+      await commit(repo, "first");
+      await git(repo, ["push", "-q", "-u", "origin", "main"]);
+      // Add local commit (ahead 1)
+      await writeFile(join(repo, "b.txt"), "2\n");
+      await commit(repo, "second");
+      const state = await readGitState(repo);
+      expect(state.ahead).toBe(1);
+      expect(state.behind).toBe(0);
+    } finally {
+      await rm(remote, { recursive: true, force: true });
+    }
+  });
+
+  it("handles empty repository with no commits gracefully (Issue #096)", async () => {
+    const emptyRepo = await mkdtemp(join(tmpdir(), "pi-nav-empty-"));
+    try {
+      await git(emptyRepo, ["init", "-q", "-b", "main"]);
+      const state = await readGitState(emptyRepo);
+      expect(state.available).toBe(true);
+      expect(state.branch).toBe("main");
+      expect(state.history).toEqual([]);
+      expect(state.staged).toEqual([]);
+      expect(state.unstaged).toEqual([]);
+    } finally {
+      await rm(emptyRepo, { recursive: true, force: true });
+    }
+  });
+
+  it("handles buffer overflow gracefully (Issue #096)", async () => {
+    const spy = vi.spyOn(gitRunner, "execFile").mockImplementation((...args: any[]) => {
+      const gitArgs = args[1] as string[];
+      if (gitArgs && gitArgs.includes("status")) {
+        const cb = args[args.length - 1];
+        const err = new Error("maxBuffer exceeded") as any;
+        err.code = "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+        cb(err, "", "");
+        return {} as any;
+      }
+      return childProcess.execFile(args[0], args[1], args[2], args[3]);
+    });
+    try {
+      const state = await readGitState(repo);
+      expect(state.available).toBe(false);
+      expect(state.error).toContain("4 MB buffer");
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   // ── readCommitDiff (v3 commit-detail view) ──

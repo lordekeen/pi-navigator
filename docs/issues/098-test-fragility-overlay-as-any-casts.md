@@ -1,6 +1,6 @@
 # Issue #098: Test Fragility: Tests Inspect Private Component Fields via `(overlay as any)` Casts
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Technical Debt / Test Quality
 - **Severity**: Low
 - **Component**: [`test/navigator.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/navigator.test.ts)
@@ -28,6 +28,10 @@ Convenience assertions were added during bug fixes (e.g. #053, #054, #059) to in
 
 ## Acceptance Criteria
 
-- [ ] Private field casts (`(overlay as any)`) in `test/navigator.test.ts` are eliminated or replaced with public API / rendered output assertions.
-- [ ] Tests remain resilient to internal component refactors.
-- [ ] `npm test` passes.
+- [x] Private field casts (`(overlay as any)`) in `test/navigator.test.ts` are eliminated or replaced with public API / rendered output assertions.
+- [x] Tests remain resilient to internal component refactors.
+- [x] `npm test` passes.
+
+## Resolution
+
+Eliminated all private property access via `(overlay as any)` and `(harness.overlay as any)` in `test/navigator.test.ts`, replacing them with observable rendered output checks and frame reference identity checks for render cache verification.

@@ -13,13 +13,27 @@
  * that record and keeps the target path.
  */
 
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import * as childProcess from "node:child_process";
 
 import { GIT_HISTORY_COUNT, GIT_TIMEOUT_MS, MAX_HIGHLIGHT_BYTES, MAX_HIGHLIGHT_LINES } from "./constants";
 import type { GitChangedFile, GitCommit, GitState } from "./types";
 
-const execFileAsync = promisify(execFile);
+export const gitRunner = {
+  execFile: childProcess.execFile,
+};
+
+function execFileAsync(
+  file: string,
+  args: string[],
+  options: childProcess.ExecFileOptions,
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    gitRunner.execFile(file, args, options, (error, stdout, stderr) => {
+      if (error) reject(error);
+      else resolve({ stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
+    });
+  });
+}
 
 const UNIT_SEPARATOR = "\u001f";
 const NUL = "\0";

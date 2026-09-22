@@ -314,15 +314,25 @@ function recomputeSubtreeChanged(node: FileNode): boolean {
 // ── Traversal ──
 
 /**
- * Depth-first walk over a node and its children. Return false from `visit` to
- * stop early. Every traversal in the extension runs through this one walker.
+ * Action returned by `visit` to control tree traversal:
+ * - `false` or `"prune"`: skip descending into this node's children (prune subtree)
+ * - `"stop"`: abort the entire traversal immediately
+ * - `true` or `void`: continue traversal normally
  */
-export function walkTree(root: FileNode, visit: (node: FileNode) => boolean | void): void {
+export type WalkAction = boolean | "prune" | "stop" | void;
+
+/**
+ * Depth-first walk over a node and its children. Every traversal in the
+ * extension runs through this one walker.
+ */
+export function walkTree(root: FileNode, visit: (node: FileNode) => WalkAction): void {
   const stack: FileNode[] = [root];
   while (stack.length > 0) {
     const node = stack.pop();
     if (!node) continue;
-    if (visit(node) === false) return;
+    const action = visit(node);
+    if (action === "stop") return;
+    if (action === false || action === "prune") continue;
     for (let i = node.children.length - 1; i >= 0; i--) {
       const child = node.children[i];
       if (child) stack.push(child);
@@ -400,7 +410,7 @@ export function findNode(root: FileNode, relPath: string): FileNode | null {
   walkTree(root, (node) => {
     if (node.relPath === relPath) {
       found = node;
-      return false;
+      return "stop";
     }
   });
   return found;

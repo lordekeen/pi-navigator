@@ -1,6 +1,6 @@
 # Issue #072: Infinity Accepted as Valid Setting Value in `validateFieldValue`
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Bug
 - **Severity**: High
 - **Component**: [`settings.ts`](file:///home/jhonny/Sources/pi-navigator/settings.ts#L222-L231)
@@ -53,6 +53,10 @@ Change the validation guard from `!Number.isNaN(rawValue)` to `Number.isFinite(r
 
 ## Acceptance Criteria
 
-- [ ] `Infinity` and `-Infinity` are rejected by `validateFieldValue` and trigger fallback to the default value with an appropriate warning.
-- [ ] Unit tests in [`test/settings.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings.test.ts) verify rejection of `Infinity` and `-Infinity`.
-- [ ] `npm run typecheck` and `npm test` pass.
+- [x] `Infinity` and `-Infinity` are rejected by `validateFieldValue` and trigger fallback to the default value with an appropriate warning.
+- [x] Unit tests in [`test/settings.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings.test.ts) verify rejection of `Infinity` and `-Infinity`.
+- [x] `npm run typecheck` and `npm test` pass.
+
+## Resolution
+
+Updated `validateFieldValue` in `settings.ts` to use `Number.isFinite(rawValue)` instead of `!isNaN(rawValue)`. This correctly rejects `Infinity`, `-Infinity`, and `NaN` as invalid number values. Verified with automated tests in `test/settings.test.ts`.

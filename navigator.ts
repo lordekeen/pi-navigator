@@ -200,7 +200,7 @@ export class NavigatorOverlay implements Focusable {
   // actually affect its output.
   private markedCache: { file: ViewerFile; version: number; marked: ViewerFile } | null = null;
   private maxLineWidthCache: { file: ViewerFile; value: number } | null = null;
-  private rowsCache: { marked: ViewerFile; width: number; wrap: boolean; hscroll: number; rows: DisplayRow[] } | null =
+  private rowsCache: { marked: ViewerFile; width: number; wrap: boolean; rows: DisplayRow[] } | null =
     null;
   private mdRenderer: Markdown | null = null;
   private mdCache: { file: ViewerFile; width: number; lines: string[] } | null = null;
@@ -335,6 +335,15 @@ export class NavigatorOverlay implements Focusable {
       return undefined;
     }
     return this.viewFile?.mtimeMs;
+  }
+
+  /** Observable search state for tests and diagnostics (Issue #093). */
+  getSearchState(): { query: string; index: number; total: number } {
+    return {
+      query: this.searchQuery,
+      index: this.searchIndex,
+      total: this.searchMatches.length,
+    };
   }
 
   /** Reload the open file, keeping scroll position. Used by "r". */
@@ -1390,7 +1399,7 @@ export class NavigatorOverlay implements Focusable {
           const maxH = Math.max(0, this.cachedMaxLineWidth(file) - contentW);
           this.viewHscroll = Math.max(0, Math.min(this.viewHscroll, maxH));
 
-          display = this.cachedComputeRows(marked, contentW, this.viewWrap, this.viewHscroll);
+          display = this.cachedComputeRows(marked, contentW, this.viewWrap);
           if (this.searchJump && this.searchMatches.length > 0) {
             const currentMatch = this.searchMatches[this.searchIndex];
             const target = display.findIndex((row) => row.line === currentMatch?.line);
@@ -1498,12 +1507,20 @@ export class NavigatorOverlay implements Focusable {
     marked: ViewerFile,
     width: number,
     wrap: boolean,
-    hscroll: number,
   ): DisplayRow[] {
     const c = this.rowsCache;
-    if (c && c.marked === marked && c.width === width && c.wrap === wrap && c.hscroll === hscroll) return c.rows;
-    const rows = computeRows(marked, width, wrap, hscroll);
-    this.rowsCache = { marked, width, wrap, hscroll, rows };
+    if (c && c.marked === marked && c.width === width && c.wrap === wrap) return c.rows;
+    let rows: DisplayRow[];
+    if (wrap) {
+      rows = computeRows(marked, width, true, 0);
+    } else {
+      rows = [];
+      for (let i = 0; i < marked.lines.length; i++) {
+        const line = marked.lines[i];
+        if (line !== undefined) rows.push({ line: i, text: line });
+      }
+    }
+    this.rowsCache = { marked, width, wrap, rows };
     return rows;
   }
 

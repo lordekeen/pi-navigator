@@ -1,6 +1,6 @@
 # Issue #089: Lazy Dynamic Import of `pi-tui` in Settings Menu Is Defeated by Static Import in `index.ts`
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Technical Debt / Code Hygiene
 - **Severity**: Low
 - **Component**: [`settings_menu.ts`](file:///home/jhonny/Sources/pi-navigator/settings_menu.ts#L245-L256), [`index.ts`](file:///home/jhonny/Sources/pi-navigator/index.ts#L29)
@@ -42,6 +42,10 @@ Inconsistent modularization strategy: `settings_menu.ts` was designed for lazy e
 
 ## Acceptance Criteria
 
-- [ ] Architectural consistency established between `index.ts` and `settings_menu.ts`.
-- [ ] If static import is adopted, redundant interface mirrors in `settings_menu.ts` are eliminated.
-- [ ] `npm run typecheck` and `npm test` pass.
+- [x] Architectural consistency established between `index.ts` and `settings_menu.ts`.
+- [x] If static import is adopted, redundant interface mirrors in `settings_menu.ts` are eliminated.
+- [x] `npm run typecheck` and `npm test` pass.
+
+## Resolution
+
+Replaced the dynamic `import("@earendil-works/pi-tui")` in `settings_menu.ts` with static top-level imports and removed redundant duplicate interface declarations, aligning with the project-wide peer dependency model. Verified with automated tests in `test/settings_menu.test.ts`.

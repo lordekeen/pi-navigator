@@ -7,7 +7,7 @@
  * process.env.
  */
 
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -111,6 +111,13 @@ describe("parseImageMode", () => {
     expect(parseImageMode("sixel")).toEqual({
       mode: undefined,
       warning: "sixel is not a valid PI_NAV_IMAGES value; using the file/default setting",
+    });
+  });
+
+  it("preserves original casing in warning for invalid values", () => {
+    expect(parseImageMode("SIXEL")).toEqual({
+      mode: undefined,
+      warning: "SIXEL is not a valid PI_NAV_IMAGES value; using the file/default setting",
     });
   });
 });
@@ -319,6 +326,27 @@ describe("normalizeNavigatorSettings", () => {
     const perKey = result.warnings.filter((w) => w.startsWith('unknown setting "'));
     expect(perKey.length).toBeLessThanOrEqual(5);
     expect(result.warnings.some((w) => w.includes("more unknown settings"))).toBe(true);
+  });
+
+  it("enforces a global cap on unknown-key warnings across sections", () => {
+    const raw = {
+      version: 1,
+      images: { mode: "off", bad1: 1, bad2: 2, bad3: 3 },
+      icons: { enabled: true, bad4: 4, bad5: 5, bad6: 6 },
+    };
+    const result = normalizeNavigatorSettings(raw);
+    const perKey = result.warnings.filter((w) => w.startsWith('unknown setting "'));
+    expect(perKey).toHaveLength(5);
+    expect(result.warnings).toContain("and 1 more unknown setting ignored");
+  });
+
+  it("uses plural 'settings' when multiple unknown settings overflow the cap", () => {
+    const raw = {
+      version: 1,
+      images: { mode: "off", b1: 1, b2: 2, b3: 3, b4: 4, b5: 5, b6: 6, b7: 7 },
+    };
+    const result = normalizeNavigatorSettings(raw);
+    expect(result.warnings).toContain("and 2 more unknown settings ignored");
   });
 
   it("never mutates its input", () => {
@@ -565,6 +593,14 @@ describe("writeNavigatorSettings", () => {
     });
     expect(readdirSync(dir)).toEqual(["pi-navigator.json"]);
   });
+
+  it("cleans up the temporary file if rename fails", () => {
+    const path = join(dir, "fail.json");
+    mkdirSync(path);
+    expect(() => writeNavigatorSettings(path, fullSettings())).toThrow();
+    const entries = readdirSync(dir);
+    expect(entries.filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
 });
 
 // ── applyFieldEdit (§2.2) ──
@@ -615,6 +651,10 @@ describe("applyFieldEdit", () => {
     expect(parseNumberField("oops").ok).toBe(false);
     const raw = parseNumberField("oops");
     if (!raw.ok) expect(raw.error).toContain("oops");
+    expect(parseNumberField("").ok).toBe(false);
+    expect(parseNumberField("   ").ok).toBe(false);
+    expect(parseNumberField("Infinity").ok).toBe(false);
+    expect(parseNumberField("-Infinity").ok).toBe(false);
   });
 });
 

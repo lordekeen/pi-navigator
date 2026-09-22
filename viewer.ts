@@ -74,9 +74,10 @@ export function visibleTextWidth(text: string): number {
  * occupies two of them, so a glyph whose first cell falls inside the window is
  * emitted whole — callers hard-cut any transient one-cell overflow (padTo).
  */
-// Sticky CSI matcher reused by sliceStyled; `lastIndex` is set per call site so
-// it scans the full string without allocating a suffix copy per character.
-const CSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/y;
+// Sticky ANSI escape sequence matcher (CSI + OSC) reused by sliceStyled;
+// `lastIndex` is set per call site so it scans the full string without
+// allocating a suffix copy per character (Issue #083).
+const ANSI_ESCAPE_RE = /\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x1b\x07]*(?:\x1b\\|\x07))/y;
 
 export function sliceStyled(styled: string, start: number, end: number): string {
   let out = "";
@@ -84,8 +85,8 @@ export function sliceStyled(styled: string, start: number, end: number): string 
   let styledOut = false;
   let i = 0;
   while (i < styled.length) {
-    CSI_RE.lastIndex = i;
-    const esc = CSI_RE.exec(styled);
+    ANSI_ESCAPE_RE.lastIndex = i;
+    const esc = ANSI_ESCAPE_RE.exec(styled);
     if (esc) {
       out += esc[0];
       styledOut = true;
@@ -165,7 +166,7 @@ export function markMatches(
   currentOccurrence: number,
 ): string {
   if (!query) return styled;
-  const smartCase = /[A-Z]/.test(query);
+  const smartCase = /\p{Lu}/u.test(query);
   const haystack = smartCase ? styled : styled.toLowerCase();
   const needle = smartCase ? query : query.toLowerCase();
   const maps = smartCase ? null : foldMaps(styled);
@@ -547,7 +548,7 @@ export async function loadFile(
  *  styled string (see the module note). */
 export function searchLines(lines: string[], query: string): SearchMatch[] {
   if (!query) return [];
-  const smartCase = /[A-Z]/.test(query);
+  const smartCase = /\p{Lu}/u.test(query);
   const needle = smartCase ? query : query.toLowerCase();
   const matches: SearchMatch[] = [];
   for (let line = 0; line < lines.length; line++) {

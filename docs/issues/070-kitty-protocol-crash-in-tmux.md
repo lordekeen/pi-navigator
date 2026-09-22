@@ -1,6 +1,6 @@
 # Issue #070: Kitty Protocol Bypass of Tmux Guard Causes Terminal Freeze/Crash
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Bug
 - **Severity**: High
 - **Component**: [`images.ts`](file:///home/jhonny/Sources/pi-navigator/images.ts#L770-L791), [`index.ts`](file:///home/jhonny/Sources/pi-navigator/index.ts#L289-L300)
@@ -80,7 +80,11 @@ Additionally, ensure [`runNativeRender`](file:///home/jhonny/Sources/pi-navigato
 
 ## Acceptance Criteria
 
-- [ ] [`resolveNativeProtocol`](file:///home/jhonny/Sources/pi-navigator/images.ts#L770-L791) returns `null` when `TMUX` is set or `TERM` starts with `tmux`/`screen`, regardless of user settings or `PI_IMAGE_PROTOCOL`.
-- [ ] When running in tmux, image support gracefully degrades to chafa (if available) or metadata card.
-- [ ] Unit tests in [`test/images.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/images.test.ts) cover tmux environment detection and degradation.
-- [ ] `npm run typecheck` and `npm test` pass.
+- [x] [`resolveNativeProtocol`](file:///home/jhonny/Sources/pi-navigator/images.ts#L770-L791) returns `null` when `TMUX` is set or `TERM` starts with `tmux`/`screen`, regardless of user settings or `PI_IMAGE_PROTOCOL`.
+- [x] When running in tmux, image support gracefully degrades to chafa (if available) or metadata card.
+- [x] Unit tests in [`test/images.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/images.test.ts) cover tmux environment detection and degradation.
+- [x] `npm run typecheck` and `npm test` pass.
+
+## Resolution
+
+Added a terminal multiplexer guard to `resolveNativeProtocol` in `images.ts` checking for `TMUX` environment variable or `TERM` starting with `tmux` or `screen`. If a multiplexer is detected, `resolveNativeProtocol` returns `null` before consulting user settings or `PI_IMAGE_PROTOCOL`, gracefully falling back to chafa or the metadata card. Additionally added a defensive check in `runNativeRender`. Verified with automated test cases in `test/images.test.ts`.

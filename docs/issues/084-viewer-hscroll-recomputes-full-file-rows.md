@@ -1,6 +1,6 @@
 # Issue #084: Horizontal Scroll Recomputes and Slices Entire File in `computeRows`
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Performance
 - **Severity**: Low
 - **Component**: [`viewer.ts`](file:///home/jhonny/Sources/pi-navigator/viewer.ts#L584-L598), [`navigator.ts`](file:///home/jhonny/Sources/pi-navigator/navigator.ts)
@@ -47,6 +47,10 @@ In nowrap mode:
 
 ## Acceptance Criteria
 
-- [ ] Horizontal scroll does not re-slice unrendered lines outside the viewport.
-- [ ] Rendered visual output and width-safety remain byte-identical across all test widths.
-- [ ] Existing viewer tests and render suites pass.
+- [x] Horizontal scroll does not re-slice unrendered lines outside the viewport.
+- [x] Rendered visual output and width-safety remain byte-identical across all test widths.
+- [x] Existing viewer tests and render suites pass.
+
+## Resolution
+
+Refactored horizontal scroll handling in `navigator.ts` and `viewer_view.ts` by removing `hscroll` from `cachedComputeRows`. In nowrap mode, full file rows remain un-sliced and `sliceStyled` is deferred to `renderViewerPane` for only the active viewport lines (`contentArea`), making horizontal scrolling O(viewport) and hitting the wrapped rows cache. Verified with automated tests in `test/viewer_view.test.ts` and `test/render.test.ts`.

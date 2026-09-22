@@ -1,6 +1,6 @@
 # Issue #075: Number Settings Are Uneditable in TUI Settings Menu
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Bug / UX
 - **Severity**: High
 - **Component**: [`settings_menu.ts`](file:///home/jhonny/Sources/pi-navigator/settings_menu.ts#L61-L65)
@@ -33,6 +33,10 @@ The settings menu assumes all configuration fields can be edited via discrete va
 
 ## Acceptance Criteria
 
-- [ ] Number settings in `SettingsList` can be edited or adjusted by the user in the TUI.
-- [ ] Edited values are parsed and validated via [`parseNumberField`](file:///home/jhonny/Sources/pi-navigator/settings.ts#L431).
-- [ ] Unit tests cover numeric field interaction in [`test/settings_menu.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings_menu.test.ts).
+- [x] Number settings in `SettingsList` can be edited or adjusted by the user in the TUI.
+- [x] Edited values are parsed and validated via [`parseNumberField`](file:///home/jhonny/Sources/pi-navigator/settings.ts#L431).
+- [x] Unit tests cover numeric field interaction in [`test/settings_menu.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings_menu.test.ts).
+
+## Resolution
+
+Updated `buildSettingItems` in `settings_menu.ts` to attach an interactive `Input` submenu to number fields. Users can select a number field and type a new integer value, with input validation rejecting non-numeric values and showing actionable error messages. Verified with automated tests in `test/settings_menu.test.ts`.

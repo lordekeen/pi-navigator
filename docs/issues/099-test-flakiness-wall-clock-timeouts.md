@@ -1,6 +1,6 @@
 # Issue #099: Test Flakiness: Async Tests Rely on Arbitrary Wall-Clock `setTimeout` Sleeps
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Technical Debt / Test Quality
 - **Severity**: Low
 - **Component**: [`test/navigator.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/navigator.test.ts)
@@ -37,6 +37,10 @@ Asynchronous file operations and event loops are synchronized with arbitrary rea
 
 ## Acceptance Criteria
 
-- [ ] Fragile `setTimeout(resolve, 10)` delays in `test/navigator.test.ts` are replaced with deterministic `vi.waitFor()` or condition-based predicates.
-- [ ] Tests run reliably under simulated latency or CPU throttling.
-- [ ] `npm test` passes.
+- [x] Fragile `setTimeout(resolve, 10)` delays in `test/navigator.test.ts` are replaced with deterministic `vi.waitFor()` or condition-based predicates.
+- [x] Tests run reliably under simulated latency or CPU throttling.
+- [x] `npm test` passes.
+
+## Resolution
+
+Replaced all arbitrary wall-clock `setTimeout(resolve, 10)` timer delays in `test/navigator.test.ts` with deterministic `await vi.waitFor(...)` predicates.

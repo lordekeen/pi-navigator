@@ -1,6 +1,6 @@
 # Issue #079: Shallow `readonly` on `NavigatorSettings` Leaves Nested Section Properties Mutable
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Technical Debt / Type Safety
 - **Severity**: Medium
 - **Component**: [`settings.ts`](file:///home/jhonny/Sources/pi-navigator/settings.ts#L22-L46)
@@ -67,6 +67,10 @@ export interface NavigatorTreeSettings {
 
 ## Acceptance Criteria
 
-- [ ] All properties in `NavigatorImageSettings`, `NavigatorIconSettings`, `NavigatorViewerSettings`, and `NavigatorTreeSettings` are declared `readonly`.
-- [ ] Attempting to mutate nested properties results in a TypeScript compile-time error.
-- [ ] `npm run typecheck` and `npm test` pass.
+- [x] All properties in `NavigatorImageSettings`, `NavigatorIconSettings`, `NavigatorViewerSettings`, and `NavigatorTreeSettings` are declared `readonly`.
+- [x] Attempting to mutate nested properties results in a TypeScript compile-time error.
+- [x] `npm run typecheck` and `npm test` pass.
+
+## Resolution
+
+Added `readonly` modifiers to all properties of nested settings interfaces in `settings.ts` (`NavigatorSettingsSectionIcons`, `NavigatorSettingsSectionImages`, and `NavigatorSettingsSectionTree`), enforcing deep compile-time immutability for the settings object. Verified with `npm run typecheck`.

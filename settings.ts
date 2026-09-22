@@ -10,7 +10,7 @@
  * PI_NAV_ICONS) — nothing in this module reads process.env.
  */
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 // pi-lens-ignore: TS2304
 import { dirname } from "node:path";
 
@@ -21,20 +21,20 @@ import { parseTruthyEnv } from "./env";
 export type NavigatorImageMode = "off" | "chafa" | "native" | "auto";
 
 export interface NavigatorImageSettings {
-  mode: NavigatorImageMode;
+  readonly mode: NavigatorImageMode;
 }
 
 export interface NavigatorIconSettings {
-  enabled: boolean;
+  readonly enabled: boolean;
 }
 
 export interface NavigatorViewerSettings {
-  wrap: boolean;
-  markdown: "code" | "rendered";
+  readonly wrap: boolean;
+  readonly markdown: "code" | "rendered";
 }
 
 export interface NavigatorTreeSettings {
-  showHidden: boolean;
+  readonly showHidden: boolean;
 }
 
 export interface NavigatorSettings {
@@ -53,13 +53,17 @@ export interface NavigatorConfigField {
   readonly id: string;
   readonly path: readonly string[];
   readonly kind: "enum" | "boolean" | "number";
+  /** Grouping section name; reserved for future grouped-menu views. */
   readonly section: string;
   readonly label: string;
   readonly description: string;
   readonly options?: readonly string[];
+  /** Minimum value; reserved for future numeric config fields. */
   readonly min?: number;
+  /** Maximum value; reserved for future numeric config fields. */
   readonly max?: number;
   readonly default: string | number | boolean;
+  /** Whether changing this field takes effect immediately without restart; reserved for future live-reload. */
   readonly live: boolean;
 }
 
@@ -151,16 +155,19 @@ function buildDefaultSettings(): NavigatorSettings {
   return settings as unknown as NavigatorSettings;
 }
 
-/** Deep-freeze the default object (top level plus each section). */
-function deepFreezeDefaults(settings: NavigatorSettings): NavigatorSettings {
-  // SAFETY: NavigatorSettings is structurally a plain record of sections
-  // plus `version`; freezing every object value freezes each section.
-  const record = settings as unknown as Record<string, unknown>;
-  for (const value of Object.values(record)) {
-    if (value !== null && typeof value === "object") Object.freeze(value);
+/** Recursively deep-freeze an object. */
+function deepFreeze<T>(obj: T): T {
+  if (obj === null || typeof obj !== "object") return obj;
+  for (const value of Object.values(obj)) {
+    if (value !== null && typeof value === "object") {
+      deepFreeze(value);
+    }
   }
-  // SAFETY: Object.freeze preserves the underlying NavigatorSettings value.
-  return Object.freeze(record) as unknown as NavigatorSettings;
+  return Object.freeze(obj);
+}
+
+function deepFreezeDefaults(settings: NavigatorSettings): NavigatorSettings {
+  return deepFreeze(settings);
 }
 
 export const DEFAULT_NAVIGATOR_SETTINGS: NavigatorSettings = deepFreezeDefaults(buildDefaultSettings());
@@ -177,23 +184,6 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function bounded(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}…`;
-}
-
-/**
- * Warn per unknown key, capped at a handful so a hostile file cannot flood
- * the notice channel; the overflow collapses into one summary line.
- */
-function warnUnknownSettings(warnings: string[], keys: readonly string[], prefix: string): void {
-  const start = warnings.length;
-  for (const key of keys) {
-    const emitted = warnings.length - start;
-    if (emitted < MAX_UNKNOWN_KEY_WARNINGS) {
-      warnings.push(`unknown setting "${prefix}${key}" ignored`);
-    } else {
-      warnings.push(`and ${keys.length - emitted} more unknown settings ignored`);
-      return;
-    }
-  }
 }
 
 /**
@@ -220,7 +210,7 @@ function validateFieldValue(
       return { ok: false, error: `${field.id} "${String(rawValue)}" is invalid; using "${String(field.default)}"` };
     }
     case "number": {
-      if (typeof rawValue === "number" && !Number.isNaN(rawValue)) {
+      if (typeof rawValue === "number" && Number.isFinite(rawValue)) {
         let value = rawValue;
         if (field.min !== undefined) value = Math.max(field.min, value);
         if (field.max !== undefined) value = Math.min(field.max, value);
@@ -283,6 +273,8 @@ export function normalizeNavigatorSettings(raw: unknown): { settings: NavigatorS
     group.fields.push(field);
   }
 
+  const unknownKeys: string[] = [];
+
   for (const [sectionKey, group] of sections) {
     const rawSection = rawRec[sectionKey];
     if (rawSection === undefined) continue;
@@ -292,11 +284,11 @@ export function normalizeNavigatorSettings(raw: unknown): { settings: NavigatorS
       continue;
     }
     const knownKeys = new Set(group.fields.map((field) => field.path[1]));
-    warnUnknownSettings(
-      warnings,
-      Object.keys(sectionRec).filter((key) => !knownKeys.has(key)),
-      `${sectionKey}.`,
-    );
+    for (const key of Object.keys(sectionRec)) {
+      if (!knownKeys.has(key)) {
+        unknownKeys.push(`${sectionKey}.${key}`);
+      }
+    }
     const sectionSettings = settingsRec[sectionKey];
     if (sectionSettings === undefined) continue;
     for (const field of group.fields) {
@@ -313,11 +305,21 @@ export function normalizeNavigatorSettings(raw: unknown): { settings: NavigatorS
     }
   }
 
-  warnUnknownSettings(
-    warnings,
-    Object.keys(rawRec).filter((key) => key !== "version" && !sections.has(key)),
-    "",
-  );
+  for (const key of Object.keys(rawRec)) {
+    if (key !== "version" && !sections.has(key)) {
+      unknownKeys.push(key);
+    }
+  }
+
+  for (let i = 0; i < unknownKeys.length; i++) {
+    if (i < MAX_UNKNOWN_KEY_WARNINGS) {
+      warnings.push(`unknown setting "${unknownKeys[i]}" ignored`);
+    } else {
+      const remaining = unknownKeys.length - i;
+      warnings.push(`and ${remaining} more unknown setting${remaining === 1 ? "" : "s"} ignored`);
+      break;
+    }
+  }
 
   return { settings, warnings };
 }
@@ -339,7 +341,7 @@ export function parseImageMode(value: string | undefined): { mode: NavigatorImag
   if (normalized === "chafa") return { mode: "chafa" };
   if (normalized === "native") return { mode: "native" };
   if (normalized === "auto") return { mode: "auto" };
-  const parsed = parseTruthyEnv(normalized, NAVIGATOR_IMAGES_ENV);
+  const parsed = parseTruthyEnv(trimmed, NAVIGATOR_IMAGES_ENV);
   if (parsed.warning !== undefined) return { mode: undefined, warning: parsed.warning };
   return { mode: parsed.value ? "chafa" : "off" };
 }
@@ -417,9 +419,21 @@ export function serializeNavigatorSettings(settings: NavigatorSettings): Record<
 export function writeNavigatorSettings(path: string, settings: NavigatorSettings): void {
   const dir = dirname(path);
   if (dir) mkdirSync(dir, { recursive: true });
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, JSON.stringify(serializeNavigatorSettings(settings), null, 2), "utf8");
-  renameSync(tmp, path);
+  const tmp = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  let renamed = false;
+  try {
+    writeFileSync(tmp, JSON.stringify(serializeNavigatorSettings(settings), null, 2), "utf8");
+    renameSync(tmp, path);
+    renamed = true;
+  } finally {
+    if (!renamed) {
+      try {
+        unlinkSync(tmp);
+      } catch {
+        // ignore cleanup error
+      }
+    }
+  }
 }
 
 /**
@@ -433,8 +447,10 @@ export function parseNumberField(
   min?: number,
   max?: number,
 ): { ok: true; value: number } | { ok: false; error: string } {
-  const parsed = Number(rawValue);
-  if (Number.isNaN(parsed)) return { ok: false, error: `invalid number "${rawValue}"` };
+  const trimmed = rawValue.trim();
+  if (trimmed === "") return { ok: false, error: `invalid number "${rawValue}"` };
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) return { ok: false, error: `invalid number "${rawValue}"` };
   let value = parsed;
   if (min !== undefined) value = Math.max(min, value);
   if (max !== undefined) value = Math.min(max, value);

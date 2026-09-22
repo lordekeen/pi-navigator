@@ -1,6 +1,6 @@
 # Issue #086: `deepFreezeDefaults` Performs Shallow Two-Level Freeze Instead of Recursive Deep Freeze
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Technical Debt
 - **Severity**: Low
 - **Component**: [`settings.ts`](file:///home/jhonny/Sources/pi-navigator/settings.ts#L154-L164)
@@ -49,6 +49,10 @@ function deepFreeze<T>(obj: T): T {
 
 ## Acceptance Criteria
 
-- [ ] `DEFAULT_NAVIGATOR_SETTINGS` is fully frozen recursively at any arbitrary object depth.
-- [ ] Attempting to modify properties at level 3+ throws in strict mode.
-- [ ] Tests in [`test/settings.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings.test.ts) pass.
+- [x] `DEFAULT_NAVIGATOR_SETTINGS` is fully frozen recursively at any arbitrary object depth.
+- [x] Attempting to modify properties at level 3+ throws in strict mode.
+- [x] Tests in [`test/settings.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/settings.test.ts) pass.
+
+## Resolution
+
+Implemented recursive `deepFreeze` helper in `settings.ts` and used it in `deepFreezeDefaults`. All nested default settings objects (`DEFAULT_NAVIGATOR_SETTINGS`) are now deeply frozen and immutable at runtime. Verified with automated tests in `test/settings.test.ts`.
