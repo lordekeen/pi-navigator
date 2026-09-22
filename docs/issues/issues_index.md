@@ -8,9 +8,9 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
-| **Pending / Open** | 1 | 0 | 1 | **2** |
+| **Pending / Open** | 1 | 1 | 1 | **3** |
 | **Resolved** | 10 | 20 | 36 | **66** |
-| **Total** | **11** | **20** | **37** | **68** |
+| **Total** | **11** | **21** | **37** | **69** |
 
 ---
 
@@ -20,6 +20,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | [#020](020-no-viewer-cache-blocking-highlight.md) | No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread | Bug / Performance | High | `viewer.ts` | Open (partial — cache done; event-loop yielding deferred: blocked by pi's bundled-runtime virtual-module boundary, needs a pi-side API) |
 | [#067](067-typed-config-registry-paths.md) | Typed Config Registry Paths (`path` is `readonly string[]`) | Technical Debt / Type Safety | Low | `settings.ts` | **Deferred** — tracked, not scheduled: the compile-time path/default check is not worth the rework at five fields. Revisit when the schema grows (~15+ fields or a third level), `live: true` lands, the byte-pinned serialize test is relaxed, or a defect escapes that a type check would have caught |
+| [#069](069-native-image-rendering.md) | Native Terminal Image Rendering (kitty / iTerm2 via pi-tui) | Feature | Medium | `images.ts` / `viewer_view.ts` / `index.ts` | Open — spec written ([`docs/specs/native-image-rendering.md`](../specs/native-image-rendering.md)); implementation gated on the live-terminal QA checklist (spec §14 step 7) |
 
 ---
 

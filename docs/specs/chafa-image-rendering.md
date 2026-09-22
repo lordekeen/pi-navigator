@@ -981,10 +981,11 @@ the next, per AGENTS.md.
 
 ## 16. Open Questions & Future Work
 
-1. **Native tier** — the plan §8 spike (pi-tui `Image`/`renderImage` inside an
-   overlay, escape pass-through, redraw stability). If it lands,
-   `imageTier: "native"` activates and `preferNative`/`terminal.images` become
-   meaningful; the tier ladder then is metadata → chafa → native.
+1. **Native tier** — **resolved** by
+   [`native-image-rendering.md`](./native-image-rendering.md) (issue #069): the
+   plan §8 spike is answered, `imageTier: "native"` activates, and the tier
+   ladder is native → chafa → metadata (`preferNative` becomes meaningful for
+   the `auto` mode).
 2. **Animated GIF playback** — needs `--animate on` plus frame timing in the
    overlay; explicitly out of scope.
 3. **Per-image overrides** — pi-chafa's tool exposes per-call

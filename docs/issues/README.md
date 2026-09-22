@@ -12,3 +12,4 @@ Tracking findings, bugs, and enhancements identified during code reviews and QA 
 | [#006](file:///home/jhonny/Sources/pi-navigator/docs/issues/006-findnode-redundant-tree-traversal.md) | Redundant Child Iteration in `findNode` Tree Search | Performance | Low | Resolved |
 | [#007](file:///home/jhonny/Sources/pi-navigator/docs/issues/007-git-binary-cache-invalidation.md) | Module-Level `gitBinaryPresent` Cache Cannot Be Invalidated | Reliability | Low | Resolved |
 | [#008](file:///home/jhonny/Sources/pi-navigator/docs/issues/008-fs-polling-overhead.md) | Periodic 3-Second Polling May Cause Overhead in Large Repositories | Performance | Low | Resolved |
+| [#069](file:///home/jhonny/Sources/pi-navigator/docs/issues/069-native-image-rendering.md) | Native Terminal Image Rendering (kitty / iTerm2 via pi-tui) | Feature | Medium | Open |
