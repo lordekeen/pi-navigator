@@ -1,6 +1,6 @@
 # pi-navigator — Specification: Native Terminal Image Rendering (kitty / iTerm2 via pi-tui)
 
-**Status:** Proposed (rev. 1 — validated against pi-navigator v0.7.4, pi-tui 0.85.1, pi 0.86.1, pi-chafa v0.1.0, chafa 1.18.2, tmux 3.7c)
+**Status:** Implemented (rev. 2 — v0.8.0); live-terminal QA pending per §14 step 7 (checklist in [`docs/plans/qa-evidence.md`](../plans/qa-evidence.md)). Rev. 1 was validated against pi-navigator v0.7.4, pi-tui 0.85.1, pi 0.86.1, pi-chafa v0.1.0, chafa 1.18.2, tmux 3.7c; rev. 2 records the implementation amendments (§7.2 width rule, §8.3 local predicate, §16.6).
 
 > **Rev. 1 findings baked in** (headless verification, 2026-09 field work):
 > 1. **pi-tui already ships the native layer.** `Image`, `renderImage`,
@@ -406,7 +406,7 @@ cell math) on ≤4 MiB.
 
 Reuse the chafa pane rule with native semantics:
 
-- Pane is the hard cap: `maxWidthCells = paneCols`, `maxHeightCells = paneRows`.
+- Pane is the hard cap, narrowed by the host width preference (rev. 2, Q2 decision): `maxWidthCells = min(paneCols, terminal.imageWidthCells)`, `maxHeightCells = paneRows`. `IMAGE_CELLS_MAX` does NOT apply to native — the pane already bounds it — and the preference is not floor-clamped above 1 (a deliberately tiny value yields a tiny image, matching pi's own transcript behavior).
 - Same refuse thresholds as chafa (`IMAGE_CELLS_MIN = 16`, `IMAGE_ROWS_MIN = 4`)
   so "pane too small for a rendered image" stays one copy string; a narrower
   pane hides the left column and the viewer keeps degrading to the card.
@@ -455,13 +455,20 @@ Invariants (mirrors the #057 §5.4 contract with one addition):
 
 1. `ViewerFile.imageTier` gains `"native"`; `lines` holds the layout rows.
 2. **`viewer_view.ts` native branch: emit `lines[i]` verbatim — no
-   `hardTruncate`, no `padTo`, no styled wrapping; emit `""` for filler rows.**
+   `hardTruncate`, no styled wrapping — with right-side space fill only (rev. 2,
+   Q5 decision: the sequence row must own its anchor column, so padding is
+   appended after it, never interleaved); `""` filler rows become blank pane
+   rows.**
 3. **Frame/join paths must not width-process a native row.** `joinLeftRight`
    and its callers treat a row for which `isImageLine(row)` is true as
    pass-through (pi-tui's `isImageLine` recognizes `\x1b_G` and
    `\x1b]1337;File=`), with the same guard style as `compositeTuiLine`
    (`if (isImageLine(baseLine)) return baseLine`). Where a native row sits in
    the left pane position, the frame concatenates chrome around it unchanged.
+   **Rev. 2:** the predicate is a local two-prefix helper in `frame.ts`,
+   mirroring pi-tui's definition — pi's jiti loader aliases only the exact
+   package specifier, so a `@earendil-works/pi-tui/dist/…` deep import would
+   load an unaliased second pi-tui instance at runtime.
 4. Width safety for native rows is pi-tui's responsibility: `c=`/`r=` (kitty)
    and `width=<cells>` (iTerm2) are clamped by `calculateImageCellSize` to the
    pane geometry. Tests assert byte-identity of the sequence at all render
@@ -692,11 +699,7 @@ the next, per AGENTS.md.
 5. **Kitty Unicode placeholders (`U=1`).** Would make images scroll with text
    and interact better with partial overlay clipping, but support is not
    universal and pi-tui does not use it. Revisit upstream first.
-6. **`terminal.imageWidthCells`.** The chafa path honors pi-chafa's
-   `cellWidth`; the native path currently takes the full pane width. If users
-   want a narrower native image, add a width preference sourced from the host
-   setting (parity with pi's transcript images) rather than a new navigator
-   knob.
+6. **`terminal.imageWidthCells`.** **Resolved in rev. 2 (Q2):** the native path honors the host setting as its preferred width — `cols = min(paneCols, terminal.imageWidthCells)` — giving users a width knob with no new navigator setting (parity with pi's transcript images and with chafa's preferred-cols shape).
 7. **pi-tui version skew.** devDependency `^0.85.1` vs pi-bundled 0.86.x: the
    row-layout mirror is pinned by tests and documented against 0.85.1; if
    upstream changes `Image.render` layout, the layout test fails loudly rather

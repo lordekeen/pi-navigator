@@ -1,6 +1,6 @@
 # pi-navigator
 
-Read-only project file navigator for pi. Opens a centered overlay inside a running pi session with a file tree, git state, and a syntax-highlighted viewer. No file editing, no runtime dependencies; images optionally render through a user-installed `chafa` (see [Images](#images-optional)).
+Read-only project file navigator for pi. Opens a centered overlay inside a running pi session with a file tree, git state, and a syntax-highlighted viewer. No file editing, no runtime dependencies; images optionally render natively (kitty/iTerm2) or through a user-installed `chafa` (see [Images](#images-optional)).
 
 ![status](https://img.shields.io/badge/status-v0.7.4-green)
 
@@ -31,7 +31,7 @@ Settings live in `~/.pi/agent/pi-navigator.json`. All fields are optional; missi
 
 | Field | Default | Options | Effect |
 | --- | --- | --- | --- |
-| `images.mode` | `off` | `off`, `chafa` | Render images as chafa symbol art in the viewer when pi-chafa + chafa are installed; `off` keeps the metadata card |
+| `images.mode` | `off` | `off`, `chafa`, `native`, `auto` | Image tier: `chafa` symbol art (requires pi-chafa + chafa), `native` kitty/iTerm2 graphics, `auto` (native then chafa), or `off` (metadata card) |
 | `icons.enabled` | `false` | `true`, `false` | Show a Nerd Font filetype icon column in the file tree (requires a Nerd Font terminal) |
 | `viewer.wrap` | `false` | `true`, `false` | Start files with word wrap enabled; the `w` key still toggles it per session |
 | `viewer.markdown` | `code` | `code`, `rendered` | Open Markdown files as rendered text or plain code; the `m` key still toggles it per session |
@@ -41,7 +41,7 @@ Environment variables override the file (precedence: defaults ← file ← env):
 
 | Variable | Values |
 | --- | --- |
-| `PI_NAV_IMAGES` | `1`/`true`/`yes`/`on`/`chafa` enable rendering; `0`/`false`/`no`/`off` disable; anything else warns and the file value stands; empty/whitespace is no override |
+| `PI_NAV_IMAGES` | `chafa`/`native`/`auto` select that mode; `1`/`true`/`yes`/`on` enable chafa; `0`/`false`/`no`/`off` disable; anything else warns and the file value stands; empty/whitespace is no override |
 | `PI_NAV_ICONS` | `1`/`true`/`yes`/`on` enable the icon column; `0`/`false`/`no`/`off` disable; anything else warns and the file value stands; empty/whitespace is no override |
 
 Edit either the file or the variables in your shell profile (e.g. `export PI_NAV_ICONS=1` in `~/.zshrc`) before launching pi, or pass inline: `PI_NAV_ICONS=1 pi`.
@@ -109,7 +109,7 @@ Layout: files tree on the left, git panel below it, file viewer on the right, co
 | Viewer | `n` `N` | Next, previous match |
 | Viewer | `w` | Toggle word wrap |
 | Viewer | `m` | Toggle markdown rendered / code view |
-| Viewer | `i` | Toggle image rendering / metadata card (chafa) |
+| Viewer | `i` | Toggle image rendering / metadata card (native or chafa) |
 | Viewer | `h` `l` / arrows | Horizontal scroll when wrap is off |
 
 Esc precedence in one line: filter, then search, then close.
@@ -124,32 +124,48 @@ Esc precedence in one line: filter, then search, then close.
 - Commit rows: `Enter` opens the commit's diff in the viewer (prefix-styled `+`/`-`/`@@` lines, a stat summary notice, and a `commit <hash>` header); `l` expands one level of its ancestor family (`▸`/`▾` markers), `h` collapses and steps out to the anchor. Expanding is capped by `FAMILY_MAX_DEPTH` (a notice tells you when you hit the floor) and `FAMILY_MAX_ROWS` (a dim `… more ancestors` hint marks the cut).
 - Refresh runs every 3 s while the overlay is open, plus `r`, with one refresh in flight at a time: a tick that arrives mid-refresh is dropped. Git state is re-read every tick; the tree is re-collected only when a cheap probe changes — the porcelain-derived signature in git mode, the modification times of the expanded directories in fs mode — and rebuilt only when the path set itself changes, with git codes otherwise stamped in place. Expanded and collapsed directories, top-level ones included, are preserved across rebuilds. Repeated failures notify once per distinct message instead of once per tick.
 - Hidden dot entries render dim, and the `.` toggle is Files-scoped.
-- Caps: files over 1 MB or 5000 lines open truncated with a notice, and never load in full — the loader reads at most 1 MB from the head. The truncated view reports the total line count when the whole file was read and it is under 256 KB. Binary files are detected by a NUL byte and shown as a metadata card; images show a metadata card, or chafa symbol art when the optional image tier is enabled (see [Images](#images-optional)).
+- Caps: files over 1 MB or 5000 lines open truncated with a notice, and never load in full — the loader reads at most 1 MB from the head. The truncated view reports the total line count when the whole file was read and it is under 256 KB. Binary files are detected by a NUL byte and shown as a metadata card; images show a metadata card, native terminal graphics or chafa symbol art when the optional image tier is enabled (see [Images](#images-optional)).
 - While filtering or searching, the typed query is echoed with a reverse-video cursor, preceded by the hardware cursor marker while the overlay has focus, so IME composition lands over the right cell.
 - Never writes to the workspace. The only mutating operations in the whole extension are clipboard copies for `y`.
 - Minimum terminal size: the overlay asks for 80 columns; below 72 inner columns the left column hides (toggle `t`); below 40 columns or 8 body rows it renders a compact "terminal too small" notice instead of the frame.
 
 ## Images (optional)
 
-Image files show a metadata card (name, size, dimensions) by default. To render
-them as chafa symbol art in the viewer you need all three:
+Image files show a metadata card (name, size, dimensions) by default. Set
+`"images": { "mode": … }` in `~/.pi/agent/pi-navigator.json` (or `PI_NAV_IMAGES`)
+to pick a tier:
 
-1. **chafa ≥ 1.10** — `brew install chafa` (macOS) or `apt install chafa` (Debian/Ubuntu).
-2. **The pi-chafa extension** — `pi install npm:pi-chafa` (or a local path).
-3. **An explicit opt-in** — `"images": { "mode": "chafa" }` in `~/.pi/agent/pi-navigator.json`, or `PI_NAV_IMAGES=1`.
+| Mode | Behavior |
+| :--- | :--- |
+| `off` (default) | Metadata card only. |
+| `native` | Real terminal graphics when the terminal speaks kitty or iTerm2 and the file is renderable (kitty: PNG only; iTerm2: PNG/JPEG/GIF/WebP); otherwise the card explains why. No chafa or pi-chafa needed. |
+| `chafa` | chafa symbol art — requires **chafa ≥ 1.10** plus the **pi-chafa** extension — degrading to the card. |
+| `auto` | Native when capable, then chafa, then the card — decided per file (a non-PNG on kitty falls back to chafa when available). pi-chafa's `preferNative: false` (or `CHAFA_PREFER_NATIVE=0`) makes `auto` choose chafa. |
 
-When enabled, all visual knobs (colors, symbols, dither, cellWidth, maxRows,
-timeout, binaryPath) live in `~/.pi/agent/pi-chafa.json` and the `CHAFA_*`
-environment variables — read pi-chafa's README for them. The `i` key toggles
-between the rendered image and the metadata card. Images are **user-only**:
-they are never sent to the model. If chafa, pi-chafa, or the opt-in is missing,
-the view degrades to the metadata card — never an error.
+Native rendering reuses pi-tui's kitty/iTerm2 encoders (pi-navigator adds no
+protocol code and no runtime dependency) and reads at most 4 MiB per image. The
+image is bounded by the viewer pane and by pi's `terminal.imageWidthCells`
+preference. Fullscreen (`tuiMode: fullscreen`) supports kitty only — pi-tui
+disables iTerm2 images there. **tmux/screen**: pi-tui reports no image support
+under tmux, so native stays off unless you force `terminal.images`; a forced
+override is followed as-is, and tmux must pass the sequences through (kitty
+graphics need tmux ≥ 3.3 with `allow-passthrough on` and a kitty-family outer
+terminal).
 
-The feature is documented in [docs/specs/chafa-image-rendering.md](docs/specs/chafa-image-rendering.md).
+chafa knobs (colors, symbols, dither, cellWidth, maxRows, timeout, binaryPath)
+live in `~/.pi/agent/pi-chafa.json` and the `CHAFA_*` environment variables —
+read pi-chafa's README for them. The `i` key toggles between the rendered image
+and the metadata card in every mode. Images are **user-only**: they are never
+sent to the model. A missing binary, extension, terminal capability, or opt-in
+always degrades to the metadata card — never an error.
+
+The tiers are documented in
+[docs/specs/chafa-image-rendering.md](docs/specs/chafa-image-rendering.md) and
+[docs/specs/native-image-rendering.md](docs/specs/native-image-rendering.md).
 
 ## Development
 
-Files: `index.ts` (entry, command routing, async data ownership), `navigator.ts` (overlay component state, caches, input routing, render orchestration), `frame.ts` / `files_view.ts` / `git_view.ts` / `viewer_view.ts` / `help_view.ts` (extracted pure pane view-models — geometry and chrome, files rows, git rows, viewer pane, `?` modal), `tree.ts` (tree model, fs walk), `git.ts` (async git access and porcelain parsing), `viewer.ts` (load caps, highlighting, search, display rows, `hardTruncate`), `theme.ts` (token mapping), `types.ts`, `constants.ts`, `env.ts` (shared env truth table), `settings.ts` (pi-navigator settings terrain), `settings_menu.ts` (`/navigator settings` menu, rendered in the editor area above the input), `help.ts` (shared help/keybinding tables + `/navigator help` entry layout), `images.ts` (chafa detection, probe, sanitize, geometry).
+Files: `index.ts` (entry, command routing, async data ownership), `navigator.ts` (overlay component state, caches, input routing, render orchestration), `frame.ts` / `files_view.ts` / `git_view.ts` / `viewer_view.ts` / `help_view.ts` (extracted pure pane view-models — geometry and chrome, files rows, git rows, viewer pane, `?` modal), `tree.ts` (tree model, fs walk), `git.ts` (async git access and porcelain parsing), `viewer.ts` (load caps, highlighting, search, display rows, `hardTruncate`), `theme.ts` (token mapping), `types.ts`, `constants.ts`, `env.ts` (shared env truth table), `settings.ts` (pi-navigator settings terrain), `settings_menu.ts` (`/navigator settings` menu, rendered in the editor area above the input), `help.ts` (shared help/keybinding tables + `/navigator help` entry layout), `images.ts` (pi-chafa detection, chafa probe/sanitize/geometry, native capability ladder + bounded pi-tui native renderer).
 
 Planning documents live in `docs/plans/`: `ui-standards-report.md` (platform and reference findings), `pi-navigator-implementation-plan.md` (the original plan — now superseded; see `docs/issues/issues_index.md` for current state), and `qa-evidence.md`. Issues are tracked in `docs/issues/`. The throwaway visual mock is `mockups/navigator.html` — open it in a browser and drive it with the same keymap.
 
@@ -164,19 +180,20 @@ runtime dependencies, ever — `node_modules` is dev-only.
   than the plan's original "NodeNext" because pi loads extensions through jiti,
   which resolves the code's intentionally extensionless relative imports;
   NodeNext would demand `.js` extensions the runtime does not need.
-- `npm test` — nineteen vitest suites (501 cases): porcelain `-z` parsing plus a
+- `npm test` — nineteen vitest suites (558 cases): porcelain `-z` parsing plus a
   real-git scratch-repo integration pass, tree building/fs-walk fixtures
   (ignores, dot entries, symlink cycles), viewer caps and UTF-8 head decoding,
   the keymap reducer (escape precedence, focus cycling, copy), settings
   normalization/loading (`PI_NAV_IMAGES` + `PI_NAV_ICONS` truth tables,
   `applyFieldEdit`), the settings-menu builder and real-SettingsList
   integration, the help layout + command-routing + table-drift suites, pi-chafa
-  detection/config/probe/sanitizer/geometry, the extracted pane view-models
+  detection/config/probe/sanitizer/geometry, the native capability ladder and
+  pi-tui encoder suite, the extracted pane view-models
   (frame geometry, files/git row builders, viewer pane, `?` modal) plus the diff
   styler, theme token map and shared env parser, the notify-once factory, and
   render width-safety at 120x36, 100x28 and 80x24 — plus 60/50-column,
-  settings-menu and chafa payload cases — including help/filter/search modes and
-  the compact notice.
+  settings-menu, chafa and native payload cases — including help/filter/search
+  modes and the compact notice.
 
 Test runs must stay green with `typecheck` and `test`; the suites have already
 caught real bugs (a search-highlight crash from inverted theme tokens, a

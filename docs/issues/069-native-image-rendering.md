@@ -1,6 +1,6 @@
 # Issue #069: Native Terminal Image Rendering (kitty / iTerm2 via pi-tui)
 
-- **Status**: Open
+- **Status**: Open — implementation landed (v0.8.0, commits `84a4917`…); live-terminal QA pending (checklist in [`docs/plans/qa-evidence.md`](../plans/qa-evidence.md), spec §14 step 7)
 - **Type**: Feature
 - **Severity**: Medium
 - **Component**: [`images.ts`](file:///home/jhonny/Sources/pi-navigator/images.ts) / [`viewer.ts`](file:///home/jhonny/Sources/pi-navigator/viewer.ts) / [`viewer_view.ts`](file:///home/jhonny/Sources/pi-navigator/viewer_view.ts) / [`index.ts`](file:///home/jhonny/Sources/pi-navigator/index.ts) / [`settings.ts`](file:///home/jhonny/Sources/pi-navigator/settings.ts)
@@ -33,14 +33,22 @@ This issue delivers the **native tier** per [`docs/specs/native-image-rendering.
 
 ## Deliverables
 
-- [ ] `settings.ts`: `images.mode` enum + `PI_NAV_IMAGES` tokens `native`/`auto` + registry/menu/tests.
-- [ ] `images.ts`: `resolveNativeProtocol`, `runNativeRender`, `NATIVE_IMAGE_MIME`, `preferNative` mirror, `ImageSupport { nativeProtocol, tier }` (replacing `active`).
-- [ ] `constants.ts`: `IMAGE_NATIVE_MAX_BYTES`, `IMAGE_NATIVE_CACHE_MAX_CHARS`, `NATIVE_IMAGE_MIME`.
-- [ ] `viewer.ts` / `index.ts`: native render seam, per-file tier fallback, variant key, cache retention rule, chafa-probe skip in `native` mode.
-- [ ] `viewer_view.ts`: verbatim native rows, `kitty`/`iTerm2` badge, native card hints.
-- [ ] Tests per spec §12 (ladder, encoders via `setCapabilities`, loader seam, view-model, width safety, settings).
-- [ ] Docs: README images section, chafa spec §16 item 1 marked resolved, AGENTS.md `images.ts` row, version `0.8.0`, `pi install .`.
+- [x] `settings.ts`: `images.mode` enum + `PI_NAV_IMAGES` tokens `native`/`auto` + registry/menu/tests (`c573524`).
+- [x] `images.ts`: `resolveNativeProtocol`, `runNativeRender`, `NATIVE_IMAGE_MIME`, `preferNative` mirror, `ImageSupport { nativeProtocol, tier }` (replacing `active`) (`d7a7d1a`, `214a89e`, `1b5ff00`).
+- [x] `constants.ts`: `IMAGE_NATIVE_MAX_BYTES`, `IMAGE_NATIVE_CACHE_MAX_CHARS`, `NATIVE_IMAGE_MIME` (`214a89e`).
+- [x] `viewer.ts` / `index.ts`: native render seam, per-file tier fallback, variant key, cache retention rule, chafa-probe skip in `native` mode (`aa83283`).
+- [x] `viewer_view.ts`: verbatim native rows, `kitty`/`iTerm2` badge, native card hints (`1b5ff00`).
+- [x] Tests per spec §12 (ladder, encoders via `setCapabilities`, loader seam, view-model, width safety, settings): 558 cases across 19 suites.
+- [x] Docs: README images section, chafa spec §16 item 1 marked resolved, AGENTS.md `images.ts` row, version `0.8.0`, `pi install .`.
 - [ ] **Live QA gate** (spec §14 step 7): kitty terminal outside tmux + `tuiMode: fullscreen`; open/switch/toggle/close/resize with `PI_HARDWARE_CURSOR` on and off; tmux run documents expected behavior.
+
+## Implementation notes (v0.8.0)
+
+- **Width rule (Q2 decision, spec §7.2 amended):** native cols = `min(paneCols, terminal.imageWidthCells)`; the pane stays the hard cap and `IMAGE_CELLS_MAX` deliberately does not apply.
+- **No provenance field (Q3):** `ImageSupport` carries `nativeProtocol` only.
+- **Filler-row accounting (Q5):** shipped spec-as-written (sequence row first, un-truncated, right-side space fill; `""` fillers) and remains live-QA-gated; if QA shows artifacts the fallback is an upstream pi-tui composite exception, not a local hack.
+- **`isImageLine` is a local two-prefix predicate** in `frame.ts` (kitty `\x1b_G` / iTerm2 `\x1b]1337;File=`): pi's jiti loader aliases only the exact `@earendil-works/pi-tui` specifier, so a deep import would load an unaliased second pi-tui instance.
+- **Native `ViewerFile.imageCols/imageRows` store the render *request*,** not pi-tui's aspect-fitted result: resize detection compares pane-derived requests, and storing the fitted height made every frame look like a geometry mismatch (reflow loop). Regression-tested in `test/navigator.test.ts` ("no reflow loop").
 
 ## Open Questions
 
@@ -52,14 +60,14 @@ This issue delivers the **native tier** per [`docs/specs/native-image-rendering.
 
 ## Acceptance Criteria
 
-- [ ] `images.mode: "native"` + kitty terminal: PNG renders natively in the viewer pane; badge `kitty`; `i` toggles to card and the placement is deleted; switch/close/resize leave no ghost pixels.
-- [ ] `images.mode: "auto"`: native → chafa → card per terminal and per file (mime); `preferNative: false` makes auto choose chafa.
-- [ ] `images.mode` `off`/`chafa` byte-identical to v0.7.4; default `off`.
-- [ ] Unsupported terminal + `native`: card with the unsupported hint; no escape emitted.
-- [ ] Non-PNG on kitty: card (strict) or chafa (auto) with the PNG hint; never a corrupt sequence.
-- [ ] `npm run typecheck` + `npm test` green; render suite width-safe at 120×36 / 100×28 / 80×24 / 60 / 50 with sequence bytes intact.
-- [ ] No test requires a real terminal, chafa, pi-chafa, or the real `$HOME`; no new runtime dependency.
-- [ ] README, chafa spec pointer, AGENTS.md, issue index updated; version `0.8.0`.
+- [ ] `images.mode: "native"` + kitty terminal: PNG renders natively in the viewer pane; badge `kitty`; `i` toggles to card and the placement is deleted; switch/close/resize leave no ghost pixels. *(live QA)*
+- [ ] `images.mode: "auto"`: native → chafa → card per terminal and per file (mime); `preferNative: false` makes auto choose chafa. *(per-file fallback and the preferNative truth table are unit-tested; terminal placement is live QA)*
+- [x] `images.mode` `off`/`chafa` byte-identical to v0.7.4; default `off` (settings/loader/tier tests; the chafa path is unchanged apart from the `active` → `tier` rename).
+- [ ] Unsupported terminal + `native`: card with the unsupported hint; no escape emitted. *(the card copy is unit-tested; terminal-level silence is live QA)*
+- [ ] Non-PNG on kitty: card (strict) or chafa (auto) with the PNG hint; never a corrupt sequence. *(the loader fallback and hints are unit-tested; live delivery is QA)*
+- [x] `npm run typecheck` + `npm test` green; render suite width-safe at 120×36 / 100×28 / 80×24 / 60 / 50 with sequence bytes intact (`test/render.test.ts` native suite).
+- [x] No test requires a real terminal, chafa, pi-chafa, or the real `$HOME`; no new runtime dependency.
+- [x] README, chafa spec pointer, AGENTS.md, issue index updated; version `0.8.0`.
 
 ## Verification
 

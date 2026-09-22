@@ -166,3 +166,36 @@ settle them:
    `test/render.test.ts`; terminal delivery is not).
 2. Verify IME input in the search bar with a CJK input method, and `ctrl+n` in
    Windows Terminal and the VS Code terminal.
+
+## Native terminal images (#069) — live QA checklist (spec §14 step 7)
+
+Automated evidence is green: `npm run typecheck` clean and `npm test` 558/558
+across 19 suites — including the native encoders (`runNativeRender` under
+`setCapabilities`), the loader fallback logic, view-model byte-identity, and
+width-safety with the kitty sequence at 120×36 / 100×28 / 80×24 / 60 / 50.
+What follows needs a real terminal and a human eye; record results below.
+
+Prerequisite: a kitty-capable terminal **outside tmux** (kitty, Ghostty,
+WezTerm, Warp), `images.mode: "native"` in `~/.pi/agent/pi-navigator.json`
+(or `PI_NAV_IMAGES=native`), and a PNG in the workspace. Do one run with
+`PI_HARDWARE_CURSOR=1` and one with it off. Optionally repeat in
+`tuiMode: "fullscreen"` (kitty only — pi-tui disables iTerm2 there).
+
+| # | Check | Expected | Result |
+|---|---|---|---|
+| 1 | Open a PNG (`Enter` in Files) | Real image inside the viewer pane; badge `kitty`; no border bleed; not offset by a row/column | |
+| 2 | `i` to card, `i` back | Card replaces the image; the placement disappears; toggling back re-anchors at the same spot | |
+| 3 | Switch to another file and back | No ghost pixels from the previous placement | |
+| 4 | `q` closes the overlay | Terminal is clean; no leftover image | |
+| 5 | `r` reload and the refresh poll | No flicker, no re-anchor; the sequence is not re-emitted while the file is unchanged | |
+| 6 | Resize the terminal while the image is open | One debounced re-render at the new geometry; no stacking/ghosting; no reflow loop | |
+| 7 | Scroll keys `j`/`k`/`g`/`G`/`Ctrl+d`/`Ctrl+u` | Inert on the native image | |
+| 8 | JPEG/GIF/WebP under kitty, `mode: native` | Card with the PNG hint; no corrupt output | |
+| 9 | Same files under `mode: auto` | chafa fallback when chafa + pi-chafa are installed, else the card | |
+| 10 | Non-capable terminal + `mode: native` | Card with the unsupported-terminal hint; nothing emitted | |
+| 11 | tmux (this machine's default): forced `terminal.images: "kitty"` + `mode: native` | Document actual behavior — expected: sequences forwarded only with tmux `allow-passthrough on` and a kitty-family outer terminal, otherwise a garbage-free no-op | |
+| 12 | iTerm2 spot check (macOS, if available) | Same as 1–7 with the `iterm2` badge | |
+
+If any check fails, file the failing behavior on #069 before closing; the spec's
+§16.1 fallbacks (image-aware compositing / upstream pi-tui exception) are the
+first candidates.

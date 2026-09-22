@@ -45,7 +45,7 @@ The overlay is a pure TUI component; it never touches the filesystem or git dire
   ```bash
   npm test               # vitest run — full suite
   npx vitest run -t "CRLF"   # focus one test by name
-  // Run the whole suite (501 cases across 19 files) with `npm test`.
+  // Run the whole suite (558 cases across 19 files) with `npm test`.
   ```
 - **Before claiming work is done**, both `npm run typecheck` and `npm test` must be green. The render suite enforces width-safety at multiple terminal sizes (120×36, 100×28, 80×24, and narrow widths) — keep it that way when adding UI.
 - **Add or update tests for the code you change, even if nobody asked.** Width-safety regressions and ANSI/escape-sequence bugs are exactly the class this suite exists to catch.
@@ -75,7 +75,7 @@ The overlay is a pure TUI component; it never touches the filesystem or git dire
 | `settings.ts` | pi-navigator settings schema/normalizer/loader/writer (`~/.pi/agent/pi-navigator.json`, `PI_NAV_IMAGES` / `PI_NAV_ICONS`), the `NAVIGATOR_CONFIG_FIELDS` registry, and pure `applyFieldEdit`. |
 | `settings_menu.ts` | `/navigator settings` editor-dock menu: pure `buildSettingItems` + the exported pure `buildSettingsMenuTheme` (host `getSettingsListTheme` roles: plain labels, muted values) + a thin pi-tui `SettingsList` wrapper (commit/revert, env-override annotations). Rendered via a plain `ctx.ui.custom` (no overlay) so it docks above the message input, per the pi settings-UI standard; framed by top/bottom full-width `border`-token rules like pi's own `/settings` and pi-overseer, with mouse events forwarded to the list past the frame chrome. No fs access; fs stays in `index.ts`/`settings.ts`. |
 | `help.ts` | Single source for the help surfaces: `NAVIGATOR_SUBCOMMANDS` + `NAVIGATOR_KEYBINDINGS`, the derived `NAVIGATOR_COMMANDS`, and the `/navigator help` durable entry layout (`buildHelpLines`, qdrant-memory parity). Pure. |
-| `images.ts` | pi-chafa detection, config mirror, chafa probe/render/sanitize, geometry. |
+| `images.ts` | pi-chafa detection, config mirror, chafa probe/render/sanitize, geometry, the native (kitty/iTerm2) capability ladder, and the bounded pi-tui native renderer. |
 
 **View-model rule (Issue #064):** the pane modules (`frame.ts`, `files_view.ts`, `git_view.ts`, `viewer_view.ts`, `help_view.ts`) are pure functions of plain records — they hold no state, touch no cache and never read `this`. The class computes data (marked rows, wrapped `display`, rendered markdown, clamped offsets), then passes it in. Keep new pane logic on the module side of that seam so it stays directly testable.
 
