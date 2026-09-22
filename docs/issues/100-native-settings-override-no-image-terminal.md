@@ -76,3 +76,13 @@ ladder updated. Mirrors pi-tui's table by design — the comment flags the
 sync responsibility. The general case (terminals that *advertise* the
 protocol but cannot decode a payload, real kitty + JPEG question) is tracked
 as #101.
+
+### Follow-up (Linux Alacritty)
+
+The first fix keyed on `TERM_PROGRAM === "alacritty"`, mirroring pi-tui — but
+Alacritty sets `TERM_PROGRAM` only on macOS. On Linux it exports
+`ALACRITTY_LOG` / `ALACRITTY_WINDOW_ID` / `ALACRITTY_SOCKET` and no
+`TERM_PROGRAM`, so the guard (and pi-tui's detection) missed it and a fresh
+Alacritty session still went blank via the settings override. Added the three
+`ALACRITTY_*` markers to `knownNoImageSupport` (verified from the live
+process environment) and pinned them in `test/images.test.ts`.

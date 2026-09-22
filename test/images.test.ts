@@ -969,6 +969,9 @@ describe("resolveNativeProtocol", () => {
   it("returns null for known no-image terminals even when settings or env declare a protocol (Issue #100)", () => {
     for (const env of [
       { TERM_PROGRAM: "alacritty", TERM: "xterm-256color" },
+      { ALACRITTY_LOG: "/tmp/Alacritty-333525.log", TERM: "xterm-256color" },
+      { ALACRITTY_WINDOW_ID: "94545817931344" },
+      { ALACRITTY_SOCKET: "/run/user/1000/Alacritty-wayland-0-333525.sock" },
       { TERM_PROGRAM: "vscode" },
       { TERM_PROGRAM: "zed" },
       { TERMINAL_EMULATOR: "jetbrains-jediterm" },

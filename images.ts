@@ -768,19 +768,29 @@ export function readHostImageSettings(
  * step. Pure; no terminal access; never throws.
  */
 /**
- * Terminals pi-tui positively identifies as image-incapable (its negative
- * detection table in `detectCapabilitiesFromEnvironment`). For these, honoring
+ * Terminals positively identified as image-incapable. For these, honoring
  * the `terminal.images` settings or `PI_IMAGE_PROTOCOL` overrides would emit
  * protocol sequences the terminal ignores, leaving a blank viewer instead of
  * the chafa/card fallback (Issue #100).
  *
- * Mirror of pi-tui's negative cases — keep in sync if pi-tui grows new ones.
+ * Mirrors pi-tui's negative detection table, plus Alacritty's real markers:
+ * pi-tui (and therefore this mirror) keys on `TERM_PROGRAM === "alacritty"`,
+ * but Alacritty only sets that on macOS — on Linux it exports `ALACRITTY_*`
+ * vars and no `TERM_PROGRAM`. Keep in sync with pi-tui's table and the
+ * terminal env facts here.
  */
 function knownNoImageSupport(env: Record<string, string | undefined>): boolean {
   const termProgram = (env["TERM_PROGRAM"] ?? "").toLowerCase();
   const terminalEmulator = (env["TERMINAL_EMULATOR"] ?? "").toLowerCase();
   if (termProgram === "alacritty" || termProgram === "vscode" || termProgram === "zed") return true;
   if (terminalEmulator === "jetbrains-jediterm") return true;
+  if (
+    env["ALACRITTY_LOG"] !== undefined ||
+    env["ALACRITTY_WINDOW_ID"] !== undefined ||
+    env["ALACRITTY_SOCKET"] !== undefined
+  ) {
+    return true;
+  }
   if (env["WT_SESSION"] !== undefined) return true;
   return false;
 }
