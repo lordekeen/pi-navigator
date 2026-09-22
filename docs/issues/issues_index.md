@@ -8,9 +8,9 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
-| **Pending / Open** | 1 | 0 | 0 | **1** |
+| **Pending / Open** | 1 | 0 | 1 | **2** |
 | **Resolved** | 10 | 20 | 35 | **65** |
-| **Total** | **11** | **20** | **35** | **66** |
+| **Total** | **11** | **20** | **36** | **67** |
 
 ---
 
@@ -19,6 +19,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | ID | Title | Type | Severity | Component | Status |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | [#020](020-no-viewer-cache-blocking-highlight.md) | No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread | Bug / Performance | High | `viewer.ts` | Open (partial — cache done; event-loop yielding deferred: blocked by pi's bundled-runtime virtual-module boundary, needs a pi-side API) |
+| [#067](067-typed-config-registry-paths.md) | Typed Config Registry Paths (`path` is `readonly string[]`) | Technical Debt / Type Safety | Low | `settings.ts` | **Deferred** — tracked, not scheduled: the compile-time path/default check is not worth the rework at five fields. Revisit when the schema grows (~15+ fields or a third level), `live: true` lands, the byte-pinned serialize test is relaxed, or a defect escapes that a type check would have caught |
 
 ---
 
@@ -89,7 +90,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | [#047](047-git-binary-negative-cache-permanent.md) | `gitBinaryPresent` Negative Cache Is Permanent for Non-ENOENT Failures | Enhancement / Robustness | Low | Introduced `{ status: "missing" }` on spawn `ENOENT`; `isGitAvailable` caches negative result only for genuine missing binary, leaving transient errors uncached. | **Resolved** |
 | [#048](048-reload-open-file-crashes-commit-diff.md) | `reloadOpenFile` Routes Commit Diffs to Filesystem Loader, Crashing the Viewer | Bug | High | Added `keepScroll` parameter to `openCommit`; `reloadOpenFile` routes diff reloads to `openCommit(hash, true)` when `loadCommit` is configured instead of `openRelPath`. | **Resolved** |
 | [#049](049-copy-context-raw-commit-scheme.md) | `copyContext` Copies Raw `commit:<hash>` Identity String in Viewer Pane | Bug / UX Consistency | Medium | Updated `copyContext` in `navigator.ts` to extract `file.commitHash` or strip `commit:` prefix when focused on the diff viewer pane. | **Resolved** |
-| [#050](050-viewer-header-commit-transition-flicker.md) | Viewer Header Flickers Raw `commit:<hash>` Identity During Commit Transitions | Bug / UI Polish | Low | Formatted `isCommit` as `(file?.kind === "diff" && file.commitHash) || currentPath.startsWith("commit:")`, preventing colon flicker while loading. | **Resolved** |
+| [#050](050-viewer-header-commit-transition-flicker.md) | Viewer Header Flickers Raw `commit:<hash>` Identity During Commit Transitions | Bug / UI Polish | Low | Formatted `isCommit` as `(file?.kind === "diff" && file.commitHash) \|\| currentPath.startsWith("commit:")`, preventing colon flicker while loading. | **Resolved** |
 | [#051](051-redundant-ext-icons-entries.md) | Dead Extension Entries in `EXT_ICONS` Superseded by `FILENAME_ICONS` | Technical Debt / Code Hygiene | Low | Verified redundant entries moved to `FILENAME_ICONS` during #045 refactor; `test/icons.test.ts` covers exact dotfile mapping. | **Resolved** |
 
 ---
@@ -153,6 +154,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 ### Technical Debt & Code Robustness
 - [#066: Post-#064 Review Gaps (last inline `padTo`, env literal, docs drift)](066-post-064-review-gaps.md) *(resolved)*
+- [#067: Typed Config Registry Paths](067-typed-config-registry-paths.md) *(deferred — tracked, not scheduled)*
 - [#064: `navigator.ts` Holds Six Responsibilities; Tree-Cache Counters Unsynchronized by Convention](064-navigator-decomposition.md) *(resolved)*
 - [#063: Code-Health Review Follow-Ups (Duplication, Seams, Test Gaps)](063-review-followups.md) *(resolved)*
 - [#005: Fragile Fallback Chain in Footer Hint Resolution](005-hints-lookup-fallback-chain.md)

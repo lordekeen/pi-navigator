@@ -51,6 +51,8 @@ that were assessed and deliberately **not** changed, so the next reviewer does n
   survive the suite, because `serializeNavigatorSettings`'s test pins the emitted object *and* the exact
   byte-order JSON. Moving that safety from tests to the compiler (key-typed paths) is a real improvement
   but a ~100-line rework of a module whose on-disk format is byte-pinned; not worth it in a cleanup pass.
+  Filed as deferred [#067](067-typed-config-registry-paths.md) with the design sketch and the triggers that
+  would re-open the decision.
 - **Unified completion wording.** `index.ts` `navigatorCompletions` now derives `description` from
   `NAVIGATOR_SUBCOMMANDS`, which changed two user-visible popup strings (`"Configure…"` →
   `"configure…"`, `"Lists every /navigator subcommand"` → `"show this command list"`). Kept: the durable
