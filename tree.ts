@@ -16,7 +16,7 @@
 import { readdir, realpath, stat } from "node:fs/promises";
 import { join } from "node:path";
 
-import { HALF_PAGE_DIVISOR, IGNORED_NAMES, MAX_TREE_DEPTH } from "./constants";
+import { HALF_PAGE_DIVISOR, IGNORED_NAMES, MAX_FS_ENTRIES, MAX_TREE_DEPTH } from "./constants";
 import type { FileNode, MatchRow, TreeRow } from "./types";
 
 const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
@@ -28,6 +28,45 @@ export interface TreeEntry {
   relPath: string;
   isDir: boolean;
   symlink: boolean;
+}
+
+/** Shared total-entry cap for filesystem walks (Issue #108): one budget
+ * handed to every concurrent descent — and, in git mode, to every
+ * collectDirEntries call — draws them all from a single entry count, so
+ * per-call caps can never multiply. `truncated` flips to true only when the
+ * cap actually dropped an entry or a descent; a walk finishing naturally at
+ * exactly the cap stays false. */
+export interface TreeWalkBudget {
+  readonly max: number;
+  truncated: boolean;
+}
+
+// Module-private cumulative counts keyed by budget. The exported budget stays
+// {max, truncated}; the hidden counter is what lets several walks drawing on
+// one budget respect a single combined cap (Issue #108). Keys are weak, so a
+// discarded budget is reclaimed with the walks that used it.
+const budgetCounts = new WeakMap<TreeWalkBudget, number>();
+
+export function createTreeWalkBudget(maxEntries: number = MAX_FS_ENTRIES): TreeWalkBudget {
+  const budget: TreeWalkBudget = { max: maxEntries, truncated: false };
+  budgetCounts.set(budget, 0);
+  return budget;
+}
+
+/** Issue #108: true once the budget's cumulative count has reached its max;
+ * marks the budget truncated. The check and the push that follows are
+ * synchronous, so under JS's single thread the combined count can never
+ * exceed the cap. */
+function budgetHit(budget: TreeWalkBudget): boolean {
+  const count = budgetCounts.get(budget) ?? 0;
+  if (count < budget.max) return false;
+  budget.truncated = true;
+  return true;
+}
+
+/** Records one pushed entry against the budget (Issue #108). */
+function budgetCounted(budget: TreeWalkBudget): void {
+  budgetCounts.set(budget, (budgetCounts.get(budget) ?? 0) + 1);
 }
 
 /** Tracked files and untracked paths as tree entries. A trailing slash marks
@@ -43,15 +82,23 @@ export function entriesFromPaths(paths: string[]): TreeEntry[] {
 
 /**
  * Entries for one declared directory's subtree, via the same bounded walk as
- * collectFsEntries (depth cap, IGNORED_NAMES, symlink cycle guard). Fills the
- * children of an untracked directory that `git status -unormal` reports as a
- * single `?? dir/` record with no children (Issue #058). The walk starts at
- * the directory's tree depth so the cap matches a root walk exactly; entries
+ * collectFsEntries (depth cap, IGNORED_NAMES, symlink cycle guard, and — when
+ * a budget is passed — that budget's total-entry cap). Fills the children of
+ * an untracked directory that `git status -unormal` reports as a single
+ * `?? dir/` record with no children (Issue #058). The walk starts at the
+ * directory's tree depth so the cap matches a root walk exactly; entries
  * stay cwd-relative so the caller can merge them straight into the build.
+ * Callers that pass the same budget to several calls share one combined cap
+ * (Issue #108); when omitted, the call draws on its own default budget.
  */
-export async function collectDirEntries(cwd: string, relDir: string): Promise<TreeEntry[]> {
+export async function collectDirEntries(
+  cwd: string,
+  relDir: string,
+  budget?: TreeWalkBudget,
+): Promise<TreeEntry[]> {
   const segments = relDir.split("/").filter(Boolean).length;
   if (segments === 0) return [];
+  const walkBudget = budget ?? createTreeWalkBudget();
   const entries: TreeEntry[] = [];
   const visited = new Set<string>();
   try {
@@ -61,7 +108,7 @@ export async function collectDirEntries(cwd: string, relDir: string): Promise<Tr
   } catch {
     // Unreachable root: the per-directory walk failures handle it.
   }
-  await walk(join(cwd, relDir), relDir, segments - 1, entries, visited);
+  await walk(join(cwd, relDir), relDir, segments - 1, entries, visited, walkBudget);
   return entries;
 }
 
@@ -71,9 +118,16 @@ export async function collectDirEntries(cwd: string, relDir: string): Promise<Tr
  * are skipped entirely. Symlink cycles are refused through a realpath
  * visited-set; the link itself is kept as an entry with symlink: true. The
  * root's realpath seeds the set so a link back to the workspace root itself
- * is refused, not walked.
+ * is refused, not walked. All descents share one total-entry budget (Issue
+ * #108): once MAX_FS_ENTRIES entries exist the walk stops, `truncated` is
+ * true and the tree is incomplete. `opts.maxEntries` overrides the cap for
+ * tests.
  */
-export async function collectFsEntries(cwd: string): Promise<TreeEntry[]> {
+export async function collectFsEntries(
+  cwd: string,
+  opts?: { maxEntries?: number },
+): Promise<{ entries: TreeEntry[]; truncated: boolean }> {
+  const budget = createTreeWalkBudget(opts?.maxEntries);
   const entries: TreeEntry[] = [];
   const visited = new Set<string>();
   try {
@@ -84,8 +138,8 @@ export async function collectFsEntries(cwd: string): Promise<TreeEntry[]> {
   } catch {
     // Unreachable root: the per-directory walk failures handle it.
   }
-  await walk(cwd, "", 0, entries, visited);
-  return entries;
+  await walk(cwd, "", 0, entries, visited, budget);
+  return { entries, truncated: budget.truncated };
 }
 
 async function walk(
@@ -94,6 +148,7 @@ async function walk(
   depth: number,
   entries: TreeEntry[],
   visited: Set<string>,
+  budget: TreeWalkBudget,
 ): Promise<void> {
   let dirents;
   try {
@@ -122,12 +177,21 @@ async function walk(
         const real = await realpath(fullPath);
         isDir = (await stat(real)).isDirectory();
       } catch {
+        // Broken symlink: kept as a leaf entry below the budget check.
+        if (budgetHit(budget)) break;
         entries.push({ relPath, isDir: false, symlink: true });
+        budgetCounted(budget);
         continue;
       }
     }
 
+    // Issue #108: the shared budget counts every entry across every walk
+    // drawing on it; once hit, this level stops — nothing pushed, nothing
+    // descended. Check and push are synchronous, so the combined count can
+    // never exceed the cap under the concurrent descents.
+    if (budgetHit(budget)) break;
     entries.push({ relPath, isDir, symlink });
+    budgetCounted(budget);
 
     if (!isDir) continue;
     if (depth + 1 > MAX_TREE_DEPTH) continue;
@@ -139,7 +203,8 @@ async function walk(
     } catch {
       continue;
     }
-    descents.push(walk(fullPath, relPath, depth + 1, entries, visited));
+    if (budgetHit(budget)) break;
+    descents.push(walk(fullPath, relPath, depth + 1, entries, visited, budget));
   }
   await Promise.all(descents);
 }

@@ -60,7 +60,7 @@ export const NAVIGATOR_KEYBINDINGS: readonly HelpKeyRow[] = [
   { id: "match-cycle", keys: "up/down, ^n/^p", description: "cycle matches (searching)" },
   { id: "wrap", keys: "w", description: "toggle word wrap" },
   { id: "markdown", keys: "m", description: "toggle markdown rendered / code view" },
-  { id: "image", keys: "i", description: "toggle image rendering / metadata card (chafa)" },
+  { id: "image", keys: "i", description: "toggle image rendering / metadata card" },
   { id: "scroll-h", keys: "h l", description: "horizontal scroll when wrap is off" },
   { id: "hidden", keys: ".", description: "toggle hidden files" },
   { id: "copy", keys: "y", description: "copy the selected path" },

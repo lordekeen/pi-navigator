@@ -43,6 +43,11 @@ export const TAB_WIDTH = 4;
 /** Directory recursion depth cap for the filesystem walk fallback. */
 export const MAX_TREE_DEPTH = 6;
 
+/** Total-entry cap for the filesystem walk: the walk stops collecting once
+ * this many entries exist; the tree is then incomplete and the overlay says
+ * so (Issue #108). */
+export const MAX_FS_ENTRIES = 25_000;
+
 /** Directory names skipped by the filesystem walk fallback. */
 export const IGNORED_NAMES = new Set([
   ".git",

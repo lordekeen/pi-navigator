@@ -816,6 +816,109 @@ describe("viewer keys", () => {
   });
 });
 
+// ── Multi-char paste & non-BMP input (Issue #105) ──
+
+describe("printable text (Issue #105): paste, surrogate pairs, control rejection", () => {
+  const ROCKET = "\u{1F680}"; // 🚀 — UTF-16 surrogate pair, .length === 2
+
+  it("pastes a multi-char string into the filter and the search, appending it whole", async () => {
+    // Filter mode: whole pasted chunk lands in the query, not dropped.
+    const harness = makeHarness();
+    withTree(harness, ["src/a.ts"]);
+    harness.overlay.handleInput("/");
+    harness.overlay.handleInput("needle");
+    expect(harness.overlay.render(120).join("\n")).toContain("/needle");
+    harness.overlay.dispose();
+
+    // Search mode: same paste behavior in the viewer search bar.
+    const search = makeHarness();
+    withTree(search, ["a.ts"]);
+    search.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+    search.overlay.handleInput("/");
+    search.overlay.handleInput("needle");
+    expect(search.overlay.render(120).join("\n")).toContain("/needle");
+    search.overlay.dispose();
+  });
+
+  it("accepts an emoji (surrogate pair) in the search and the filter", async () => {
+    const harness = makeHarness();
+    withTree(harness, ["a.ts"]);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+
+    harness.overlay.handleInput("/"); // search mode (viewer focus)
+    harness.overlay.handleInput(ROCKET);
+    expect(harness.overlay.render(120).join("\n")).toContain(ROCKET);
+
+    harness.overlay.handleInput(KEYS.escape);
+    harness.overlay.handleInput(KEYS.tab); // viewer -> files
+    harness.overlay.handleInput("/"); // filter mode
+    harness.overlay.handleInput(ROCKET);
+    expect(harness.overlay.render(120).join("\n")).toContain(ROCKET);
+    harness.overlay.dispose();
+  });
+
+  it("backspace after an emoji removes the whole surrogate pair (no lone surrogate)", async () => {
+    const harness = makeHarness();
+    withTree(harness, ["a.ts"]);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+
+    harness.overlay.handleInput("/"); // search mode
+    harness.overlay.handleInput(ROCKET);
+    harness.overlay.handleInput(KEYS.backspace);
+    let rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).not.toContain(ROCKET);
+    expect(rendered).not.toMatch(/[\ud800-\udfff]/); // no lone high/low surrogate
+
+    harness.overlay.handleInput(KEYS.escape);
+    harness.overlay.handleInput(KEYS.tab); // viewer -> files
+    harness.overlay.handleInput("/"); // filter mode
+    harness.overlay.handleInput(ROCKET);
+    harness.overlay.handleInput(KEYS.backspace);
+    rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).not.toContain(ROCKET);
+    expect(rendered).not.toMatch(/[\ud800-\udfff]/);
+    harness.overlay.dispose();
+  });
+
+  it("rejects escape-sequence chunks in the filter and the search", async () => {
+    const chunk = "\x1b[1;5A"; // e.g. a ctrl-arrow sequence — not a named filter/search key
+
+    const harness = makeHarness();
+    withTree(harness, ["src/a.ts"]);
+    harness.overlay.handleInput("/");
+    harness.overlay.handleInput(chunk);
+    expect(harness.overlay.render(120).join("\n")).not.toContain(chunk);
+    harness.overlay.handleInput("x"); // still typing normally after the rejected chunk
+    expect(harness.overlay.render(120).join("\n")).toContain("/x");
+    harness.overlay.dispose();
+
+    const search = makeHarness();
+    withTree(search, ["a.ts"]);
+    search.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+    search.overlay.handleInput("/");
+    search.overlay.handleInput(chunk);
+    expect(search.overlay.render(120).join("\n")).not.toContain(chunk);
+    search.overlay.handleInput("x");
+    expect(search.overlay.render(120).join("\n")).toContain("/x");
+    search.overlay.dispose();
+  });
+
+  it("rejects DEL (0x7f) chunks in the filter", () => {
+    const harness = makeHarness();
+    withTree(harness, ["src/a.ts"]);
+    harness.overlay.handleInput("/");
+    harness.overlay.handleInput("\x7f\x7f"); // a pasted DEL chunk, not the backspace key
+    expect(harness.overlay.render(120).join("\n")).not.toContain("\x7f");
+    harness.overlay.handleInput("x");
+    expect(harness.overlay.render(120).join("\n")).toContain("/x");
+    harness.overlay.dispose();
+  });
+});
+
 // ── Copy action ──
 
 describe("copy (y)", () => {
@@ -1957,6 +2060,30 @@ describe("chafa image rendering", () => {
     ]);
     // An acceptable pane geometry renders the image with no hint.
     expect(imageCardHints(file, support, geometryFor({ cols: 60, rows: 24 }))).toEqual([]);
+  });
+
+  it("renders the metadata card, never the text gutter, for a chafa image with no rendered lines (#103)", async () => {
+    const harness = makeHarness(
+      36,
+      async (relPath): Promise<ViewerFile> => ({ ...chafaImage(relPath), imageLines: [] }),
+      undefined,
+      undefined,
+      activeSupport(),
+    );
+    withTree(harness, ["empty.png"]);
+    harness.overlay.render(120);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+
+    const lines = harness.overlay.render(120);
+    const joined = lines.join("\n");
+    expect(joined).toContain("Image"); // card title — the pre-fix text path rendered blank rows
+    expect(joined).not.toContain("chafa-row-");
+    // No text-like gutter or line numbers in any frame row.
+    for (const line of lines) {
+      expect(line).not.toMatch(/^\s*\d+ \u2502/);
+    }
+    harness.overlay.dispose();
   });
 });
 

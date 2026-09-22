@@ -210,6 +210,40 @@ describe("renderViewerPane", () => {
     expect(rows[2]!.trim()).toBe(""); // null entry = blank row
     expect(visibleWidth(rows[2]!)).toBe(width); // still padded to the pane width
   });
+
+  // Issue #103: an image with no rendered lines must route to the metadata
+  // card, never fall through to the text-like gutter and line numbering.
+  it("routes a chafa image with imageLines: null to the metadata card", () => {
+    const image = viewerFile({ kind: "image", relPath: "pic.png", imageTier: "chafa", lines: [] });
+    const rows = renderViewerPane(paneView({ file: image, imageLines: null }), width, 10);
+    expect(rows.some((row) => row.includes("\u250c"))).toBe(true); // card top border
+    expect(rows.join("\n")).toContain("Image"); // card title
+  });
+
+  it("routes a chafa image with an empty imageLines array to the metadata card", () => {
+    const image = viewerFile({ kind: "image", relPath: "pic.png", imageTier: "chafa", lines: [] });
+    const rows = renderViewerPane(paneView({ file: image, imageLines: [] }), width, 10);
+    expect(rows.some((row) => row.includes("\u250c"))).toBe(true);
+    expect(rows.join("\n")).toContain("Image");
+    expect(rows.join("\n")).not.toContain("chafa-row-");
+  });
+
+  it("routes a native-tier image without lines to the metadata card", () => {
+    const image = viewerFile({ kind: "image", relPath: "pic.png", imageTier: "native", lines: [] });
+    const rows = renderViewerPane(
+      paneView({ file: image, imageLines: null, imageSupport: nativeSupport() }),
+      width,
+      10,
+    );
+    expect(rows.some((row) => row.includes("\u250c"))).toBe(true);
+  });
+
+  it("still renders image rows, not a card, for a chafa image with non-empty lines", () => {
+    const image = viewerFile({ kind: "image", relPath: "pic.png", imageTier: "chafa", lines: [] });
+    const rows = renderViewerPane(paneView({ file: image, imageLines: ["chafa-row-0", "chafa-row-1"] }), width, 4);
+    expect(rows.some((row) => row.includes("\u250c"))).toBe(false);
+    expect(rows[1]).toContain("chafa-row-0");
+  });
 });
 
 describe("buildViewerHeader", () => {

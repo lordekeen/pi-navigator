@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   getCapabilities,
+  getImageDimensions,
   resetCapabilitiesCache,
   setCapabilities,
   visibleWidth,
@@ -22,7 +23,7 @@ import {
   consumeKittyProbeReply,
   createKittyProbeState,
   detectPiChafa,
-  KITTY_PROBE_PNG_BASE64,
+  KITTY_PROBE_SAMPLES,
   loadPiChafaConfig,
   makeDeferredImageSupport,
   probeChafa,
@@ -575,7 +576,7 @@ describe("sanitizeChafaPayload", () => {
 
   it("drops chafa's cursor-hide/show escapes and trailing empty lines", () => {
     const out = sanitizeChafaPayload(
-      "\x1b[?25l\x1b[32mline one\x1b[0m\nline two\nline three\n\n\n\x1b[?25h\n",
+      "\x1b[?25l\x1b[32mline one\x1b[0m\x1b[?25l\nline two\nline three\n\n\n\x1b[?25h\n",
       geometry,
     );
     expect(out).toEqual({
@@ -586,6 +587,17 @@ describe("sanitizeChafaPayload", () => {
       expect(out.lines.join("|")).not.toContain("?25l");
       expect(out.lines.join("|")).not.toContain("?25h");
     }
+  });
+
+  it("keeps byte-identical output across a payload dense with SGR transitions (Issue #104)", () => {
+    const row = (n: number) => `\x1b[38;5;${160 + (n % 95)}m█\x1b[0m`;
+    const payload = Array.from({ length: 10 }, (_, i) =>
+      Array.from({ length: 20 }, (_, j) => row(i * 20 + j)).join(""),
+    ).join("\n");
+    const out = sanitizeChafaPayload(payload, geometry);
+    // Hundreds of escapes, no reordering, no drops, no added resets: the
+    // sticky-regex rewrite must be a byte-identical replacement (Issue #104).
+    expect(out).toEqual({ ok: true, lines: payload.split("\n") });
   });
 
   it("strips carriage returns", () => {
@@ -1110,11 +1122,40 @@ describe("resolveNativeProtocol", () => {
 });
 
 describe("kitty decode probe helpers (Issue #101)", () => {
-  it("buildKittyProbeQuery emits the query action with the 1x1 PNG payload", () => {
-    const q = buildKittyProbeQuery(31);
-    expect(q.startsWith("\x1b_Ga=q,t=d,f=100,i=31;")).toBe(true);
-    expect(q).toContain(KITTY_PROBE_PNG_BASE64);
-    expect(q.endsWith("\x1b\\")).toBe(true);
+  it("buildKittyProbeQuery emits the query action with the matching 1x1 sample (Issue #102)", () => {
+    const q = buildKittyProbeQuery(31, "image/png");
+    expect(q).toBe(`\x1b_Ga=q,t=d,f=100,i=31;${KITTY_PROBE_SAMPLES["image/png"]}\x1b\\`);
+  });
+
+  it("probes JPEG/WebP with their own samples, never the PNG stand-in (Issue #102)", () => {
+    const jpeg = buildKittyProbeQuery(7, "image/jpeg");
+    expect(jpeg?.startsWith("\x1b_Ga=q,t=d,f=100,i=7;")).toBe(true);
+    expect(jpeg).toContain(KITTY_PROBE_SAMPLES["image/jpeg"]);
+    expect(jpeg).not.toContain(KITTY_PROBE_SAMPLES["image/png"]);
+    expect(jpeg?.endsWith("\x1b\\")).toBe(true);
+    const webp = buildKittyProbeQuery(8, "image/webp");
+    expect(webp).toContain(KITTY_PROBE_SAMPLES["image/webp"]);
+    expect(webp).not.toContain(KITTY_PROBE_SAMPLES["image/png"]);
+  });
+
+  it("returns null for mimes that have no probe sample (Issue #102)", () => {
+    expect(buildKittyProbeQuery(1, "image/gif")).toBeNull();
+    expect(buildKittyProbeQuery(1, "image/tiff")).toBeNull();
+    expect(buildKittyProbeQuery(1, "image/avif")).toBeNull();
+  });
+
+  it("every probe sample decodes as a 1x1 image of its own mime only (Issue #102)", () => {
+    for (const [mime, sample] of Object.entries(KITTY_PROBE_SAMPLES)) {
+      const dims = getImageDimensions(sample, mime);
+      expect(dims).not.toBeNull();
+      expect(dims?.widthPx).toBe(1);
+      expect(dims?.heightPx).toBe(1);
+      // Strongest validity check: a sample must not decode as another mime,
+      // or the probe could still smuggle a PNG verdict into a JPEG/WebP key.
+      for (const other of Object.keys(KITTY_PROBE_SAMPLES)) {
+        if (other !== mime) expect(getImageDimensions(sample, other)).toBeNull();
+      }
+    }
   });
 
   it("consumeKittyProbeReply matches the OK reply terminated by ESC ST", () => {

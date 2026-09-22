@@ -8,11 +8,13 @@
 
 import { describe, expect, it, vi } from "vitest";
 
+import { KITTY_PROBE_SAMPLES } from "../images";
 import registerNavigatorExtension, {
   makeTuiKittyDecodeProbe,
   makeWarningNotifier,
   navigatorCompletions,
   parseNavigatorArgs,
+  touchCacheEntry,
 } from "../index";
 
 function fakeUi() {
@@ -201,12 +203,13 @@ describe("makeTuiKittyDecodeProbe (Issue #101)", () => {
     };
   }
 
-  it("writes one a=q query and resolves ok when the terminal replies OK (Issue #101)", async () => {
+  it("writes one a=q query with the matching PNG sample and resolves ok when the terminal replies OK (Issue #101)", async () => {
     const { tui, writes, emit } = fakeTui();
     const probe = makeTuiKittyDecodeProbe(tui);
     const pending = probe("image/png");
     expect(writes).toHaveLength(1);
     expect(writes[0]).toContain("a=q,t=d,f=100");
+    expect(writes[0]).toContain(KITTY_PROBE_SAMPLES["image/png"]);
     const id = /i=(\d+)/.exec(writes[0] ?? "")?.[1];
     expect(id).toBeDefined();
     const result = emit(`\x1b_Gi=${id};OK\x1b\\`);
@@ -214,37 +217,57 @@ describe("makeTuiKittyDecodeProbe (Issue #101)", () => {
     await expect(pending).resolves.toBe("ok");
   });
 
-  it("resolves error on an explicit decode error reply (Issue #101)", async () => {
+  it("resolves error on an explicit decode error reply, probing JPEG with the JPEG sample (Issue #102)", async () => {
     const { tui, writes, emit } = fakeTui();
     const probe = makeTuiKittyDecodeProbe(tui);
     // Distinct mime key: the module-level probe cache is keyed on it.
     const pending = probe("image/jpeg");
+    // The regression this issue fixes: a JPEG probe must transmit the JPEG
+    // sample, never the PNG one (a PNG probe would pass strict decoders that
+    // reject the real JPEG payload).
+    expect(writes[0]).toContain(KITTY_PROBE_SAMPLES["image/jpeg"]);
+    expect(writes[0]).not.toContain(KITTY_PROBE_SAMPLES["image/png"]);
     const id = /i=(\d+)/.exec(writes[0] ?? "")?.[1];
     emit(`\x1b_Gi=${id};bad image\x1b\\`);
     await expect(pending).resolves.toBe("error");
   });
 
-  it("reassembles a reply split across chunks (Issue #101)", async () => {
+  it("reassembles a reply split across chunks and passes unrelated input through (Issue #101)", async () => {
     const { tui, writes, emit } = fakeTui();
     const probe = makeTuiKittyDecodeProbe(tui);
     const pending = probe("image/webp");
+    expect(writes[0]).toContain(KITTY_PROBE_SAMPLES["image/webp"]);
+    expect(writes[0]).not.toContain(KITTY_PROBE_SAMPLES["image/png"]);
     const id = /i=(\d+)/.exec(writes[0] ?? "")?.[1];
+    expect(emit("some user keystrokes")).toBeUndefined();
     expect(emit(`\x1b_Gi=${id};O`)).toBeUndefined(); // partial: never consumed
     expect(emit("K\x1b\\")).toEqual({ consume: true });
     await expect(pending).resolves.toBe("ok");
   });
 
-  it("resolves no-reply on timeout and unsubscribes (Issue #101)", async () => {
+  it("resolves no-reply without writing or subscribing for a mime with no probe sample (Issue #102)", async () => {
+    const { tui, writes, isSubscribed } = fakeTui();
+    const probe = makeTuiKittyDecodeProbe(tui);
+    const pending = probe("image/gif");
+    expect(writes).toHaveLength(0);
+    expect(isSubscribed()).toBe(false);
+    await expect(pending).resolves.toBe("no-reply");
+  });
+
+  it("resolves no-reply on timeout, unsubscribes, and ignores a late reply (Issue #102)", async () => {
     vi.useFakeTimers();
     try {
-      const { tui, emit, isSubscribed } = fakeTui();
-      const probe = makeTuiKittyDecodeProbe(tui, { timeoutMs: 250 });
-      const pending = probe("image/gif");
+      // Fresh cache: this timeout path must not ride earlier probes' verdicts.
+      const { tui, writes, emit, isSubscribed } = fakeTui();
+      const probe = makeTuiKittyDecodeProbe(tui, { timeoutMs: 250, cache: new Map() });
+      const pending = probe("image/png");
       expect(isSubscribed()).toBe(true);
+      expect(writes).toHaveLength(1);
+      // Terminal never answers the a=q query (Konsole-style): the timer fires.
       vi.advanceTimersByTime(250);
       await expect(pending).resolves.toBe("no-reply");
       expect(isSubscribed()).toBe(false);
-      // A late reply after the timeout is ignored.
+      // A late reply after settling is ignored entirely.
       expect(emit("\x1b_Gi=1;OK\x1b\\")).toBeUndefined();
     } finally {
       vi.useRealTimers();
@@ -257,20 +280,48 @@ describe("makeTuiKittyDecodeProbe (Issue #101)", () => {
     const first = probe("image/tiff");
     const second = probe("image/tiff");
     expect(second).toBe(first); // same cached promise
-    expect(writes).toHaveLength(1);
+    expect(writes).toHaveLength(0); // no sample, so no query is written
+    await expect(first).resolves.toBe("no-reply");
     const other = probe("image/bmp");
     expect(other).not.toBe(first);
-    expect(writes).toHaveLength(2);
+    expect(writes).toHaveLength(0);
+    await expect(other).resolves.toBe("no-reply");
   });
 
-  it("passes unrelated input through untouched (Issue #101)", async () => {
+  it("passes unrelated input through untouched for a no-sample probe (Issue #102)", async () => {
     const { tui, writes, emit } = fakeTui();
     const probe = makeTuiKittyDecodeProbe(tui);
     const pending = probe("image/avif");
+    expect(writes).toHaveLength(0);
+    // No listener was registered (nothing was transmitted), so input is never
+    // consumed and the verdict is the conservative "no-reply".
     expect(emit("some user keystrokes")).toBeUndefined();
     expect(emit("\x1b[97u")).toBeUndefined();
-    const id = /i=(\d+)/.exec(writes[0] ?? "")?.[1];
-    emit(`\x1b_Gi=${id};OK\x1b\\`);
-    await expect(pending).resolves.toBe("ok");
+    await expect(pending).resolves.toBe("no-reply");
+  });
+});
+
+describe("touchCacheEntry (Issue #109)", () => {
+  it("refreshes recency so the next eviction drops the least recently used key", () => {
+    const cache = new Map<string, number>([
+      ["a", 1],
+      ["b", 2],
+      ["c", 3],
+    ]);
+    touchCacheEntry(cache, "a");
+    // Map iteration order is now LRU-first: b, c were untouched; a is newest.
+    expect([...cache.keys()]).toEqual(["b", "c", "a"]);
+    // Mirror the eviction site in loadFileCached: at capacity, drop the first
+    // (least recently used) key, then insert — b goes, a survives.
+    cache.delete(cache.keys().next().value as string);
+    cache.set("d", 4);
+    expect([...cache.keys()]).toEqual(["c", "a", "d"]);
+  });
+
+  it("is a no-op for an absent key", () => {
+    const cache = new Map<string, number>([["a", 1]]);
+    touchCacheEntry(cache, "missing");
+    expect([...cache.keys()]).toEqual(["a"]);
+    expect(cache.get("a")).toBe(1);
   });
 });

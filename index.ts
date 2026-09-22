@@ -31,6 +31,7 @@ import { getCapabilities, Text } from "@earendil-works/pi-tui";
 import {
   IMAGE_EXTENSIONS,
   IMAGE_NATIVE_CACHE_MAX_CHARS,
+  MAX_FS_ENTRIES,
   MAX_POLL_INTERVAL_MS,
   MAX_VIEWER_CACHE_ENTRIES,
   NAVIGATOR_IMAGES_ENV,
@@ -62,6 +63,7 @@ import {
   collectExpanded,
   collectFsEntries,
   collectFsProbe,
+  createTreeWalkBudget,
   entriesFromPaths,
   expandedUntrackedDirs,
   reapplyExpansion,
@@ -79,28 +81,43 @@ type TuiLike = {
 };
 
 /**
- * Kitty decode probe (Issue #101): one `a=q` query per protocol, per process,
- * answered by the terminal's own input stream. The verdict is conservative —
- * only an explicit error reply degrades native rendering; "ok" confirms it;
- * "no-reply" (timeout or a terminal that does not answer queries, e.g. some
- * partial kitty implementations) keeps declared behavior so Konsole-style
- * terminals cannot regress. Memoized at module level: opening the navigator
- * again reuses the session's probe result.
+ * Kitty decode probe (Issue #101, #102): one `a=q` query per mime, per
+ * process, answered by the terminal's own input stream. The query transmits a
+ * real 1x1 sample of that mime (all tagged `f=100`, matching pi-tui's own
+ * encodeKitty) so a PNG probe cannot vouch for JPEG/WebP decodability. The
+ * verdict is conservative — only an explicit error reply degrades native
+ * rendering; "ok" confirms it; "no-reply" (timeout, or a mime with no probe
+ * sample, or a terminal that does not answer queries, e.g. some partial kitty
+ * implementations) keeps declared behavior so Konsole-style terminals cannot
+ * regress. Memoized at module level: opening the navigator again reuses the
+ * session's probe result.
  */
 const KITTY_PROBE_TIMEOUT_MS = 250;
 const kittyProbeCache = new Map<string, Promise<KittyProbeVerdict>>();
 
 export function makeTuiKittyDecodeProbe(
   tui: TuiLike,
-  opts?: { timeoutMs?: number },
+  opts?: { timeoutMs?: number; cache?: Map<string, Promise<KittyProbeVerdict>> },
 ): (mime: string) => Promise<KittyProbeVerdict> {
   const timeoutMs = opts?.timeoutMs ?? KITTY_PROBE_TIMEOUT_MS;
+  // Injectable cache is a test seam only: production default stays the
+  // module-level cache, so behavior is unchanged (Issue #102 timeout test).
+  const cache = opts?.cache ?? kittyProbeCache;
   return (mime) => {
-    let probe = kittyProbeCache.get(mime);
+    let probe = cache.get(mime);
     if (probe === undefined) {
       probe = new Promise<KittyProbeVerdict>((resolve) => {
-        const state: KittyProbeState = createKittyProbeState();
         const id = Math.floor(Math.random() * 0xffffffff) + 1;
+        const query = buildKittyProbeQuery(id, mime);
+        if (query === null) {
+          // No probe sample for this mime (unreachable in production — the
+          // runNativeRender kitty mime gate only ever asks for png/jpeg/webp,
+          // which all have samples). Conservative "no-reply": keep declared
+          // behavior and transmit nothing (Issue #102).
+          resolve("no-reply");
+          return;
+        }
+        const state: KittyProbeState = createKittyProbeState();
         let settled = false;
         let timer: ReturnType<typeof setTimeout> | undefined;
         let unsubscribe: (() => void) | undefined;
@@ -126,9 +143,9 @@ export function makeTuiKittyDecodeProbe(
         // Write through the TUI's terminal so the query is ordered with
         // renders; the reply arrives on the same input stream the listener
         // watches — the same pattern as pi-tui's own terminal queries.
-        tui.terminal.write(buildKittyProbeQuery(id));
+        tui.terminal.write(query);
       });
-      kittyProbeCache.set(mime, probe);
+      cache.set(mime, probe);
     }
     return probe;
   };
@@ -185,6 +202,18 @@ export function makeWarningNotifier(
     emittedWarnings.add(message);
     ui.notify("pi-navigator: " + message, "warning");
   };
+}
+
+/**
+ * Refresh a cache key's recency so Map iteration order is LRU-first
+ * (Issue #109): delete + re-set moves the key to the insertion tail (most
+ * recent). No-op when the key is absent.
+ */
+export function touchCacheEntry<K, V>(cache: Map<K, V>, key: K): void {
+  if (!cache.has(key)) return;
+  const value = cache.get(key) as V;
+  cache.delete(key);
+  cache.set(key, value);
 }
 
 async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionCommandContext): Promise<void> {
@@ -371,6 +400,8 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
               : "";
         const cached = viewerCache.get(relPath);
         if (cached && Math.abs(cached.mtimeMs - mtimeMs) <= 1 && cached.variant === variant) {
+          // Genuine hit: refresh recency so eviction is LRU, not FIFO (#109).
+          touchCacheEntry(viewerCache, relPath);
           return cached.file;
         }
         let file: ViewerFile;
@@ -392,6 +423,8 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
           (file.imageLines ?? []).join("").length > IMAGE_NATIVE_CACHE_MAX_CHARS;
         if (file.mtimeMs !== undefined && !nativeOverCap) {
           if (viewerCache.size >= MAX_VIEWER_CACHE_ENTRIES) {
+            // LRU eviction (Issue #109): hits refresh recency via
+            // touchCacheEntry, so the first key is the least recently used.
             const oldest = viewerCache.keys().next();
             if (!oldest.done) viewerCache.delete(oldest.value);
           }
@@ -515,19 +548,34 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
               // expandable node. Keep it read-only: the `??` badge lives on the
               // directory row itself; filled children carry no per-file codes.
               const declaredDirs = base.filter((entry) => entry.isDir);
+              // Issue #108: one shared budget across every untracked-dir walk,
+              // so the concurrent per-dir calls draw from a single total cap
+              // instead of multiplying it.
+              const fsBudget = createTreeWalkBudget();
               const subtreeEntries = await Promise.all(
-                declaredDirs.map((dir) => collectDirEntries(cwd, dir.relPath)),
+                declaredDirs.map((dir) => collectDirEntries(cwd, dir.relPath, fsBudget)),
               );
               entries = [...base, ...subtreeEntries.flat()];
+              if (fsBudget.truncated) {
+                notifyWarning(`file tree truncated at ${MAX_FS_ENTRIES} entries \u2014 some files are not listed`);
+              }
               nextSource = "git";
             } else {
-              entries = await collectFsEntries(cwd);
+              const fsResult = await collectFsEntries(cwd);
+              entries = fsResult.entries;
+              if (fsResult.truncated) {
+                notifyWarning(`file tree truncated at ${MAX_FS_ENTRIES} entries \u2014 some files are not listed`);
+              }
               nextSource = "fs";
             }
             if (git.available && entries.length === 0) {
               // Fresh repository: git has nothing to list, so fall back to the
               // filesystem walk (plan section 9, empty repository row).
-              entries = await collectFsEntries(cwd);
+              const fsFallback = await collectFsEntries(cwd);
+              entries = fsFallback.entries;
+              if (fsFallback.truncated) {
+                notifyWarning(`file tree truncated at ${MAX_FS_ENTRIES} entries \u2014 some files are not listed`);
+              }
               nextSource = "fs";
             }
             if (closed) return;

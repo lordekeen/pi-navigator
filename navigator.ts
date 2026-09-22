@@ -130,13 +130,36 @@ export interface NavigatorOptions {
 export const HELP_ROWS: Array<[string, string]> = NAVIGATOR_KEYBINDINGS.map((row) => [row.keys, row.description]);
 
 /**
- * Printable character from a key event, using the platform rule: the Kitty
- * decoder first, then a single printable code unit. Shared by the filter and
- * the search input modes so the two cannot drift apart.
+ * Printable block of text from a key event or paste, using the platform
+ * rule: the Kitty decoder first, then the raw chunk (a pasted multi-char
+ * string or a surrogate pair such as an emoji, Issue #105). Shared by the
+ * filter and the search input modes so the two cannot drift apart.
  */
-function printableChar(data: string): string | null {
-  const decoded = decodeKittyPrintable(data) ?? (data.length === 1 && data >= " " ? data : null);
-  return decoded && decoded.length === 1 ? decoded : null;
+function printableText(data: string): string | null {
+  const decoded = decodeKittyPrintable(data);
+  const text = decoded ?? data;
+  if (text.length === 0) return null;
+  // Any C0/C1 control character (including ESC and DEL) rejects the whole
+  // chunk: escape sequences and unmatched special keys must never enter the
+  // query.
+  if (/[\x00-\x1f\x7f-\x9f]/.test(text)) return null;
+  return text;
+}
+
+/**
+ * Delete the last full code point of a query, never splitting a surrogate
+ * pair (a lone surrogate would otherwise survive Backspace after an emoji,
+ * Issue #105).
+ */
+function deleteLastCodePoint(text: string): string {
+  let end = text.length - 1;
+  if (end < 0) return text;
+  const last = text.charCodeAt(end);
+  if (last >= 0xdc00 && last <= 0xdfff && end > 0) {
+    const prev = text.charCodeAt(end - 1);
+    if (prev >= 0xd800 && prev <= 0xdbff) end--;
+  }
+  return text.slice(0, end);
 }
 
 export class NavigatorOverlay implements Focusable {
@@ -596,7 +619,7 @@ export class NavigatorOverlay implements Focusable {
     } else if (matchesKey(data, Key.enter)) {
       this.mode = "normal";
     } else if (matchesKey(data, Key.backspace)) {
-      this.filterQuery = this.filterQuery.slice(0, -1);
+      this.filterQuery = deleteLastCodePoint(this.filterQuery);
       this.filesCursor = 0;
       this.filesScroll = 0;
     } else if (matchesKey(data, Key.down)) {
@@ -604,7 +627,7 @@ export class NavigatorOverlay implements Focusable {
     } else if (matchesKey(data, Key.up)) {
       this.filesCursor = Math.max(0, this.filesCursor - 1);
     } else {
-      const printable = printableChar(data);
+      const printable = printableText(data);
       if (printable) {
         this.filterQuery += printable;
         this.filesCursor = 0;
@@ -622,7 +645,7 @@ export class NavigatorOverlay implements Focusable {
     } else if (matchesKey(data, Key.enter)) {
       this.mode = "normal";
     } else if (matchesKey(data, Key.backspace)) {
-      this.searchQuery = this.searchQuery.slice(0, -1);
+      this.searchQuery = deleteLastCodePoint(this.searchQuery);
       this.recomputeSearch();
       this.searchIndex = 0;
       this.searchJump = true;
@@ -631,7 +654,7 @@ export class NavigatorOverlay implements Focusable {
     } else if (matchesKey(data, Key.up) || matchesKey(data, Key.ctrl("p"))) {
       this.cycleSearch(-1);
     } else {
-      const printable = printableChar(data);
+      const printable = printableText(data);
       if (printable) {
         this.searchQuery += printable;
         this.recomputeSearch();
@@ -1331,8 +1354,7 @@ export class NavigatorOverlay implements Focusable {
       const isCard =
         file.kind === "binary" ||
         file.kind === "error" ||
-        (file.kind === "image" &&
-          (this.imageAsCard || (file.imageTier !== "chafa" && file.imageTier !== "native")));
+        (file.kind === "image" && !renderedImage);
 
       if (renderedImage) {
         // Render branch: no gutter, no wrap, no hscroll, no search (§7.5).

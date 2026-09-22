@@ -143,7 +143,7 @@ export function renderViewerPane(view: ViewerPaneView, width: number, area: numb
   // each carrying its own trailing reset (§8), so every row is truncated to
   // the full pane width with an empty ellipsis (Issue #010) and padded;
   // native rows are pass-through with right-side fill (spec §8, D9).
-  if (view.imageLines) {
+  if (view.imageLines && view.imageLines.length > 0) {
     // Native rows (spec §8.2, D9): the sequence row is emitted first,
     // un-truncated, with right-side space fill only — the image anchors where
     // the sequence appears, so no width function may cut or re-anchor it.
@@ -165,11 +165,10 @@ export function renderViewerPane(view: ViewerPaneView, width: number, area: numb
     return rows;
   }
 
-  if (
-    file.kind === "binary" ||
-    file.kind === "error" ||
-    (file.kind === "image" && (file.imageTier !== "chafa" || view.imageAsCard))
-  ) {
+  // Reaching here with kind "image" means the rendered-image branch above
+  // did not return (no rendered lines), so every image without lines gets
+  // the metadata card — never the text-like gutter (Issue #103).
+  if (file.kind === "binary" || file.kind === "error" || file.kind === "image") {
     rows.push(...buildCard(file, width, area, view));
     return rows;
   }

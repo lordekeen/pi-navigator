@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { MAX_TREE_DEPTH } from "../constants";
+import { createTreeWalkBudget } from "../tree";
 import { gitCodeMap, parsePorcelain } from "../git";
 import type { GitState } from "../types";
 import {
@@ -171,7 +172,7 @@ describe("collectFsEntries", () => {
   });
 
   it("walks the tree with posix rel paths", async () => {
-    const out = await collectFsEntries(dir);
+    const { entries: out } = await collectFsEntries(dir);
     const rels = out.map((e) => e.relPath).sort();
     expect(rels).toEqual([
       "deep1",
@@ -198,7 +199,7 @@ describe("collectFsEntries", () => {
     await mkdir(join(dir, "dist"));
     await writeFile(join(dir, "dist/bundle.js"), "x\n");
 
-    const out = await collectFsEntries(dir);
+    const { entries: out } = await collectFsEntries(dir);
     const rels = out.map((e) => e.relPath);
     expect(rels).not.toContain("node_modules");
     expect(rels).not.toContain("node_modules/pkg/index.js");
@@ -212,7 +213,7 @@ describe("collectFsEntries", () => {
     await mkdir(join(dir, ".config"));
     await writeFile(join(dir, ".config/settings.json"), "{}");
 
-    const out = await collectFsEntries(dir);
+    const { entries: out } = await collectFsEntries(dir);
     const rels = out.map((e) => e.relPath);
     expect(rels).toContain(".env");
     expect(rels).toContain(".config");
@@ -221,7 +222,7 @@ describe("collectFsEntries", () => {
 
   it("keeps a symlink cycle as a leaf entry without recursing", async () => {
     await symlink(dir, join(dir, "loop"));
-    const out = await collectFsEntries(dir);
+    const { entries: out } = await collectFsEntries(dir);
     const loop = out.find((e) => e.relPath === "loop");
     expect(loop?.symlink).toBe(true);
     // Only the link entry itself, no duplicated children under it.
@@ -231,7 +232,7 @@ describe("collectFsEntries", () => {
 
   it("keeps broken symlinks as leaves", async () => {
     await symlink(join(dir, "does-not-exist"), join(dir, "broken"));
-    const out = await collectFsEntries(dir);
+    const { entries: out } = await collectFsEntries(dir);
     expect(out.find((e) => e.relPath === "broken")).toMatchObject({ symlink: true, isDir: false });
   });
 
@@ -240,12 +241,90 @@ describe("collectFsEntries", () => {
     try {
       await symlink(outside, join(dir, "external"));
       await writeFile(join(outside, "x.txt"), "x\n");
-      const out = await collectFsEntries(dir);
+      const { entries: out } = await collectFsEntries(dir);
       const external = out.find((e) => e.relPath === "external");
       expect(external?.isDir).toBe(true);
       expect(out.find((e) => e.relPath === "external/x.txt")).toBeDefined();
     } finally {
       await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("stops at the total-entry cap without throwing (Issue #108)", async () => {
+    const capDir = await mkdtemp(join(tmpdir(), "pi-nav-cap-"));
+    try {
+      for (let i = 0; i < 10; i++) await writeFile(join(capDir, `f${i}.txt`), "x\n");
+      const { entries: out, truncated } = await collectFsEntries(capDir, { maxEntries: 5 });
+      expect(out.length).toBeLessThanOrEqual(5);
+      expect(truncated).toBe(true);
+    } finally {
+      await rm(capDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not flag a tree smaller than the cap as truncated (Issue #108)", async () => {
+    const capDir = await mkdtemp(join(tmpdir(), "pi-nav-under-"));
+    try {
+      await writeFile(join(capDir, "a.txt"), "x\n");
+      await writeFile(join(capDir, "b.txt"), "x\n");
+      const { entries: out, truncated } = await collectFsEntries(capDir, { maxEntries: 5 });
+      expect(out.length).toBe(2);
+      expect(truncated).toBe(false);
+    } finally {
+      await rm(capDir, { recursive: true, force: true });
+    }
+  });
+
+  it("finishing naturally at exactly the cap is not truncated (Issue #108)", async () => {
+    const capDir = await mkdtemp(join(tmpdir(), "pi-nav-exact-"));
+    try {
+      for (let i = 0; i < 4; i++) await writeFile(join(capDir, `f${i}.txt`), "x\n");
+      const { entries: out, truncated } = await collectFsEntries(capDir, { maxEntries: 4 });
+      expect(out.length).toBe(4);
+      expect(truncated).toBe(false);
+    } finally {
+      await rm(capDir, { recursive: true, force: true });
+    }
+  });
+
+  it("drops descents once the cap is reached at the top level (Issue #108)", async () => {
+    const capDir = await mkdtemp(join(tmpdir(), "pi-nav-descend-"));
+    try {
+      await mkdir(join(capDir, "sub"));
+      for (let i = 0; i < 10; i++) await writeFile(join(capDir, `f${i}.txt`), "x\n");
+      await writeFile(join(capDir, "sub/deep.txt"), "x\n");
+      const { entries: out, truncated } = await collectFsEntries(capDir, { maxEntries: 3 });
+      expect(out.length).toBeLessThanOrEqual(3);
+      expect(truncated).toBe(true);
+      // Cap hit at the top level: no descent can have run, so no nested entry
+      // appears — whichever top-level entries won the race, membership is
+      // nondeterministic but the depth bound is not.
+      expect(out.some((e) => e.relPath.includes("/"))).toBe(false);
+    } finally {
+      await rm(capDir, { recursive: true, force: true });
+    }
+  });
+
+  it("shares one budget across collectDirEntries calls (Issue #108)", async () => {
+    const capDir = await mkdtemp(join(tmpdir(), "pi-nav-shared-"));
+    try {
+      await mkdir(join(capDir, "a"));
+      await mkdir(join(capDir, "b"));
+      for (let i = 0; i < 4; i++) {
+        await writeFile(join(capDir, "a", `a${i}.txt`), "x\n");
+        await writeFile(join(capDir, "b", `b${i}.txt`), "x\n");
+      }
+      const budget = createTreeWalkBudget(5);
+      const [a, b] = await Promise.all([
+        collectDirEntries(capDir, "a", budget),
+        collectDirEntries(capDir, "b", budget),
+      ]);
+      // One shared budget: the combined count respects the cap, never two
+      // per-call caps multiplied.
+      expect(a.length + b.length).toBeLessThanOrEqual(5);
+      expect(budget.truncated).toBe(true);
+    } finally {
+      await rm(capDir, { recursive: true, force: true });
     }
   });
 });

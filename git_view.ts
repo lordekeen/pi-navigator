@@ -44,8 +44,14 @@ export function buildGitRows(git: GitState | null, expanded: ReadonlySet<string>
     for (const file of git.staged) rows.push({ kind: "file", relPath: file.relPath, code: file.code, staged: true });
   }
   if (git.unstaged.length === 0 && git.staged.length === 0) {
-    // Plan section 5 item 5: a dim Clean row when both lists are empty.
-    rows.push({ kind: "group", label: "Clean \u2014 nothing staged or unstaged", tone: "dim" });
+    // A failed status read swaps the Clean row for the error so an
+    // unreadable change list never masquerades as a clean tree (Issue #107).
+    if (git.error) {
+      rows.push({ kind: "group", label: git.error, tone: "warning" });
+    } else {
+      // Plan section 5 item 5: a dim Clean row when both lists are empty.
+      rows.push({ kind: "group", label: "Clean \u2014 nothing staged or unstaged", tone: "dim" });
+    }
   }
   // Build the ancestor family for every expanded commit (v3, one level per
   // expand). Unlike the v2 deep DFS, each expanded commit emits only its
@@ -143,10 +149,17 @@ export function buildGitHeader(leftW: number, view: GitHeaderView): string {
   const git = view.git;
   let info = "";
   if (git?.available) {
-    info = T.dim(`${git.unstaged.length} unstaged \u00b7 ${git.staged.length} staged`) + " ";
-    // Plan section 7: when the tree came from the filesystem walk (empty
-    // repository fallback), the panel says so instead of implying git mode.
-    if (view.treeSource === "fs") info = T.dim("fs walk") + " ";
+    // A failed status read surfaces the error instead of a bogus
+    // "0 unstaged · 0 staged" counter (Issue #107). T.dim is fine; the
+    // error row itself already carries the warning tone.
+    if (git.error) {
+      info = T.dim(git.error) + " ";
+    } else {
+      info = T.dim(`${git.unstaged.length} unstaged \u00b7 ${git.staged.length} staged`) + " ";
+      // Plan section 7: when the tree came from the filesystem walk (empty
+      // repository fallback), the panel says so instead of implying git mode.
+      if (view.treeSource === "fs") info = T.dim("fs walk") + " ";
+    }
   } else {
     info = T.dim(git?.error ?? "unavailable") + " ";
   }

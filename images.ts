@@ -586,8 +586,11 @@ export function buildSymbolsArgs(
 const ESC = "\x1b";
 const CURSOR_HIDE = "\x1b[?25l";
 const CURSOR_SHOW = "\x1b[?25h";
-// Assembled from the ESC constant (not a control-character regex literal).
-const SGR_RE = new RegExp(`^${ESC}\\[[0-9;]*m`);
+// Sticky (y) so matching runs against `raw` at an explicit lastIndex, never
+// slicing the tail (Issue #104: the old ^-anchored exec over raw.slice(esc)
+// allocated the whole suffix on every escape). Assembled from the ESC
+// constant (not a control-character regex literal).
+const SGR_STICKY_RE = new RegExp(`${ESC}\\[[0-9;]*m`, "y");
 
 /**
  * Chafa output is untrusted ANSI; the whitelist is strict (spec §8, D7):
@@ -613,14 +616,14 @@ export function sanitizeChafaPayload(
       break;
     }
     cleaned += raw.slice(i, esc);
-    const rest = raw.slice(esc);
-    const sgr = SGR_RE.exec(rest);
+    SGR_STICKY_RE.lastIndex = esc;
+    const sgr = SGR_STICKY_RE.exec(raw);
     if (sgr !== null && sgr[0] !== undefined) {
       cleaned += sgr[0];
       i = esc + sgr[0].length;
       continue;
     }
-    if (rest.startsWith(CURSOR_HIDE) || rest.startsWith(CURSOR_SHOW)) {
+    if (raw.startsWith(CURSOR_HIDE, esc) || raw.startsWith(CURSOR_SHOW, esc)) {
       i = esc + CURSOR_HIDE.length;
       continue;
     }
@@ -842,23 +845,39 @@ export function resolveNativeProtocol(deps?: {
 // ── native render (spec §5.3, D3, D5, D7) ──
 
 /** One native render's context: protocol plus abort/read seams. */
-// ── Kitty decode probe (Issue #101) ───────────────────────────────────────
+// ── Kitty decode probe (Issue #101, #102) ────────────────────────────────
 // The kitty graphics protocol's query action (`a=q`) makes a terminal attempt
 // to load the payload and reply, per the spec: with an id present, "the
 // terminal emulator will reply after trying to load the image, saying whether
-// loading was successful or not". One 1x1 PNG probe per session tells us
-// whether native payloads are actually decodable instead of trusting
-// declarations and advertisement (verified 68-byte gray+alpha PNG).
+// loading was successful or not". The probe transmits a real 1x1 sample of
+// the format being rendered — pi-tui's encodeKitty tags every payload `f=100`,
+// so a PNG stand-in cannot vouch for JPEG/WebP decodability (Issue #102).
+// Verdicts are memoized per mime in index.ts.
 
 export type KittyProbeVerdict = "ok" | "error" | "no-reply";
 
-/** 1x1 PNG sample payload for the kitty `a=q` decode probe. */
-export const KITTY_PROBE_PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+/**
+ * 1x1 sample payloads for the kitty `a=q` decode probe, keyed by MIME
+ * (Issue #102). Each decodes as 1x1 for its own mime via pi-tui
+ * getImageDimensions, and as null for the other two.
+ */
+export const KITTY_PROBE_SAMPLES: Record<string, string> = {
+  "image/png":
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+  "image/jpeg":
+    "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==",
+  "image/webp": "UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAwA0JaQAA3AA/vuUAAA=",
+};
 
-/** Build the kitty graphics query escape for the 1x1 PNG probe (a=q, t=d). */
-export function buildKittyProbeQuery(id: number): string {
-  return `\x1b_Ga=q,t=d,f=100,i=${id};${KITTY_PROBE_PNG_BASE64}\x1b\\`;
+/**
+ * Build the kitty graphics query escape for the 1x1 probe of `mime`
+ * (a=q, t=d, f=100). Returns null for mimes without a sample — the caller
+ * must not transmit a stand-in format (Issue #102).
+ */
+export function buildKittyProbeQuery(id: number, mime: string): string | null {
+  const sample = KITTY_PROBE_SAMPLES[mime];
+  if (sample === undefined) return null;
+  return `\x1b_Ga=q,t=d,f=100,i=${id};${sample}\x1b\\`;
 }
 
 /**

@@ -95,6 +95,21 @@ describe("buildGitRows", () => {
     expect(rows[0]).toEqual({ kind: "group", label: "Clean \u2014 nothing staged or unstaged", tone: "dim" });
   });
 
+  it("shows the status error as a warning group row instead of Clean (Issue #107)", () => {
+    const rows = buildGitRows(
+      gitState({ error: "git status failed \u2014 changes not listed (press r to retry)" }),
+      new Set(),
+    );
+    expect(rows[0]).toEqual({
+      kind: "group",
+      label: "git status failed \u2014 changes not listed (press r to retry)",
+      tone: "warning",
+    });
+    expect(rows.some((r) => r.kind === "group" && r.label.startsWith("Clean"))).toBe(false);
+    // History still follows the error row.
+    expect(rows[1]).toEqual({ kind: "group", label: "History (0)", tone: "muted" });
+  });
+
   it("expanding a commit nests its direct parents one level under the anchor", () => {
     const history = [commit("a", ["b"]), commit("b", ["c"]), commit("c")];
     const oneLevel = buildGitRows(gitState({ history }), new Set(["a"]));
@@ -164,6 +179,12 @@ describe("buildGitHeader", () => {
 
   it("shows the error text when git is unavailable", () => {
     expect(header(gitState({ available: false, error: "no .git here" }))).toContain("no .git here");
+  });
+
+  it("shows the status error instead of change counters when available with error (Issue #107)", () => {
+    const row = header(gitState({ error: "git status failed \u2014 changes not listed (press r to retry)" }));
+    expect(row).toContain("git status failed");
+    expect(row).not.toContain("0 unstaged \u00b7 0 staged");
   });
 });
 

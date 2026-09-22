@@ -393,7 +393,84 @@ describe("git integration on a scratch repository", () => {
     }
   });
 
+  it("surfaces a failed git status instead of Clean, keeping the state available (Issue #107)", async () => {
+    const spy = vi.spyOn(gitRunner, "execFile").mockImplementation((...args: any[]) => {
+      const gitArgs = args[1] as string[];
+      if (gitArgs && gitArgs.includes("status") && gitArgs.includes("--porcelain")) {
+        const cb = args[args.length - 1];
+        cb(new Error("index.lock exists"), "", "");
+        return {} as any;
+      }
+      return childProcess.execFile(args[0], args[1], args[2], args[3]);
+    });
+    try {
+      await writeFile(join(repo, "a.txt"), "hello\n");
+      await commit(repo, "first");
+      const state = await readGitState(repo);
+      // Branch/counts/history still valid, but a failed status read never
+      // reports the tree as clean.
+      expect(state.available).toBe(true);
+      expect(state.error).toBe("git status failed \u2014 changes not listed (press r to retry)");
+      expect(state.unstaged).toEqual([]);
+      expect(state.staged).toEqual([]);
+      expect(state.branch).toBe("main");
+      expect(state.history.map((c) => c.subject)).toEqual(["first"]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   // ── readCommitDiff (v3 commit-detail view) ──
+
+  it("counts a binary-only numstat row as one changed file (Issue #106)", async () => {
+    const spy = vi.spyOn(gitRunner, "execFile").mockImplementation((...args: any[]) => {
+      const gitArgs = args[1] as string[];
+      if (gitArgs && gitArgs.includes("--numstat")) {
+        const cb = args[args.length - 1];
+        cb(null, "-\t-\tassets/logo.png\n", "");
+        return {} as any;
+      }
+      return childProcess.execFile(args[0], args[1], args[2], args[3]);
+    });
+    try {
+      await writeFile(join(repo, "base.txt"), "hello\n");
+      await commit(repo, "binary touch");
+      const state = await readGitState(repo);
+      const diff = await readCommitDiff(repo, state.history[0]!.shortHash);
+      // Binary rows count as changed files but contribute 0 insertions/deletions.
+      expect(diff.filesChanged).toBe(1);
+      expect(diff.insertions).toBe(0);
+      expect(diff.deletions).toBe(0);
+      expect(diff.notice).toContain("1 file");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("sums binary and text numstat rows together (Issue #106)", async () => {
+    const spy = vi.spyOn(gitRunner, "execFile").mockImplementation((...args: any[]) => {
+      const gitArgs = args[1] as string[];
+      if (gitArgs && gitArgs.includes("--numstat")) {
+        const cb = args[args.length - 1];
+        cb(null, "2\t1\tsrc/a.ts\n-\t-\tassets/logo.png\n", "");
+        return {} as any;
+      }
+      return childProcess.execFile(args[0], args[1], args[2], args[3]);
+    });
+    try {
+      await writeFile(join(repo, "base.txt"), "hello\n");
+      await commit(repo, "mixed commit");
+      const state = await readGitState(repo);
+      const diff = await readCommitDiff(repo, state.history[0]!.shortHash);
+      // Text rows still contribute counts; binary rows count as files only.
+      expect(diff.filesChanged).toBe(2);
+      expect(diff.insertions).toBe(2);
+      expect(diff.deletions).toBe(1);
+      expect(diff.notice).toContain("2 files");
+    } finally {
+      spy.mockRestore();
+    }
+  });
 
   it("reads a single-file commit diff with correct stats (v3)", async () => {
     await writeFile(join(repo, "base.txt"), "line1\n");

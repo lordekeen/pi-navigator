@@ -82,7 +82,10 @@ export interface GitState {
   unstaged: GitChangedFile[];
   staged: GitChangedFile[];
   history: GitCommit[];
-  /** Human readable state line when available is false. */
+  /**
+   * Human readable state line when the repo is unavailable, or when it is
+   * available but the change list could not be read (e.g. git status failed).
+   */
   error?: string;
   refreshedAt: number;
 }

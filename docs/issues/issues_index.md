@@ -9,8 +9,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
 | **Pending / Open** | 1 | 1 | 1 | **3** |
-| **Resolved** | 18 | 30 | 50 | **98** |
-| **Total** | **19** | **31** | **51** | **101** |
+| **Resolved** | 18 | 34 | 55 | **107** |
+| **Total** | **19** | **35** | **56** | **110** |
 
 ---
 
@@ -28,6 +28,15 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | ID | Title | Type | Severity | Resolution Summary | Status |
 | :--- | :--- | :--- | :--- | :--- | :---: |
+| [#110](110-help-keybinding-description-native-image-drift.md) | Keybinding Help Description and Documentation Drift Following Native Image Rendering | Documentation | Low | `help.ts` `i` description drops the stale `(chafa)` suffix; README/AGENTS test counts updated to the observed 19 suites / 639 cases. | **Resolved** |
+| [#109](109-viewer-cache-lru-recency-refresh.md) | `viewerCache` Uses Insertion-Order FIFO Eviction Instead of True LRU | Enhancement / Performance | Low | Exported `touchCacheEntry` re-inserts a genuine hit at the Map tail, so the existing first-key eviction is true LRU; eviction code unchanged. +2 cases. | **Resolved** |
+| [#108](108-filesystem-walk-uncapped-entry-count.md) | Filesystem Walk Lacks Upper Bound on Total Entry Count | Technical Debt / Resource Bounds | Low | `MAX_FS_ENTRIES = 25_000` enforced in `walk` via a shared `TreeWalkBudget` (checked before every push and descent; `WeakMap`-backed cumulative count so git-mode `collectDirEntries` calls share one cap); `collectFsEntries` returns `{ entries, truncated }`; index.ts surfaces a one-time warning. +5 cases. | **Resolved** |
+| [#107](107-git-status-error-silent-clean-fallthrough.md) | Non-Zero Exit from `git status` Silently Defaults to "Clean" | Bug / Reliability | Low | A failed `git status` (`error`/`missing`) keeps the state available (branch/history intact) and sets `error`; the pane renders a warning group row instead of Clean and the header shows the error instead of `0 unstaged · 0 staged`. +3 cases. | **Resolved** |
+| [#106](106-git-numstat-binary-files-changed-count.md) | Binary File Changes Ignored in `readCommitDiff` Files-Changed Count | Bug / UX | Low | numstat matcher accepts `-` counts, so binary rows count as changed files with 0 insertions/deletions; text parsing unchanged. +2 cases. | **Resolved** |
+| [#105](105-search-filter-multi-char-paste-surrogate-pairs.md) | Multi-Character Pasting and Non-BMP Unicode Ignored in Search and Filter Modes | Bug / UX | Medium | `printableChar` → `printableText`: whole chunks accepted unless they carry C0/C1 controls (rejects ESC and DEL, admits pastes and surrogate pairs); backspace deletes the last full code point. +5 cases. | **Resolved** |
+| [#104](104-sanitize-chafa-payload-quadratic-slice-alloc.md) | Quadratic Memory Slicing Allocation in `sanitizeChafaPayload` | Performance / Memory | Medium | Sticky SGR regex (`lastIndex = esc`, exec on `raw`) plus `startsWith(..., esc)` replaces the per-escape `raw.slice(esc)`; byte-identical output pinned by a dense-SGR test. +1 case. | **Resolved** |
+| [#103](103-viewer-view-empty-chafa-image-text-fallthrough.md) | Inconsistent Card vs. Text Fallthrough in `viewer_view.ts` for Chafa Images with No Lines | Bug / UI Consistency | Medium | The rendered-image branch requires a non-empty `imageLines`; the card condition is `binary \|\| error \|\| image`; `isCard` is the complement of `renderedImage` — an image with no lines always renders the metadata card. +5 cases. | **Resolved** |
+| [#102](102-kitty-probe-hardcoded-png-mime-decoupling.md) | Kitty Decode Probe Query Always Emits PNG (`f=100`) Despite MIME-Keyed Cache | Bug / Logic | Medium | `KITTY_PROBE_SAMPLES` supplies real 1×1 PNG/JPEG/WebP payloads (all `f=100`, matching pi-tui); `buildKittyProbeQuery(id, mime)` returns null for sample-less mimes so no PNG verdict can vouch for another format; timeout coverage restored via an injectable probe cache. +4 cases. | **Resolved** |
 | [#070](070-kitty-protocol-crash-in-tmux.md) | Kitty Protocol Bypass of Tmux Guard Causes Terminal Freeze/Crash | Bug | High | Added multiplexer detection (`TMUX` / `TERM` tmux/screen) in `resolveNativeProtocol` and defensive check in `runNativeRender`, gracefully falling back to chafa or metadata card. +5 cases. | **Resolved** |
 | [#071](071-kitty-native-image-gate-jpeg-webp.md) | Kitty Native Image Mime Gate Restricts to PNG Only, Bypassing Native JPEG/WebP Support | Enhancement | Medium | Expanded Kitty protocol MIME gate to support JPEG and WebP alongside PNG in `images.ts` and `constants.ts`. +3 cases. | **Resolved** |
 | [#072](072-settings-infinity-number-validation.md) | Infinity Accepted as Valid Setting Value in `validateFieldValue` | Bug | High | Replaced `!isNaN(rawValue)` with `Number.isFinite(rawValue)` in `validateFieldValue`, correctly rejecting `Infinity` and `-Infinity`. +2 cases. | **Resolved** |
@@ -132,6 +141,10 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 ## 📂 Issues by Category
 
 ### Bug Fixes & UI Consistency
+- [#102: Kitty Decode Probe Query Always Emits PNG (`f=100`) Despite MIME-Keyed Cache](102-kitty-probe-hardcoded-png-mime-decoupling.md) *(resolved)*
+- [#103: Inconsistent Card vs. Text Fallthrough in `viewer_view.ts` for Chafa Images with No Lines](103-viewer-view-empty-chafa-image-text-fallthrough.md) *(resolved)*
+- [#106: Binary File Changes Ignored in `readCommitDiff` Files-Changed Count](106-git-numstat-binary-files-changed-count.md) *(resolved)*
+- [#107: Non-Zero Exit from `git status` Silently Defaults to "Clean"](107-git-status-error-silent-clean-fallthrough.md) *(resolved)*
 - [#100: Native Ladder Forces Settings/Env Protocol on Known No-Image Terminals (Blank Viewer in Alacritty)](100-native-settings-override-no-image-terminal.md) *(resolved)*
 - [#070: Kitty Protocol Bypass of Tmux Guard Causes Terminal Freeze/Crash](070-kitty-protocol-crash-in-tmux.md) *(resolved)*
 - [#072: Infinity Accepted as Valid Setting Value in `validateFieldValue`](072-settings-infinity-number-validation.md) *(resolved)*
@@ -175,6 +188,9 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#059: Nowrap Viewer Hscroll Locked at 0 on Wide-Char Lines](059-nowrap-wide-char-hscroll-lock.md) *(resolved)*
 
 ### Performance & Resource Optimization
+- [#104: Quadratic Memory Slicing Allocation in `sanitizeChafaPayload`](104-sanitize-chafa-payload-quadratic-slice-alloc.md) *(resolved)*
+- [#108: Filesystem Walk Lacks Upper Bound on Total Entry Count](108-filesystem-walk-uncapped-entry-count.md) *(resolved)*
+- [#109: `viewerCache` Uses Insertion-Order FIFO Eviction Instead of True LRU](109-viewer-cache-lru-recency-refresh.md) *(resolved)*
 - [#084: Horizontal Scroll Recomputes and Slices Entire File in `computeRows`](084-viewer-hscroll-recomputes-full-file-rows.md) *(resolved)*
 - [#020: No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread](020-no-viewer-cache-blocking-highlight.md) *(partial — cache done)*
 - [#011: `sliceStyled` Allocates a String Suffix Per Character (O(n²))](011-slicestyled-quadratic-suffix-alloc.md) *(resolved)*
@@ -196,6 +212,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#054: Redundant `getRenderedMarkdownLines` Invocation in `buildRightRows`](054-redundant-rendered-markdown-line-call.md) *(resolved)*
 
 ### User Experience & Keyboard Navigation
+- [#105: Multi-Character Pasting and Non-BMP Unicode Ignored in Search and Filter Modes](105-search-filter-multi-char-paste-surrogate-pairs.md) *(resolved)*
 - [#101: Native Decode Probe (`a=q`) to Detect Undecodable Payloads and Fall Back](101-native-decode-probe-query.md) *(resolved)*
 - [#071: Kitty Native Image Mime Gate Restricts to PNG Only, Bypassing Native JPEG/WebP Support](071-kitty-native-image-gate-jpeg-webp.md) *(resolved)*
 - [#075: Number Settings Are Uneditable in TUI Settings Menu](075-settings-menu-number-field-uneditable.md) *(resolved)*
@@ -205,7 +222,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#055: `isMarkdownPath` Excludes Common Markdown Extensions (`.mdx`, `.mkd`, `.mdown`)](055-markdown-extensions-whitelist.md) *(resolved)*
 
 ### Technical Debt & Code Robustness
-- [#079: Shallow `readonly` on `NavigatorSettings` Leaves Nested Section Properties Mutable](079-settings-shallow-readonly-nested-interfaces.md) *(resolved)*
+- [#110: Keybinding Help Description and Documentation Drift Following Native Image Rendering](110-help-keybinding-description-native-image-drift.md) *(resolved)*
 - [#083: `sliceStyled` Only Handles CSI Sequences, Ignoring OSC Hyperlink Sequences](083-viewer-slicestyled-ignores-osc-sequences.md) *(resolved)*
 - [#086: `deepFreezeDefaults` Performs Shallow Two-Level Freeze Instead of Recursive Deep Freeze](086-settings-deepfreezedefaults-shallow-freeze.md) *(resolved)*
 - [#087: `NavigatorConfigField` Interface Declares Unused and Dead Properties](087-settings-config-field-unused-properties.md) *(resolved)*

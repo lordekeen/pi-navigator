@@ -246,6 +246,10 @@ export async function readGitState(cwd: string, repo?: RepoInfo): Promise<GitSta
     });
   }
 
+  // A failed status read must not masquerade as a clean tree: keep the state
+  // available (branch/counts/history are still valid) but surface the failure
+  // so the pane shows the error row instead of a false "Clean" line (Issue #107).
+  const statusFailed = statusRes.status === "error" || statusRes.status === "missing";
   return {
     available: true,
     branch: detached ? null : branchName,
@@ -255,6 +259,7 @@ export async function readGitState(cwd: string, repo?: RepoInfo): Promise<GitSta
     unstaged,
     staged,
     history,
+    error: statusFailed ? "git status failed \u2014 changes not listed (press r to retry)" : undefined,
     refreshedAt: Date.now(),
   };
 }
@@ -372,11 +377,12 @@ export async function readCommitDiff(cwd: string, shortHash: string): Promise<Co
   let deletions = 0;
   if (statRes.status === "ok") {
     for (const raw of statRes.stdout.split("\n")) {
-      const m = raw.match(/^(\d+)\s+(\d+)\s+(.+)$/);
-      if (!m) continue; // skip binary entries and the summary line
+      const m = raw.match(/^(\d+|-)\s+(\d+|-)\s+(.+)$/);
+      if (!m) continue; // skip the summary line
       filesChanged += 1;
-      insertions += Number.parseInt(m[1] ?? "0", 10) || 0;
-      deletions += Number.parseInt(m[2] ?? "0", 10) || 0;
+      // Binary rows emit "-" instead of numeric counts; leave those at 0 (Issue #106).
+      if (m[1] !== "-") insertions += Number.parseInt(m[1] ?? "0", 10) || 0;
+      if (m[2] !== "-") deletions += Number.parseInt(m[2] ?? "0", 10) || 0;
     }
   }
 
