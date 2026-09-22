@@ -69,6 +69,7 @@ function activeSupport(overrides: Partial<ImageSupport> = {}): ImageSupport {
     chafa: { state: "ok", binary: "chafa", version: { major: 1, minor: 18 } },
     config: { ...DEFAULT_PI_CHAFA_SUBSET },
     hostShowImages: true,
+    hostImageWidthCells: 60,
     active: true,
     ...overrides,
   };

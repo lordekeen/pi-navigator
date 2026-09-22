@@ -12,7 +12,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { MAX_HIGHLIGHT_LINES } from "../constants";
+import { IMAGE_ERROR_MAX_CHARS, MAX_HIGHLIGHT_LINES } from "../constants";
 import {
   computeRows,
   decodeUtf8Head,
@@ -535,6 +535,149 @@ describe("loadFile", () => {
     expect(Object.keys(file).sort()).toEqual(
       ["imageTier", "kind", "lines", "message", "mtimeMs", "relPath", "sizeBytes"].sort(),
     );
+  });
+
+  // ── Native image renderer seam (§12.2) ──
+
+  describe("loadFile native image seam (§12.2)", () => {
+    it("renders through the native seam on ok: native tier, imageLines/cols/rows, empty lines, message preserved", async () => {
+      const path = await writePng("native-ok.png");
+      const card = await loadFile(path, "native-ok.png");
+      const native: ImageRenderer = async (_absPath, req) => ({
+        ok: true,
+        lines: ["\x1b]10;…\x1b\\"],
+        cols: req.cols,
+        rows: req.rows,
+      });
+      const file = await loadFile(path, "native-ok.png", {
+        renderNativeImage: native,
+        image: { cols: 60, rows: 20 },
+      });
+      expect(file.kind).toBe("image");
+      expect(file.imageTier).toBe("native");
+      expect(file.imageLines).toEqual(["\x1b]10;…\x1b\\"]);
+      expect(file.imageCols).toBe(60);
+      expect(file.imageRows).toBe(20);
+      expect(file.lines).toEqual([]);
+      expect(file.message).toBe(card.message); // size + dimensions message intact
+      expect(file.sizeBytes).toBe(64);
+      expect(file.mtimeMs).toBe(card.mtimeMs);
+      expect(file.imageError).toBeUndefined();
+    });
+
+    it("calls the native seam first and never the chafa seam when native succeeds", async () => {
+      const path = await writePng("native-first.png");
+      const order: string[] = [];
+      const native: ImageRenderer = async () => {
+        order.push("native");
+        return { ok: true, lines: ["n"], cols: 1, rows: 1 };
+      };
+      const chafa: ImageRenderer = async () => {
+        order.push("chafa");
+        return { ok: true, lines: ["c"], cols: 1, rows: 1 };
+      };
+      const file = await loadFile(path, "native-first.png", {
+        renderNativeImage: native,
+        renderImage: chafa,
+        image: { cols: 40, rows: 10 },
+      });
+      expect(order).toEqual(["native"]);
+      expect(file.imageTier).toBe("native");
+      expect(file.imageLines).toEqual(["n"]);
+    });
+
+    it("falls through native → chafa in order when native fails cleanly, landing on the chafa output", async () => {
+      const path = await writePng("native-fallback.png");
+      const order: string[] = [];
+      const native: ImageRenderer = async () => {
+        order.push("native");
+        return { ok: false, reason: "terminal protocol unsupported" };
+      };
+      const chafa: ImageRenderer = async (_absPath, req) => {
+        order.push("chafa");
+        return { ok: true, lines: ["\x1b[32m██\x1b[0m"], cols: req.cols, rows: req.rows };
+      };
+      const file = await loadFile(path, "native-fallback.png", {
+        renderNativeImage: native,
+        renderImage: chafa,
+        image: { cols: 30, rows: 8 },
+      });
+      expect(order).toEqual(["native", "chafa"]);
+      expect(file.kind).toBe("image");
+      expect(file.imageTier).toBe("chafa");
+      expect(file.imageLines).toEqual(["\x1b[32m██\x1b[0m"]);
+      expect(file.imageCols).toBe(30);
+      expect(file.imageRows).toBe(8);
+      expect(file.imageError).toBeUndefined();
+    });
+
+    it("returns a metadata card with the native reason when native fails cleanly and no chafa seam exists", async () => {
+      const path = await writePng("native-only-fail.png");
+      const file = await loadFile(path, "native-only-fail.png", {
+        renderNativeImage: async () => ({ ok: false, reason: "no kitty graphics support" }),
+        image: { cols: 40, rows: 10 },
+      });
+      expect(file.kind).toBe("image");
+      expect(file.imageTier).toBe("metadata");
+      expect(file.imageError).toBe("no kitty graphics support");
+      expect(file.imageLines).toBeUndefined();
+    });
+
+    it("carries the chafa reason (not the native one) when both seams fail cleanly", async () => {
+      const path = await writePng("both-fail.png");
+      const file = await loadFile(path, "both-fail.png", {
+        renderNativeImage: async () => ({ ok: false, reason: "native reason" }),
+        renderImage: async () => ({ ok: false, reason: "chafa reason" }),
+        image: { cols: 40, rows: 10 },
+      });
+      expect(file.kind).toBe("image");
+      expect(file.imageTier).toBe("metadata");
+      expect(file.imageError).toBe("chafa reason");
+    });
+
+    it("treats a throwing native seam as a hard failure: metadata card with the message, chafa never called", async () => {
+      const path = await writePng("native-throw.png");
+      let chafaCalled = false;
+      const file = await loadFile(path, "native-throw.png", {
+        renderNativeImage: async () => {
+          throw new Error("native renderer exploded");
+        },
+        renderImage: async () => {
+          chafaCalled = true;
+          return { ok: true, lines: ["unused"], cols: 1, rows: 1 };
+        },
+        image: { cols: 40, rows: 10 },
+      });
+      expect(file.kind).toBe("image");
+      expect(file.imageTier).toBe("metadata");
+      expect(file.imageError).toBe("native renderer exploded");
+      expect(chafaCalled).toBe(false);
+      expect(file.imageLines).toBeUndefined();
+    });
+
+    it("bounds a long native clean-failure reason to IMAGE_ERROR_MAX_CHARS", async () => {
+      const path = await writePng("native-long.png");
+      const file = await loadFile(path, "native-long.png", {
+        renderNativeImage: async () => ({ ok: false, reason: "x".repeat(300) }),
+        image: { cols: 40, rows: 10 },
+      });
+      expect(file.kind).toBe("image");
+      expect(file.imageTier).toBe("metadata");
+      expect(file.imageError).toBe("x".repeat(IMAGE_ERROR_MAX_CHARS - 1) + "\u2026");
+      expect(file.imageError?.length ?? 0).toBeLessThanOrEqual(IMAGE_ERROR_MAX_CHARS);
+    });
+
+    it("produces the plain metadata card with no imageError when only image opts are given (no seam)", async () => {
+      const path = await writePng("no-seam.png");
+      const bare = await loadFile(path, "no-seam.png");
+      const file = await loadFile(path, "no-seam.png", { image: { cols: 40, rows: 10 } });
+      expect(file.kind).toBe("image");
+      expect(file.imageTier).toBe("metadata");
+      expect(file.imageError).toBeUndefined();
+      expect("imageError" in file).toBe(false);
+      // Identical shape to the no-opts metadata card.
+      expect({ ...file, mtimeMs: 0 }).toEqual({ ...bare, mtimeMs: 0 });
+    });
   });
 
   it("ignores the image params on markdown files (rawText regression)", async () => {

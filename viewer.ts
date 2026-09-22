@@ -300,14 +300,22 @@ async function highlightText(text: string, relPath: string): Promise<string[]> {
   }
 }
 
-/** Optional geometry hint for an image load through the render seam. */
+/**
+ * Optional image-load parameters for the render seams: geometry hint plus
+ * the chafa and/or native renderer injections. At least one seam makes an
+ * image file render; with neither, the metadata card stands (today's
+ * default).
+ */
 export interface LoadFileOptions {
   image?: { cols: number; rows: number };
+  renderImage?: ImageRenderer;
+  renderNativeImage?: ImageRenderer;
 }
 
 /**
- * Injected image renderer seam: renders an image file into chafa ANSI rows at
- * the requested geometry. loadFile treats any throw as a failed render.
+ * Injected image renderer seam: renders an image file into display rows at
+ * the requested geometry (chafa ANSI rows, or native kitty/iTerm2 sequences).
+ * loadFile treats any throw as a failed render.
  */
 export type ImageRenderer = (
   absPath: string,
@@ -328,7 +336,7 @@ function boundImageError(reason: string): string {
 export async function loadFile(
   absPath: string,
   relPath: string,
-  opts?: { image?: { cols: number; rows: number }; renderImage?: ImageRenderer },
+  opts?: LoadFileOptions,
 ): Promise<ViewerFile> {
   let sizeBytes: number;
   let mtimeMs: number;
@@ -358,9 +366,46 @@ export async function loadFile(
       dims = undefined;
     }
     const message = [formatSize(sizeBytes), dims].filter(Boolean).join(" \u00b7 ");
-    // Optional injected chafa render seam: render the image into ANSI rows,
-    // falling back to the metadata card (with a bounded hint) on any failure.
-    if (opts?.renderImage && opts.image) {
+    // Renderer seams (spec §13): the native seam runs FIRST (§7.1), then chafa
+    // (today's behavior, byte-identical for chafa-only callers). A thrown
+    // renderer is a hard failure — card with the bounded reason, no fallback
+    // (spec §7.3). A clean {ok:false} native failure falls through to chafa
+    // when present; with no chafa seam it becomes the card hint.
+    let nativeReason: string | undefined;
+    if (opts?.image !== undefined && opts.renderNativeImage !== undefined) {
+      try {
+        const out = await opts.renderNativeImage(absPath, opts.image);
+        if (out.ok) {
+          return {
+            kind: "image",
+            relPath,
+            sizeBytes,
+            mtimeMs,
+            lines: [],
+            message,
+            imageTier: "native",
+            imageLines: out.lines,
+            imageCols: out.cols,
+            imageRows: out.rows,
+          };
+        }
+        nativeReason = out.reason;
+      } catch (err) {
+        return {
+          kind: "image",
+          relPath,
+          sizeBytes,
+          mtimeMs,
+          lines: [],
+          message,
+          imageTier: "metadata",
+          imageError: boundImageError(
+            err instanceof Error ? err.message : "unexpected renderer failure",
+          ),
+        };
+      }
+    }
+    if (opts?.image !== undefined && opts.renderImage !== undefined) {
       try {
         const out = await opts.renderImage(absPath, opts.image);
         if (out.ok) {
@@ -402,6 +447,8 @@ export async function loadFile(
         };
       }
     }
+    // No seam (or only a clean native failure): the existing metadata card;
+    // the native reason is the card hint when it was the last failure.
     return {
       kind: "image",
       relPath,
@@ -410,6 +457,7 @@ export async function loadFile(
       lines: [],
       message,
       imageTier: "metadata",
+      ...(nativeReason !== undefined ? { imageError: boundImageError(nativeReason) } : {}),
     };
   }
 

@@ -26,10 +26,11 @@ import {
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 
-import { Text } from "@earendil-works/pi-tui";
+import { getCapabilities, Text } from "@earendil-works/pi-tui";
 
 import {
   IMAGE_EXTENSIONS,
+  IMAGE_NATIVE_CACHE_MAX_CHARS,
   MAX_POLL_INTERVAL_MS,
   MAX_VIEWER_CACHE_ENTRIES,
   NAVIGATOR_IMAGES_ENV,
@@ -48,7 +49,7 @@ import {
 } from "./git";
 import { ICONS_ENV } from "./icons";
 import { buildHelpLines, HELP_COMMANDS_TITLE, HELP_HEADER_PREFIX, HELP_HINT, HELP_ENTRY_TYPE, helpCommandColumnWidth, NAVIGATOR_CMD_PREFIX, NAVIGATOR_SUBCOMMANDS, type NavigatorHelpData } from "./help";
-import { makeDeferredImageSupport, resolveImageSupport, runChafaRender, type ImageSupport } from "./images";
+import { makeDeferredImageSupport, resolveImageSupport, runChafaRender, runNativeRender, type ImageSupport } from "./images";
 import { loadNavigatorSettings, writeNavigatorSettings } from "./settings";
 import { openSettingsMenu } from "./settings_menu";
 import { styleDiffLines } from "./diff";
@@ -244,6 +245,30 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
         return out.ok ? { ok: true, lines: out.lines, cols: req.cols, rows: req.rows } : out;
       };
 
+      /**
+       * Injected native render seam (same ImageRenderer contract and abort
+       * lifecycle as renderImage): owns the abort controller and gates on the
+       * effective tier — a strict-native session with no capability rejects
+       * cleanly so the loader can degrade per file under auto. runNativeRender
+       * never throws; every failure is a bounded {ok:false}.
+       */
+      const renderNativeImage = async (
+        absPath: string,
+        req: { cols: number; rows: number },
+      ): Promise<{ ok: true; lines: string[]; cols: number; rows: number } | { ok: false; reason: string }> => {
+        const support = imageSupport;
+        if (support.tier !== "native" || support.nativeProtocol === null) {
+          return { ok: false, reason: "native rendering is not available" };
+        }
+        imageAbort?.abort();
+        const controller = new AbortController();
+        imageAbort = controller;
+        return runNativeRender(absPath, req, {
+          protocol: support.nativeProtocol,
+          signal: controller.signal,
+        });
+      };
+
       const loadFileCached = async (relPath: string, opts?: LoadFileOptions): Promise<ViewerFile> => {
         const absPath = join(cwd, relPath);
         let mtimeMs: number;
@@ -257,21 +282,48 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
         }
         const image = opts?.image;
         const isImage = IMAGE_EXTENSIONS.has(extOf(relPath));
-        const useChafa = isImage && image !== undefined && imageSupport.active;
-        const variant = useChafa && image ? imageVariant(image, imageSupport) : "";
+        const s = imageSupport;
+        // Tier/mode-aware gating (spec §7.1, §7.3): native when the tier says
+        // so; chafa when the tier says so or under auto as the per-file
+        // fallback for a non-PNG/oversized file (mime gate, D5).
+        const useNative =
+          isImage && image !== undefined && s.tier === "native" && s.nativeProtocol !== null;
+        const useChafa = isImage && image !== undefined && s.tier === "chafa";
+        const chafaFallback =
+          isImage &&
+          image !== undefined &&
+          s.mode === "auto" &&
+          s.piChafa.present &&
+          s.chafa.state === "ok";
+        const chafaSeam = useChafa || chafaFallback;
+        const variant =
+          useNative && image
+            ? `native:${s.nativeProtocol}:${image.cols}x${image.rows}`
+            : chafaSeam && image
+              ? imageVariant(image, s)
+              : "";
         const cached = viewerCache.get(relPath);
         if (cached && Math.abs(cached.mtimeMs - mtimeMs) <= 1 && cached.variant === variant) {
           return cached.file;
         }
         let file: ViewerFile;
-        if (useChafa && image) {
-          file = await loadFile(absPath, relPath, { image, renderImage });
+        if ((useNative || chafaSeam) && image) {
+          file = await loadFile(absPath, relPath, {
+            image,
+            ...(useNative ? { renderNativeImage } : {}),
+            ...(chafaSeam ? { renderImage } : {}),
+          });
         } else {
           file = await loadFile(absPath, relPath);
         }
         // Cache only results that carry an mtime (text/binary/image/truncated);
-        // error cards have none and are cheap to rebuild.
-        if (file.mtimeMs !== undefined) {
+        // error cards have none and are cheap to rebuild. Native over-cap
+        // renders (D7) display but are not retained: the 16-entry cache is not
+        // a byte bound, so the base64 rows are dropped on the next open.
+        const nativeOverCap =
+          file.imageTier === "native" &&
+          (file.imageLines ?? []).join("").length > IMAGE_NATIVE_CACHE_MAX_CHARS;
+        if (file.mtimeMs !== undefined && !nativeOverCap) {
           if (viewerCache.size >= MAX_VIEWER_CACHE_ENTRIES) {
             const oldest = viewerCache.keys().next();
             if (!oldest.done) viewerCache.delete(oldest.value);
@@ -312,6 +364,9 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
           const support = await resolveImageSupport(pi, imagePaths, loaded.settings, {
             previous: imageSupport,
             onWarning: notifyWarning,
+            // Host truth for the native ladder (D4): the alias-shared pi-tui
+            // instance reports the terminal as the host sees it.
+            capabilities: () => getCapabilities(),
           });
           if (closed) return;
           imageSupport = support;

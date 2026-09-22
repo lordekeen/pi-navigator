@@ -1045,6 +1045,7 @@ describe("makeDeferredImageSupport", () => {
       chafa: { state: "deferred" },
       config: DEFAULT_PI_CHAFA_SUBSET,
       hostShowImages: true,
+      hostImageWidthCells: 60,
       active: false,
     });
     expect(makeDeferredImageSupport("off").active).toBe(false);
@@ -1060,6 +1061,7 @@ describe("makeDeferredImageSupport", () => {
         chafa: { state: "deferred" },
         config: DEFAULT_PI_CHAFA_SUBSET,
         hostShowImages: true,
+        hostImageWidthCells: 60,
         active: false,
       });
     }
@@ -1117,6 +1119,7 @@ describe("resolveImageSupport", () => {
       version: { major: 1, minor: 18 },
     });
     expect(support.hostShowImages).toBe(true);
+    expect(support.hostImageWidthCells).toBe(60); // pi's default (Q2 amendment)
   });
 
   it("stays off when the mode is off, even with everything else present", async () => {
@@ -1445,6 +1448,24 @@ describe("resolveImageSupport", () => {
       },
     );
     expect(support.nativeProtocol).toBe("iterm2");
+    expect(support.tier).toBe("native");
+  });
+
+  it("carries the host imageWidthCells preference into the snapshot (Q2 amendment)", async () => {
+    const support = await resolveImageSupport(
+      chafaApi(),
+      paths,
+      { images: { mode: "auto" } },
+      {
+        readText: supportFiles({
+          [paths.userSettings]: JSON.stringify({ terminal: { imageWidthCells: 120 } }),
+        }),
+        exec: okProbeExec,
+        env: {},
+        capabilities: () => ({ images: "kitty" }),
+      },
+    );
+    expect(support.hostImageWidthCells).toBe(120);
     expect(support.tier).toBe("native");
   });
 });

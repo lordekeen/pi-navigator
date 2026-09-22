@@ -946,6 +946,12 @@ export interface ImageSupport {
   config: PiChafaSubset;
   hostShowImages: boolean;
   /**
+   * pi's `terminal.imageWidthCells` — the preferred native width (spec §7.2
+   * Q2 amendment); pi defaults it to 60. Step 5 consumes it for the native
+   * geometry (min(paneCols, hostImageWidthCells)); this step only carries it.
+   */
+  hostImageWidthCells: number;
+  /**
    * #057-era flag kept temporarily: true ⇔ tier === "chafa". Removed when
    * the view migrates to tier (step 5).
    */
@@ -962,6 +968,8 @@ export function makeDeferredImageSupport(mode: NavigatorImageMode): ImageSupport
     chafa: { state: "deferred" },
     config: { ...DEFAULT_PI_CHAFA_SUBSET },
     hostShowImages: true,
+    // pi's default width preference (spec §7.2 Q2 amendment).
+    hostImageWidthCells: 60,
     active: false,
   };
 }
@@ -996,10 +1004,10 @@ export async function resolveImageSupport(
   deps?: ImageSupportDeps,
 ): Promise<ImageSupport> {
   const readText = deps?.readText;
-  const hostShowImages = readHostImageSettings(
+  const hostSettings = readHostImageSettings(
     { userSettings: paths.userSettings },
     { readText },
-  ).showImages;
+  );
   const piChafa = detectPiChafa(
     api,
     { userSettings: paths.userSettings, projectSettings: paths.projectSettings },
@@ -1046,7 +1054,7 @@ export async function resolveImageSupport(
 
   // Effective tier (spec §5.4). Host image settings always gate.
   let tier: ImageTier;
-  if (!hostShowImages || mode === "off") {
+  if (!hostSettings.showImages || mode === "off") {
     tier = "none";
   } else if (mode === "chafa") {
     tier = piChafa.present && chafa.state === "ok" ? "chafa" : "none";
@@ -1069,7 +1077,8 @@ export async function resolveImageSupport(
     piChafa,
     chafa,
     config,
-    hostShowImages,
+    hostShowImages: hostSettings.showImages,
+    hostImageWidthCells: hostSettings.imageWidthCells,
     active: tier === "chafa",
   };
 }
