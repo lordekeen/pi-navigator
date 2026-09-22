@@ -22,7 +22,7 @@ The overlay is a pure TUI component; it never touches the filesystem or git dire
 
 - **Runtime:** Node ≥ 22, ESM (`"type": "module"`). TypeScript strict mode with bundler resolution (`tsconfig.json`).
 - **Peer dependencies:** `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` are peer deps — they are provided by the host pi install, not bundled. Don't add them as regular dependencies.
-- **No external runtime deps.** The viewer uses pi-native `highlightCode` + `getLanguageFromPath` for syntax highlighting. No shelling out to external binaries, no npm highlighter deps. Keep it that way — with one carve-out: **chafa** is an optional, user-installed renderer, used only when the user opts in (`images.mode: "chafa"` / `PI_NAV_IMAGES=1`) and the pi-chafa extension is installed; it is never required, never bundled, and never invoked for any other purpose.
+- **No external runtime deps.** The viewer uses pi-native `highlightCode` + `getLanguageFromPath` for syntax highlighting. No shelling out to external binaries, no npm highlighter deps. Keep it that way — with one carve-out: **chafa** is an optional, user-installed renderer, used only when the user opts in (`images.mode: "chafa"` / `PI_NAV_IMAGES=1`) and the pi-chafa extension is installed; it is never required, never bundled, and never invoked for any other purpose. The native image tier (`images.mode: "native"`/`"auto"`) is opt-in too and reuses the peer pi-tui kitty/iTerm2 encoders — no runtime dependency and no protocol code of our own.
 - **Local install for dogfooding:** this extension is registered as a local path in pi settings. To (re)install from this checkout:
   ```bash
   pi install .            # global (~/.pi/agent/settings.json)

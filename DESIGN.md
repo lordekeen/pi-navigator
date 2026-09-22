@@ -155,9 +155,20 @@ All color is **semantic and theme-delegated**. The overlay calls `NavigatorTheme
 
 An agent adding a new surface should reuse the closest semantic role (e.g. a new "notice" → `warning`; a new badge → match the existing git badge palette) rather than introducing a new token.
 
-### Image tier (chafa)
+### Image tiers (native / chafa)
 
-Rendered images are the **one sanctioned exception** to "no hardcoded colors": chafa-authored ANSI SGR colors pass through the overlay because they are produced by the user's **own** tool and configuration (`~/.pi/agent/pi-chafa.json` + `CHAFA_*` env), not by pi-navigator — pi-navigator itself hardcodes none. Every chafa row is contained by an enforced trailing `\x1b[0m` reset before padding, so a chafa color can never leak into the next row, the gutter, or the frame.
+Rendered images are the **one sanctioned exception** to "no hardcoded colors": the
+bytes that reach the terminal are authored by the user's own tools and terminal,
+never by pi-navigator — chafa ANSI SGR colors from the user's
+`~/.pi/agent/pi-chafa.json` + `CHAFA_*` configuration, or pi-tui-encoded
+kitty/iTerm2 sequences in the native tier (`images.mode: native` / `auto`).
+pi-navigator itself hardcodes no colors. Every chafa row is contained by an
+enforced trailing `\x1b[0m` reset before padding, so a chafa color can never leak
+into the next row, the gutter, or the frame. Native rows are **pass-through**
+(spec §8, D9): the sequence row is emitted first and space-filled only on the
+right — never truncated or re-anchored, because the terminal anchors the image
+where the sequence appears (`frame.isImageLine`), and `joinLeftRight` returns an
+image side unchanged rather than width-joining it.
 
 ## Typography
 
@@ -216,7 +227,7 @@ When adding a component, declare it here and reuse an existing color role. Compo
 ### Do
 - **Do** route every color through `NavigatorTheme` (`theme.ts`) so it follows the user's active pi theme.
 - **Do** keep the render path pure: data enters via `setTree` / `setGitState` / `openRelPath`; `render(width)` returns strings.
-- **Do** enforce width-safety on every row (`visibleWidth` / `truncateToWidth`), at every terminal size the render suite covers.
+- **Do** enforce width-safety on every row (`visibleWidth` / `truncateToWidth`), at every terminal size the render suite covers. Native image rows are the sole exception: their width comes from the sequence's own cell metrics, so they are emitted first and space-filled on the right only.
 - **Do** truncate styled strings with an **empty** ellipsis to avoid `truncateToWidth`'s `\x1b[0m`-wrapped `"..."` leaking bright default (Issue #010).
 - **Do** normalize `\r\n` / lone `\r` to `\n` before highlighting/splitting (Issue #009).
 - **Do** bound memory by `MAX_HIGHLIGHT_BYTES` / `MAX_HIGHLIGHT_LINES`; read a capped head for oversized files.
@@ -228,3 +239,4 @@ When adding a component, declare it here and reuse an existing color role. Compo
 - **Don't** touch the filesystem or git from `navigator.ts`; keep async/data work in `index.ts`.
 - **Don't** assume `string.length === visibleWidth` — ANSI escapes and wide characters break that.
 - **Don't** truncate a plain string with the default ellipsis and then wrap it in a style — the injected reset closes the style early and the ellipsis renders in bright default.
+- **Don't** width-process a native image row (`isImageLine`): no truncate, no re-anchor — right-side space fill only, so the sequence keeps its anchor column (spec §8, D9).

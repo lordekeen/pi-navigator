@@ -824,7 +824,7 @@ function paintViewer(scr) {
   if (model.kind === "error") { card("Cannot read", [model.rel, model.message, "press Tab, then pick another file"], "fg-error"); return; }
   if (model.kind === "binary") { card("Binary file", [model.rel, model.size, "content not rendered"], "fg-warning"); return; }
   if (model.kind === "image") {
-    card("Image", [model.rel, `${model.size} \u00b7 ${model.dims}`, "metadata card in v1; native protocol / chafa", "rendering is the plan \u00a78 spike"], "fg-accent bold");
+    card("Image", [model.rel, `${model.size} \u00b7 ${model.dims}`, "native (kitty/iTerm2) or chafa when enabled", "images.mode: off | chafa | native | auto"], "fg-accent bold");
     return;
   }
 
@@ -986,6 +986,7 @@ function render() {
     scr.text(OX + OVERLAY_W - 2 - Array.from(label).length, FOOTER_Y, label, "fg-dim");
   }
   paintToast(scr, now);
+  // pi-lens-ignore: no-inner-html
   term.innerHTML = scr.toHTML();
 }
 
