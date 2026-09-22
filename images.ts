@@ -842,6 +842,84 @@ export function resolveNativeProtocol(deps?: {
 // ── native render (spec §5.3, D3, D5, D7) ──
 
 /** One native render's context: protocol plus abort/read seams. */
+// ── Kitty decode probe (Issue #101) ───────────────────────────────────────
+// The kitty graphics protocol's query action (`a=q`) makes a terminal attempt
+// to load the payload and reply, per the spec: with an id present, "the
+// terminal emulator will reply after trying to load the image, saying whether
+// loading was successful or not". One 1x1 PNG probe per session tells us
+// whether native payloads are actually decodable instead of trusting
+// declarations and advertisement (verified 68-byte gray+alpha PNG).
+
+export type KittyProbeVerdict = "ok" | "error" | "no-reply";
+
+/** 1x1 PNG sample payload for the kitty `a=q` decode probe. */
+export const KITTY_PROBE_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+
+/** Build the kitty graphics query escape for the 1x1 PNG probe (a=q, t=d). */
+export function buildKittyProbeQuery(id: number): string {
+  return `\x1b_Ga=q,t=d,f=100,i=${id};${KITTY_PROBE_PNG_BASE64}\x1b\\`;
+}
+
+/**
+ * Incremental state for matching a probe reply across input chunks.
+ * The reply is `\x1b_Gi=<id>;OK\x1b\\` (terminals may also use BEL as the
+ * string terminator); an error reply carries a printable message instead of
+ * `OK`. Replies addressed to other ids are left for other consumers.
+ */
+export interface KittyProbeState {
+  buffer: string;
+}
+
+export function createKittyProbeState(): KittyProbeState {
+  return { buffer: "" };
+}
+
+/**
+ * Feed one raw input chunk while a probe is pending. Returns:
+ * - "pending": not settled yet (wait for more input; never consume)
+ * - "foreign": this chunk does not belong to our probe's reply (consume=false)
+ * - "ok" | "error": our probe's reply completed (the caller may consume)
+ */
+export function consumeKittyProbeReply(
+  state: KittyProbeState,
+  data: string,
+  id: number,
+): "ok" | "error" | "pending" | "foreign" {
+  state.buffer += data;
+  const start = state.buffer.indexOf("\x1b_G");
+  if (start === -1) {
+    if (state.buffer.length > 8192) state.buffer = "";
+    return "foreign";
+  }
+  const head = state.buffer.slice(start);
+  const match = head.match(/^\x1b_Gi=(\d+);(.*)$/s);
+  if (!match) {
+    // A different kitty exchange (or a partial one): keep it in the buffer
+    // only while it could still become our reply.
+    if (!/^\x1b_Gi=\d+;/.test(head) && head.length > 128) state.buffer = "";
+    return "pending";
+  }
+  const matchId = Number(match[1]);
+  if (matchId !== id) {
+    state.buffer = "";
+    return "foreign";
+  }
+  const body = match[2] ?? "";
+  const term = body.indexOf("\x1b\\");
+  const bel = body.indexOf("\x07");
+  const end = term === -1 ? bel : term;
+  if (end === -1) {
+    // Our id but no terminator yet: wait for the rest of the chunk.
+    if (body.length > 4096) state.buffer = "";
+    return "pending";
+  }
+  state.buffer = "";
+  const text = body.slice(0, end).trim();
+  // Anything but the literal "OK" is the protocol's error message.
+  return text === "OK" ? "ok" : "error";
+}
+
 export interface NativeRenderCtx {
   protocol: NativeProtocol;
   signal?: AbortSignal;
@@ -849,6 +927,14 @@ export interface NativeRenderCtx {
   readBytes?: (path: string) => Promise<Uint8Array>;
   /** Optional environment dictionary (test seam; default process.env). */
   env?: Record<string, string | undefined>;
+  /**
+   * One-shot kitty decode probe (Issue #101): when present, a kitty render is
+   * gated on its verdict — an explicit "error" means the terminal cannot
+   * decode the payload (degrade to chafa/card); "ok" and "no-reply" keep
+   * the render (no-reply is conservative: terminals that do not answer
+   * queries must not be regressed).
+   */
+  probeDecode?: (mime: string) => Promise<KittyProbeVerdict>;
 }
 
 /**
@@ -932,6 +1018,22 @@ export async function runNativeRender(
     mime !== "image/webp"
   ) {
     return { ok: false, reason: bounded("kitty requires PNG, JPEG, or WebP") };
+  }
+
+  // b2) Kitty decode probe (Issue #101): an explicit terminal error means the
+  // payload cannot be decoded — degrade to chafa/card instead of emitting a
+  // sequence the terminal ignores. "ok" and "no-reply" proceed (no-reply is
+  // conservative: terminals that do not answer queries keep declared behavior).
+  if (ctx.protocol === "kitty" && ctx.probeDecode !== undefined) {
+    let verdict: KittyProbeVerdict;
+    try {
+      verdict = await ctx.probeDecode(mime);
+    } catch {
+      verdict = "no-reply";
+    }
+    if (verdict === "error") {
+      return { ok: false, reason: bounded("terminal cannot decode this image format") };
+    }
   }
 
   // c) Bounded read (D7); any read error is a clean failure.

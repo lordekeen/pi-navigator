@@ -65,7 +65,10 @@ The tier ladder becomes **native → chafa → metadata**, selected by a new
   the user opts in.
 - Reuse pi-tui's public API end to end: capability detection and overrides,
   image dimension sniffing, cell sizing, protocol encoding, kitty metadata and
-  placement semantics. **pi-navigator generates no protocol bytes itself.**
+  placement semantics. **pi-navigator generates no protocol bytes itself** —
+  the single exception is the one-shot kitty `a=q` decode probe (Issue #101):
+  a query string with a 1×1 PNG payload, written through the TUI and answered
+  by the terminal itself; it is not a rendering emission.
 - Resolve native capability with a pi-chafa-style, instance-independent ladder
   (`getCapabilities` → settings/`PI_IMAGE_PROTOCOL` → null), so a non-shared
   pi-tui instance cannot silently disable the tier. Terminals pi-tui

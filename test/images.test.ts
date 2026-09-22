@@ -18,7 +18,11 @@ import { IMAGE_NATIVE_MAX_BYTES } from "../constants";
 import {
   DEFAULT_PI_CHAFA_SUBSET,
   buildSymbolsArgs,
+  buildKittyProbeQuery,
+  consumeKittyProbeReply,
+  createKittyProbeState,
   detectPiChafa,
+  KITTY_PROBE_PNG_BASE64,
   loadPiChafaConfig,
   makeDeferredImageSupport,
   probeChafa,
@@ -30,7 +34,7 @@ import {
   runNativeRender,
   sanitizeChafaPayload,
 } from "../images";
-import type { ExecFn, PiChafaApi, ReadText } from "../images";
+import type { ExecFn, KittyProbeVerdict, PiChafaApi, ReadText } from "../images";
 
 /** Fixture readText: returns the mapped file contents, undefined otherwise. */
 const readTextOf = (entries: Record<string, string>): ReadText => (path) =>
@@ -1105,6 +1109,49 @@ describe("resolveNativeProtocol", () => {
   });
 });
 
+describe("kitty decode probe helpers (Issue #101)", () => {
+  it("buildKittyProbeQuery emits the query action with the 1x1 PNG payload", () => {
+    const q = buildKittyProbeQuery(31);
+    expect(q.startsWith("\x1b_Ga=q,t=d,f=100,i=31;")).toBe(true);
+    expect(q).toContain(KITTY_PROBE_PNG_BASE64);
+    expect(q.endsWith("\x1b\\")).toBe(true);
+  });
+
+  it("consumeKittyProbeReply matches the OK reply terminated by ESC ST", () => {
+    expect(consumeKittyProbeReply(createKittyProbeState(), "\x1b_Gi=7;OK\x1b\\", 7)).toBe("ok");
+  });
+
+  it("consumeKittyProbeReply matches the OK reply terminated by BEL", () => {
+    expect(consumeKittyProbeReply(createKittyProbeState(), "\x1b_Gi=7;OK\x07", 7)).toBe("ok");
+  });
+
+  it("treats any non-OK message as an error reply", () => {
+    expect(
+      consumeKittyProbeReply(createKittyProbeState(), "\x1b_Gi=7;Invalid image data\x1b\\", 7),
+    ).toBe("error");
+  });
+
+  it("reassembles replies split across input chunks", () => {
+    const state = createKittyProbeState();
+    expect(consumeKittyProbeReply(state, "\x1b_Gi=7;O", 7)).toBe("pending");
+    expect(consumeKittyProbeReply(state, "K\x1b\\", 7)).toBe("ok");
+  });
+
+  it("waits for the terminator once our id is seen", () => {
+    const state = createKittyProbeState();
+    expect(consumeKittyProbeReply(state, "\x1b_Gi=7;", 7)).toBe("pending");
+    expect(consumeKittyProbeReply(state, "boom\x1b\\", 7)).toBe("error");
+  });
+
+  it("ignores replies addressed to other ids and unrelated input", () => {
+    const state = createKittyProbeState();
+    expect(consumeKittyProbeReply(state, "\x1b_Gi=8;OK\x1b\\", 7)).toBe("foreign");
+    expect(consumeKittyProbeReply(state, "plain keystrokes", 7)).toBe("foreign");
+    // The buffer resets, so our own reply still matches afterwards.
+    expect(consumeKittyProbeReply(state, "\x1b_Gi=7;OK\x1b\\", 7)).toBe("ok");
+  });
+});
+
 describe("resolveChafaGeometry", () => {
   it("lets the pane win when it is narrower than the preference", () => {
     expect(
@@ -1721,6 +1768,56 @@ describe("runNativeRender", () => {
     });
     expect(result).toEqual({ ok: false, reason: "kitty requires PNG, JPEG, or WebP" });
     expect(readBytes).not.toHaveBeenCalled();
+  });
+
+  it("runNativeRender degrades when the decode probe reports an error (Issue #101)", async () => {
+    withProtocol("kitty");
+    const readBytes = readBytesOf(PNG_1X1_BASE64);
+    const result = await runNativeRender("/tmp/pixel.png", geometry, {
+      protocol: "kitty",
+      readBytes,
+      probeDecode: async () => "error",
+    });
+    expect(result).toEqual({
+      ok: false,
+      reason: "terminal cannot decode this image format",
+    });
+    expect(readBytes).not.toHaveBeenCalled();
+  });
+
+  it("runNativeRender proceeds on probe ok and no-reply, and tolerates a throwing probe (Issue #101)", async () => {
+    withProtocol("kitty");
+    for (const verdict of ["ok", "no-reply"] as const) {
+      const readBytes = readBytesOf(PNG_1X1_BASE64);
+      const result = await runNativeRender("/tmp/pixel.png", geometry, {
+        protocol: "kitty",
+        readBytes,
+        probeDecode: async () => verdict,
+      });
+      expect(result.ok).toBe(true);
+    }
+    const throwing = readBytesOf(PNG_1X1_BASE64);
+    const result = await runNativeRender("/tmp/pixel.png", geometry, {
+      protocol: "kitty",
+      readBytes: throwing,
+      probeDecode: async () => {
+        throw new Error("boom");
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("runNativeRender only probes kitty renders, never iterm2 (Issue #101)", async () => {
+    withProtocol("iterm2");
+    const probeDecode = vi.fn<() => Promise<KittyProbeVerdict>>(async () => "error");
+    const readBytes = readBytesOf(PNG_1X1_BASE64);
+    const result = await runNativeRender("/tmp/pixel.png", geometry, {
+      protocol: "iterm2",
+      readBytes,
+      probeDecode,
+    });
+    expect(result.ok).toBe(true);
+    expect(probeDecode).not.toHaveBeenCalled();
   });
 
   it("runNativeRender refuses to render on known no-image terminals even when a protocol is forced (Issue #100)", async () => {

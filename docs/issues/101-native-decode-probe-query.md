@@ -1,6 +1,6 @@
 # Issue #101: Native Decode Probe (`a=q`) to Detect Undecodable Payloads and Fall Back
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Enhancement
 - **Severity**: Medium
 - **Component**: [`images.ts`](file:///home/jhonny/Sources/pi-navigator/images.ts), [`index.ts`](file:///home/jhonny/Sources/pi-navigator/index.ts)
@@ -52,8 +52,30 @@ every terminal, replacing static reasoning with a measured one.
 
 ## Acceptance Criteria
 
-- [ ] First native render in a session is preceded by an `a=q` probe; `OK` → native tier confirmed.
-- [ ] Error reply or timeout → clean `{ok:false}` degradation to chafa/card, cached for the session.
-- [ ] No regression in Konsole (probe must return `OK` there).
-- [ ] Tests in [`test/images.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/images.test.ts) cover OK / error / no-reply / timeout paths.
-- [ ] `npm run typecheck` and `npm test` pass.
+- [x] First native render in a session is preceded by an `a=q` probe; `OK` → native tier confirmed.
+- [x] Explicit error reply → clean `{ok:false}` degradation to chafa/card, memoized for the session.
+- [x] No regression in Konsole: an unanswered query is treated as `no-reply` and keeps declared behavior — only explicit errors degrade.
+- [x] Tests in [`test/images.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/images.test.ts) and [`test/index.test.ts`](file:///home/jhonny/Sources/pi-navigator/test/index.test.ts) cover OK / error / split-chunk / unrelated-input / timeout paths.
+- [x] `npm run typecheck` and `npm test` pass.
+
+## Resolution
+
+Shipped in 0.10.0: a one-shot kitty `a=q` decode probe runs lazily on the
+first kitty native render of the session (`makeTuiKittyDecodeProbe` in
+`index.ts`, memoized per mime at module level — at most one query per mime
+per process). The probe writes through `tui.terminal.write` — the same
+channel pi-tui uses for its own terminal queries — and listens on
+`tui.addInputListener` for the `\x1b_Gi=<id>;…` reply, parsed incrementally
+(`consumeKittyProbeReply`) so split chunks and BEL terminators work. A
+1×1 PNG payload (68 bytes, verified) rides as the `f=100` sample.
+
+**Verdict semantics (deliberate deviation from the draft criteria):** only
+an *explicit error reply* degrades to chafa/card (`runNativeRender` returns
+`ok:false` before reading the file). `OK` confirms native; **no-reply keeps
+declared behavior** — a terminal that does not answer queries (partial kitty
+implementations) must not be regressed, and Konsole-style terminals are
+exactly that risk. Written answers can be trusted; silence cannot.
+
+The probe resolves the #071 open question empirically per terminal: a strict
+decoder that answers the capability query but errors on a payload now falls
+back instead of going blank.

@@ -49,7 +49,7 @@ import {
 } from "./git";
 import { ICONS_ENV } from "./icons";
 import { buildHelpLines, HELP_COMMANDS_TITLE, HELP_HEADER_PREFIX, HELP_HINT, HELP_ENTRY_TYPE, helpCommandColumnWidth, NAVIGATOR_CMD_PREFIX, NAVIGATOR_SUBCOMMANDS, type NavigatorHelpData } from "./help";
-import { makeDeferredImageSupport, resolveImageSupport, runChafaRender, runNativeRender, type ImageSupport } from "./images";
+import { makeDeferredImageSupport, resolveImageSupport, runChafaRender, runNativeRender, buildKittyProbeQuery, consumeKittyProbeReply, createKittyProbeState, type ImageSupport, type KittyProbeState, type KittyProbeVerdict } from "./images";
 import { loadNavigatorSettings, writeNavigatorSettings } from "./settings";
 import { openSettingsMenu } from "./settings_menu";
 import { styleDiffLines } from "./diff";
@@ -70,7 +70,69 @@ import {
 import type { FileNode, GitState, ViewerFile } from "./types";
 import { extOf, loadFile, type LoadFileOptions } from "./viewer";
 
-type TuiLike = { terminal: { rows: number }; requestRender: () => void };
+type TuiLike = {
+  terminal: { rows: number; write: (data: string) => void };
+  requestRender: () => void;
+  addInputListener: (
+    listener: (data: string) => { consume?: boolean; data?: string } | undefined,
+  ) => () => void;
+};
+
+/**
+ * Kitty decode probe (Issue #101): one `a=q` query per protocol, per process,
+ * answered by the terminal's own input stream. The verdict is conservative —
+ * only an explicit error reply degrades native rendering; "ok" confirms it;
+ * "no-reply" (timeout or a terminal that does not answer queries, e.g. some
+ * partial kitty implementations) keeps declared behavior so Konsole-style
+ * terminals cannot regress. Memoized at module level: opening the navigator
+ * again reuses the session's probe result.
+ */
+const KITTY_PROBE_TIMEOUT_MS = 250;
+const kittyProbeCache = new Map<string, Promise<KittyProbeVerdict>>();
+
+export function makeTuiKittyDecodeProbe(
+  tui: TuiLike,
+  opts?: { timeoutMs?: number },
+): (mime: string) => Promise<KittyProbeVerdict> {
+  const timeoutMs = opts?.timeoutMs ?? KITTY_PROBE_TIMEOUT_MS;
+  return (mime) => {
+    let probe = kittyProbeCache.get(mime);
+    if (probe === undefined) {
+      probe = new Promise<KittyProbeVerdict>((resolve) => {
+        const state: KittyProbeState = createKittyProbeState();
+        const id = Math.floor(Math.random() * 0xffffffff) + 1;
+        let settled = false;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let unsubscribe: (() => void) | undefined;
+        const settle = (verdict: KittyProbeVerdict): void => {
+          if (settled) return;
+          settled = true;
+          if (timer !== undefined) clearTimeout(timer);
+          unsubscribe?.();
+          resolve(verdict);
+        };
+        timer = setTimeout(() => settle("no-reply"), timeoutMs);
+        unsubscribe = tui.addInputListener((data) => {
+          if (settled) return undefined;
+          const verdict = consumeKittyProbeReply(state, data, id);
+          if (verdict === "ok" || verdict === "error") {
+            settle(verdict);
+            // Consume the completing chunk: it is the reply to our own query,
+            // nothing for the key decoder. Partial chunks are left alone.
+            return { consume: true };
+          }
+          return undefined;
+        });
+        // Write through the TUI's terminal so the query is ordered with
+        // renders; the reply arrives on the same input stream the listener
+        // watches — the same pattern as pi-tui's own terminal queries.
+        tui.terminal.write(buildKittyProbeQuery(id));
+      });
+      kittyProbeCache.set(mime, probe);
+    }
+    return probe;
+  };
+}
 
 /**
  * Pure argument routing for /navigator (Issue #061): the first whitespace
@@ -140,6 +202,10 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
       // injected KeybindingsManager is accepted for signature compatibility and
       // deliberately not consulted.
       const theme = makeNavigatorTheme(piTheme);
+
+      // Kitty decode probe (Issue #101): one a=q query per mime per process,
+      // gating native renders on the terminal's own decode reply.
+      const kittyProbe = makeTuiKittyDecodeProbe(tui);
 
       let root: FileNode | null = null;
       let treeSource: "git" | "fs" | null = null;
@@ -266,6 +332,7 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
         return runNativeRender(absPath, req, {
           protocol: support.nativeProtocol,
           signal: controller.signal,
+          probeDecode: kittyProbe,
         });
       };
 
