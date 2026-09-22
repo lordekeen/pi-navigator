@@ -41,11 +41,11 @@ The overlay is a pure TUI component; it never touches the filesystem or git dire
   ```bash
   npm run typecheck      # tsc --noEmit, strict
   ```
-- **Tests:** Vitest, ten suites (`viewer`, `tree`, `git`, `navigator`, `render`, `icons`, `settings`, `settings_menu`, `help`, `images`).
+- **Tests:** Vitest, nineteen suites (`viewer`, `tree`, `git`, `navigator`, `render`, `icons`, `settings`, `settings_menu`, `help`, `images`, `diff`, `theme`, `env`, `index`, `frame`, `files_view`, `git_view`, `viewer_view`, `help_view`).
   ```bash
   npm test               # vitest run — full suite
   npx vitest run -t "CRLF"   # focus one test by name
-  // Run the whole suite (347 cases across 10 files) with `npm test`.
+  // Run the whole suite (496 cases across 19 files) with `npm test`.
   ```
 - **Before claiming work is done**, both `npm run typecheck` and `npm test` must be green. The render suite enforces width-safety at multiple terminal sizes (120×36, 100×28, 80×24, and narrow widths) — keep it that way when adding UI.
 - **Add or update tests for the code you change, even if nobody asked.** Width-safety regressions and ANSI/escape-sequence bugs are exactly the class this suite exists to catch.
@@ -57,19 +57,27 @@ The overlay is a pure TUI component; it never touches the filesystem or git dire
 | File | Owns |
 |---|---|
 | `index.ts` | Extension entry; registers `/navigator` (subcommands `settings` / `help`, argument completions, the help entry renderer); owns all async work (git, tree collection, file stat) and pushes results into the overlay via setters. |
-| `navigator.ts` | `NavigatorOverlay` — the pure TUI component: frame, files pane, git panel, viewer pane, footer, help modal. UI state only; no fs/git. |
+| `navigator.ts` | `NavigatorOverlay` — the TUI component: state, caches, input routing and render orchestration, delegating each pane's view-model to the modules below (Issue #064). UI state only; no fs/git. Re-exports `HELP_ROWS`. |
+| `frame.ts` | Overlay geometry + chrome: heights/areas, the files↔git split, column width, `padTo`/`joinLeftRight`/`truncateAndWidth`, `shortPath`, title/footer rows, the focus/mode hint tables. Pure. |
+| `files_view.ts` | Files pane view-model: `buildFilesRows`, files header + file row. Pure functions of a small `FilesViewContext`. |
+| `git_view.ts` | Git pane view-model: `buildGitRows`/`buildGitNavRows` (incl. the commit-family DFS), git header + row, `commitMarker`, `codeText`. Pure. |
+| `viewer_view.ts` | Viewer pane view-model: `renderViewerPane`, header, input/search/filter bars, image card + `imageCardHints`, `canRenderMarkdown`, pane content geometry. Pure — the class precomputes rows, marked files and clamped offsets. |
+| `help_view.ts` | `?` modal layout: `composeHelp` plus the help viewport math (`helpVisibleRows`, `helpMaxScroll`). Pure. |
 | `tree.ts` | Tree building from entries, cursor movement, filter, flatten, expansion memory. |
 | `git.ts` | git binary detection, `readGitState` (porcelain), history, `readCommitDiff` (v3 commit-diff), tracked-file listing, availability cache. |
-| `viewer.ts` | `loadFile` pipeline: stat, binary sniff, image tier, size caps, tab expansion, CR normalization, highlighting, search, display rows. |
+| `viewer.ts` | `loadFile` pipeline: stat, binary sniff, image tier, size caps, tab expansion, CR normalization, highlighting, search, display rows; `sliceStyled` and `hardTruncate` (the empty-ellipsis hard cut, Issue #010). |
 | `diff.ts` | v3 diff-line prefix styler (`styleDiffLines`) — theme-driven `+`/`-`/`@@`/meta coloring; runs in the loader, git.ts stays theme-free. |
-| `icons.ts` | Nerd Font glyph map + `parseIconMode` (`parseEnableIcons` is its compatibility wrapper); icons are explicitly opt-in via `icons.enabled` or `PI_NAV_ICONS` (env wins) and never auto-detected. |
+| `icons.ts` | Nerd Font glyph map + `parseIconMode` (a thin projection onto `env.ts`; `parseEnableIcons` is its compatibility wrapper); icons are explicitly opt-in via `icons.enabled` or `PI_NAV_ICONS` (env wins) and never auto-detected. |
+| `env.ts` | Shared env truth-table parser (`parseTruthyEnv`) behind `PI_NAV_ICONS` / `PI_NAV_IMAGES`. Pure, dependency-free (imported by the component module graph via `icons.ts`). |
 | `theme.ts` | `makeNavigatorTheme` — maps semantic tokens (accent/muted/dim/…) onto pi `Theme` tokens. No hardcoded colors. |
 | `types.ts` | Shared structural types (FileNode, GitState, ViewerFile with `kind: "diff"`, rows). |
 | `constants.ts` | All tuning constants (caps, ratios, timeouts, ignored names, image extensions). |
 | `settings.ts` | pi-navigator settings schema/normalizer/loader/writer (`~/.pi/agent/pi-navigator.json`, `PI_NAV_IMAGES` / `PI_NAV_ICONS`), the `NAVIGATOR_CONFIG_FIELDS` registry, and pure `applyFieldEdit`. |
 | `settings_menu.ts` | `/navigator settings` editor-dock menu: pure `buildSettingItems` + a thin pi-tui `SettingsList` wrapper (commit/revert, env-override annotations). Rendered via a plain `ctx.ui.custom` (no overlay) so it docks above the message input, per the pi settings-UI standard. No fs access; fs stays in `index.ts`/`settings.ts`. |
-| `help.ts` | `/navigator help` durable entry layout: `NAVIGATOR_COMMANDS`, pure `buildHelpLines` (qdrant-memory parity). |
+| `help.ts` | Single source for the help surfaces: `NAVIGATOR_SUBCOMMANDS` + `NAVIGATOR_KEYBINDINGS`, the derived `NAVIGATOR_COMMANDS`, and the `/navigator help` durable entry layout (`buildHelpLines`, qdrant-memory parity). Pure. |
 | `images.ts` | pi-chafa detection, config mirror, chafa probe/render/sanitize, geometry. |
+
+**View-model rule (Issue #064):** the pane modules (`frame.ts`, `files_view.ts`, `git_view.ts`, `viewer_view.ts`, `help_view.ts`) are pure functions of plain records — they hold no state, touch no cache and never read `this`. The class computes data (marked rows, wrapped `display`, rendered markdown, clamped offsets), then passes it in. Keep new pane logic on the module side of that seam so it stays directly testable.
 
 **Data contract:** `setTree` / `setGitState` / `openRelPath` are the only ways data enters the component, and settings land via the ctor options (`enableIcons`, `initialShowHidden`, `initialWrap`, `initialRenderMarkdown` — Issue #061). Keep the render path pure. v3 adds `openCommit` + the optional `NavigatorOptions.loadCommit` injection (parallel to `loadFile`): when present, Enter on a commit opens its diff as a `ViewerFile` with `kind: "diff"` whose `relPath` is `commit:<hash>`; diffs skip the mtime poll in index.ts (`startsWith("commit:")` guard). When `loadCommit` is absent, Enter falls back to toggling the commit's family.
 

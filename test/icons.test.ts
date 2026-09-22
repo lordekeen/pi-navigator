@@ -40,6 +40,13 @@ describe("parseIconMode", () => {
     expect(result.warning ?? "").toContain("PI_NAV_ICONS");
     expect(result.warning ?? "").toContain("file/default");
   });
+
+  it("rejects the images-only chafa token with a warning (no silent enable)", () => {
+    expect(parseIconMode("chafa")).toEqual({
+      enabled: undefined,
+      warning: "chafa is not a valid PI_NAV_ICONS value; using the file/default setting",
+    });
+  });
 });
 
 describe("parseEnableIcons", () => {

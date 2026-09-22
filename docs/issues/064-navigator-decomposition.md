@@ -1,6 +1,6 @@
 # Issue #064: `navigator.ts` Holds Six Responsibilities; Tree-Cache Counters Are Unsynchronized by Convention
 
-- **Status**: Open (Pending)
+- **Status**: Resolved (v0.7.2)
 - **Type**: Technical Debt / Architecture
 - **Severity**: Medium
 - **Component**: [`navigator.ts`](file:///home/jhonny/Sources/pi-navigator/navigator.ts)
@@ -38,11 +38,35 @@ A future expand/collapse path that mutates the tree and calls `touch()` without 
 
 ## Acceptance Criteria
 
-- [ ] Pane view-models extracted from `NavigatorOverlay` (files / git / viewer at minimum) with the data contract unchanged.
-- [ ] `navigator.ts` materially smaller; render width-safety suite still passes at 120×36 / 100×28 / 80×24 and narrow widths.
-- [ ] `treeVersion` is bumped only inside `toggleDir` / `expandTo` / `collapse`-style entry points; raw `this.treeVersion++` sites removed.
-- [ ] Regression test: a mutation through each entry point invalidates `filesRows`.
-- [ ] `npm run typecheck` and `npm test` green.
+- [x] Pane view-models extracted from `NavigatorOverlay` (files / git / viewer at minimum) with the data contract unchanged.
+- [x] `navigator.ts` materially smaller; render width-safety suite still passes at 120×36 / 100×28 / 80×24 and narrow widths.
+- [x] `treeVersion` is bumped only inside `toggleDir` / `expandTo` / `collapse`-style entry points; raw `this.treeVersion++` sites removed.
+- [x] Regression test: a mutation through each entry point invalidates `filesRows`.
+- [x] `npm run typecheck` and `npm test` green.
+
+## Resolution
+
+**Finding 1 — decomposition.** Five pure view-model modules now own the pane logic, each a function of a plain record with no state and no `this`:
+
+| Module | Exports |
+| :--- | :--- |
+| `frame.ts` | `overlayHeight`, `bodyRows`, `splitRows`, `leftColumnWidth`, `useLeftColumn`, `filesArea`, `viewerArea`, `padTo`, `joinLeftRight`, `shortPath`, `truncateAndWidth`, `FOCUS_HINTS`, `MODE_HINTS`, `getFooterHint`, `buildTitleRow`, `buildFooterRow` |
+| `files_view.ts` | `buildFilesRows`, `buildFilesHeader`, `buildFileRow`, `FilesViewContext` |
+| `git_view.ts` | `buildGitRows`, `buildGitNavRows`, `buildGitHeader`, `buildGitRow`, `commitMarker`, `codeText` |
+| `viewer_view.ts` | `renderViewerPane`, `buildViewerHeader`, `buildInputBar`, `buildSearchBar`, `buildFilterBar`, `buildCard`, `imageCardHints`, `canRenderMarkdown`, `paneContentWidth`, `paneContentArea`, `ViewerPaneView` |
+| `help_view.ts` | `helpVisibleRows`, `helpMaxScroll`, `composeHelp` |
+
+`navigator.ts` went **2,052 → 1,469 lines (−583, −28%)** and keeps every mutable field, cache, timer, `touch()`, input handler and the render-path side-effect steps (`getRenderedMarkdownLines`, `recomputeSearchIfNeeded`, `markSearch`, `cachedMaxLineWidth`, `cachedComputeRows`, `markRenderedLineMatches`, `maybeScheduleResizeReflow`, `scheduleReflow`, `currentImageGeometry`) executing in their original order; only already-computed data (marked rows, wrapped `display`, pre-styled `mdContent`, clamped offsets) crosses the seam. The public surface is unchanged, `HELP_ROWS` is re-exported from `navigator.ts`, and all five modules were registered in `package.json` `files` + `tsconfig.json` `include` (Issue #037 class of bug).
+
+Equivalence was proven, not assumed: a temporary harness rendered 28 fixture states across 120/100/80/60-column widths, twice pre-refactor to confirm determinism, then compared post-refactor — **byte-identical**; the harness was deleted after use. Two deliberate deviations from the seam map: `FilesViewContext` gained `filesCursor` (the header's `n/N` counter needs it), and the footer's `mode === "filter"` dispatch stayed in `render()` (choosing `buildFilterBar` vs `buildFooterRow` there avoids a `frame`↔`viewer_view` import cycle) with identical output.
+
+Five direct suites were added — `frame` (18), `files_view` (13), `git_view` (14), `viewer_view` (14), `help_view` (4) — which is the point of the extraction: the row builders and geometry are now testable without an overlay.
+
+**Finding 2 — `treeVersion`.** Fixed alongside the #063 work: `toggleDir(node, expanded?)` and `expandTo(node)` are the only in-place tree mutation entry points and bump `treeVersion` internally (the field now documents that), with the four raw `this.treeVersion++` sites deleted. Three regression tests drive each entry point through `handleInput` in a **render → mutate → render** shape, so a missing bump would return the cached rows and fail the assertion; the git-pane case uses a signal that only appears in the files pane so a stale cache cannot pass by accident.
+
+**Follow-up found while preserving behavior:** the viewer header's `col N` badge is built before the body's `hscroll` clamp, so it can show a requested offset the body refused — pinned by an existing test and recorded as [#065](065-viewer-header-hscroll-badge-stale-clamp.md) rather than silently changed in a refactor commit.
+
+Final: `npm run typecheck` clean, 19 suites / 496 cases green (from 10 / 347). version 0.7.2.
 
 ## References
 

@@ -3,7 +3,8 @@
  * buildHelpLines layout (branded header, `commands` title, command column
  * padded to longest + 2, hint) and parseNavigatorArgs routing. The pi
  * surface is mocked the same way the other suites that pull navigator.ts do;
- * index.ts is imported only for the pure parser.
+ * index.ts is imported for the pure parser and completions, navigator.ts for
+ * the HELP_ROWS projection.
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -38,8 +39,12 @@ import {
   HELP_HINT,
   helpCommandColumnWidth,
   NAVIGATOR_COMMANDS,
+  NAVIGATOR_CMD_PREFIX,
+  NAVIGATOR_KEYBINDINGS,
+  NAVIGATOR_SUBCOMMANDS,
 } from "../help";
-import { parseNavigatorArgs } from "../index";
+import { navigatorCompletions, parseNavigatorArgs } from "../index";
+import { HELP_ROWS } from "../navigator";
 
 describe("buildHelpLines", () => {
   it("produces the exact layout: header, commands title, aligned rows, blank, hint", () => {
@@ -115,5 +120,64 @@ describe("parseNavigatorArgs", () => {
     expect(parseNavigatorArgs("Settings")).toEqual({ kind: "unknown", raw: "Settings" });
     expect(parseNavigatorArgs("HELP")).toEqual({ kind: "unknown", raw: "HELP" });
     expect(parseNavigatorArgs("SETTINGS")).toEqual({ kind: "unknown", raw: "SETTINGS" });
+  });
+});
+
+// Issue #063 finding 5: the subcommand table in help.ts is the single source
+// for the help rows, the completions, and the parser. These assertions fail if
+// any surface drifts back to a hand-maintained copy.
+
+describe("navigatorCompletions", () => {
+  it("projects NAVIGATOR_SUBCOMMANDS verbatim, in table order", () => {
+    expect(navigatorCompletions("")).toEqual(
+      NAVIGATOR_SUBCOMMANDS.map((sub) => ({
+        value: sub.cmd.slice(NAVIGATOR_CMD_PREFIX.length),
+        label: sub.completionLabel,
+        description: sub.desc,
+      })),
+    );
+    const rows = navigatorCompletions("");
+    expect(rows).not.toBeNull();
+    // Documented order: the settings token first.
+    expect(rows?.map((row) => row.value)).toEqual(["settings", "help"]);
+  });
+
+  it("filters by prefix and returns null with no match", () => {
+    expect(navigatorCompletions("se")).toEqual([
+      { value: "settings", label: "Open the settings menu", description: "configure images, icons, viewer, and tree behavior" },
+    ]);
+    expect(navigatorCompletions("he")).toEqual([
+      { value: "help", label: "Show the command list", description: "show this command list" },
+    ]);
+    expect(navigatorCompletions("zz")).toBeNull();
+  });
+});
+
+describe("single-source derivations (Issue #063 finding 5)", () => {
+  it("parses every subcommand token to its own kind", () => {
+    for (const sub of NAVIGATOR_SUBCOMMANDS) {
+      const token = sub.cmd.slice(NAVIGATOR_CMD_PREFIX.length);
+      expect(parseNavigatorArgs(token)).toEqual({ kind: token });
+    }
+    expect(parseNavigatorArgs("bogus")).toEqual({ kind: "unknown", raw: "bogus" });
+  });
+
+  it("NAVIGATOR_COMMANDS is the bare overlay row followed by the subcommand table projection", () => {
+    expect(NAVIGATOR_COMMANDS).toEqual([
+      { cmd: "/navigator", desc: "open the read-only project navigator overlay" },
+      ...NAVIGATOR_SUBCOMMANDS.map(({ cmd, desc }) => ({ cmd, desc })),
+    ]);
+  });
+
+  it("HELP_ROWS is the keybinding table projected to [keys, description], in the original order", () => {
+    expect(HELP_ROWS).toEqual(NAVIGATOR_KEYBINDINGS.map((row) => [row.keys, row.description]));
+    expect(HELP_ROWS).toHaveLength(19);
+    expect(HELP_ROWS[0]).toEqual(["Tab / Shift+Tab", "cycle pane focus (files, git, viewer)"]);
+    expect(HELP_ROWS[HELP_ROWS.length - 1]).toEqual(["q Esc", "close (Esc clears filter or search first)"]);
+  });
+
+  it("keybinding ids are unique", () => {
+    const ids = NAVIGATOR_KEYBINDINGS.map((row) => row.id);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });

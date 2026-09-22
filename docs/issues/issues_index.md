@@ -8,9 +8,9 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
-| **Pending / Open** | 1 | 1 | 1 | **3** |
-| **Resolved** | 10 | 19 | 32 | **61** |
-| **Total** | **11** | **20** | **33** | **64** |
+| **Pending / Open** | 1 | 0 | 1 | **2** |
+| **Resolved** | 10 | 20 | 33 | **63** |
+| **Total** | **11** | **20** | **34** | **65** |
 
 ---
 
@@ -18,9 +18,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | ID | Title | Type | Severity | Component | Status |
 | :--- | :--- | :--- | :--- | :--- | :--- |
+| [#065](065-viewer-header-hscroll-badge-stale-clamp.md) | Viewer Header `col N` Badge Shows the Requested Offset, Not the Clamped One | Bug / UI Consistency | Low | `navigator.ts` / `viewer_view.ts` | Open — pre-existing (not a #064 regression): the badge is built before the body's hscroll clamp; an existing test pins the artifact, so the fix is a contract decision + one rewritten assertion pair |
 | [#020](020-no-viewer-cache-blocking-highlight.md) | No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread | Bug / Performance | High | `viewer.ts` | Open (partial — cache done; event-loop yielding deferred: blocked by pi's bundled-runtime virtual-module boundary, needs a pi-side API) |
-| [#063](063-review-followups.md) | Code-Health Review Follow-Ups (Duplication, Seams, Test Gaps) | Technical Debt | Low | `icons.ts` / `settings.ts` / `index.ts` / `navigator.ts` / `help.ts` / tests | Open — from the review run with #062: duplicated env truth table + notify-once block, 7 hard-cut truncation sites, registry-vs-manual settings normalization (5 touch points per new field), 3 hand-maintained help tables, no direct `diff.ts`/`theme.ts` suite |
-| [#064](064-navigator-decomposition.md) | `navigator.ts` Holds Six Responsibilities; Tree-Cache Counters Unsynchronized by Convention | Technical Debt / Architecture | Medium | `navigator.ts` | Open — `NavigatorOverlay` is 2,060 lines / 122 private fields / 74 methods covering files, git, viewer, help, frame geometry and input routing; `filesRowsCache` validity rests on a manually-bumped `treeVersion` (4 raw `++` sites, 24 `touch()` calls) |
 
 ---
 
@@ -28,6 +27,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | ID | Title | Type | Severity | Resolution Summary | Status |
 | :--- | :--- | :--- | :--- | :--- | :---: |
+| [#064](064-navigator-decomposition.md) | `navigator.ts` Holds Six Responsibilities; Tree-Cache Counters Unsynchronized by Convention | Technical Debt / Architecture | Medium | `NavigatorOverlay` decomposed into five pure pane view-models (`frame`, `files_view`, `git_view`, `viewer_view`, `help_view`) — `navigator.ts` 2,052 → 1,469 lines (−28%), class keeps all state/caches/input routing/side-effect order, `HELP_ROWS` re-exported, modules registered in `files`+`include`; equivalence proven byte-identical over 28 fixture states × 4 widths (harness deleted after use); five direct suites (63 cases); `treeVersion` funnelled through `toggleDir`/`expandTo` with render→mutate→render regression tests. Follow-up filed as #065. version 0.7.2. | **Resolved** |
+| [#063](063-review-followups.md) | Code-Health Review Follow-Ups (Duplication, Seams, Test Gaps) | Technical Debt | Low | All six findings: shared `parseTruthyEnv` (`env.ts`) behind both env adapters (value sets + warnings byte-identical); one `makeWarningNotifier` for `runNavigator`/`runSettings` (per-invocation scope); `hardTruncate` helper in `viewer.ts` used by all 8 sites; settings defaults/normalize/serialize/`setField` driven by `NAVIGATOR_CONFIG_FIELDS`; `help.ts` owns the subcommand + keybinding tables with `NAVIGATOR_COMMANDS`/completions/`parseNavigatorArgs`/`HELP_ROWS` derived + drift tests; direct `diff.ts` (30) and `theme.ts` (21) suites. 19 suites / 496 cases. version 0.7.2. | **Resolved** |
 | [#057](057-chafa-image-rendering.md) | Optional Chafa Image Rendering (pi-chafa delegation) | Feature | Medium | Opt-in chafa symbol-art rendering in the viewer via pi-chafa delegation (`images.mode: "chafa"` / `PI_NAV_IMAGES`), pane-bounded geometry, strict SGR-only sanitizer, `i` toggle, resize reflow, deferred async support, full degradation to the metadata card — see `docs/specs/chafa-image-rendering.md`. version 0.6.0. | **Resolved** |
 | [#058](058-untracked-dirs-unreachable.md) | Untracked Directories Are Dead-End Leaves (Unreachable in Git Mode) | Bug | High | `entriesFromPaths` derives `isDir` from the porcelain trailing `/` and strips it; new bounded `collectDirEntries` walk fills untracked-dir subtrees (depth cap, ignored names, cycle guard); `gitCodeMap` normalizes dir keys so the `??` badge lands on the dir row; the idle probe folds mtimes of expanded untracked dirs. End-to-end seam test from real porcelain output. version 0.6.1. | **Resolved** |
 | [#052](052-search-index-out-of-bounds-mode-toggle.md) | `searchIndex` Out of Bounds When Toggling Markdown Rendered Mode (`m`) | Bug / UI Consistency | Medium | Clamped `searchIndex` to `Math.max(0, searchMatches.length - 1)` in `recomputeSearchOnLines` whenever `searchIndex >= searchMatches.length`, preventing out-of-bounds counters in `buildSearchBar`. | **Resolved** |
@@ -95,6 +96,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 ## 📂 Issues by Category
 
 ### Bug Fixes & UI Consistency
+- [#065: Viewer Header `col N` Badge Shows the Requested Offset, Not the Clamped One](065-viewer-header-hscroll-badge-stale-clamp.md)
 - [#010: Help Modal Leaks a Bright Ellipsis Out of the Muted Style at Narrow Widths](010-help-modal-bright-ellipsis-leak.md)
 - [#009: CRLF Line Endings Break the Viewer Layout (Carriage Return Resets Cursor)](009-crlf-line-endings-break-viewer-layout.md)
 - [#001: UI Renders Stale Content and Inconsistent State When Opening a File](001-stale-content-race-when-opening-file.md)
@@ -149,6 +151,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#055: `isMarkdownPath` Excludes Common Markdown Extensions (`.mdx`, `.mkd`, `.mdown`)](055-markdown-extensions-whitelist.md) *(resolved)*
 
 ### Technical Debt & Code Robustness
+- [#064: `navigator.ts` Holds Six Responsibilities; Tree-Cache Counters Unsynchronized by Convention](064-navigator-decomposition.md) *(resolved)*
+- [#063: Code-Health Review Follow-Ups (Duplication, Seams, Test Gaps)](063-review-followups.md) *(resolved)*
 - [#005: Fragile Fallback Chain in Footer Hint Resolution](005-hints-lookup-fallback-chain.md)
 - [#007: Module-Level `gitBinaryPresent` Cache Cannot Be Invalidated](007-git-binary-cache-invalidation.md)
 - [#027: Dead `resetGitAvailabilityCache` Export; Stale #007 Resolution Summary](027-dead-resetgitavailabilitycache-export.md) *(resolved)*

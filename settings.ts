@@ -15,6 +15,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { parseIconMode } from "./icons";
+import { parseTruthyEnv } from "./env";
 
 export interface NavigatorImageSettings {
   mode: "off" | "chafa";
@@ -43,32 +44,126 @@ export interface NavigatorSettings {
 
 const SETTINGS_VERSION = 1;
 const IMAGE_MODES = ["off", "chafa"] as const;
-type ImageMode = (typeof IMAGE_MODES)[number];
 const VIEWER_MODES = ["code", "rendered"] as const;
-type ViewerMode = (typeof VIEWER_MODES)[number];
 
-const IMAGE_ENABLE_VALUES: ReadonlySet<string> = new Set(["1", "true", "yes", "on", "chafa"]);
-const IMAGE_DISABLE_VALUES: ReadonlySet<string> = new Set(["0", "false", "no", "off"]);
+export interface NavigatorConfigField {
+  readonly id: string;
+  readonly path: readonly string[];
+  readonly kind: "enum" | "boolean" | "number";
+  readonly section: string;
+  readonly label: string;
+  readonly description: string;
+  readonly options?: readonly string[];
+  readonly min?: number;
+  readonly max?: number;
+  readonly default: string | number | boolean;
+  readonly live: boolean;
+}
+
+/** Ordered registry for the `/navigator settings` modal (§5.2, §2.1). */
+export const NAVIGATOR_CONFIG_FIELDS: readonly NavigatorConfigField[] = [
+  {
+    id: "images.mode",
+    path: ["images", "mode"],
+    kind: "enum",
+    section: "Images",
+    label: "Image rendering",
+    description: "Render image files as chafa symbol art in the viewer pane; off keeps the metadata card.",
+    options: [...IMAGE_MODES],
+    default: "off",
+    live: false,
+  },
+  {
+    id: "icons.enabled",
+    path: ["icons", "enabled"],
+    kind: "boolean",
+    section: "Icons",
+    label: "Nerd Font icons",
+    description: "Show a Nerd Font filetype icon column in the file tree (requires a Nerd Font terminal).",
+    default: false,
+    live: false,
+  },
+  {
+    id: "viewer.wrap",
+    path: ["viewer", "wrap"],
+    kind: "boolean",
+    section: "Viewer",
+    label: "Word wrap",
+    description: "Start files with word wrap enabled; the `w` key still toggles it per session.",
+    default: false,
+    live: false,
+  },
+  {
+    id: "viewer.markdown",
+    path: ["viewer", "markdown"],
+    kind: "enum",
+    section: "Viewer",
+    label: "Markdown view",
+    description: "Open Markdown files as rendered text or plain code; the `m` key still toggles it per session.",
+    options: [...VIEWER_MODES],
+    default: "code",
+    live: false,
+  },
+  {
+    id: "tree.showHidden",
+    path: ["tree", "showHidden"],
+    kind: "boolean",
+    section: "Tree",
+    label: "Hidden files",
+    description: "Start with hidden files visible; the `.` key still toggles it per session.",
+    default: false,
+    live: false,
+  },
+];
 
 /** Unknown-key warnings are per key but bounded to a handful (§5.2). */
 const MAX_UNKNOWN_KEY_WARNINGS = 5;
 
-export const DEFAULT_NAVIGATOR_SETTINGS: NavigatorSettings = Object.freeze({
-  version: SETTINGS_VERSION,
-  images: Object.freeze({ mode: "off" }),
-  icons: Object.freeze({ enabled: false }),
-  viewer: Object.freeze({ wrap: false, markdown: "code" }),
-  tree: Object.freeze({ showHidden: false }),
-});
+/**
+ * Build the canonical default settings from the registry's per-field
+ * defaults, with the canonical section order (first registry appearance:
+ * images, icons, viewer, tree) and `version: 1`. Fresh objects every call,
+ * so `cloneDefaults()` is safe to mutate; the exported frozen default is
+ * derived from the same function.
+ */
+function buildDefaultSettings(): NavigatorSettings {
+  const settings: Record<string, unknown> = { version: SETTINGS_VERSION };
+  const sections = new Map<string, Record<string, unknown>>();
+  for (const field of NAVIGATOR_CONFIG_FIELDS) {
+    const [sectionKey, key] = field.path;
+    if (sectionKey === undefined || key === undefined || field.path.length !== 2) continue;
+    let section = sections.get(sectionKey);
+    if (section === undefined) {
+      section = {};
+      sections.set(sectionKey, section);
+    }
+    section[key] = field.default;
+  }
+  for (const [sectionKey, section] of sections) settings[sectionKey] = section;
+  // The registry rows are the single source of the schema; the cast is
+  // backed by the registry sync-guard tests (every path resolves, kinds
+  // match the section interfaces).
+  // SAFETY: buildDefaultSettings assembles exactly the NavigatorSettings
+  // shape from registry rows the sync-guard tests pin to the interfaces.
+  return settings as unknown as NavigatorSettings;
+}
+
+/** Deep-freeze the default object (top level plus each section). */
+function deepFreezeDefaults(settings: NavigatorSettings): NavigatorSettings {
+  // SAFETY: NavigatorSettings is structurally a plain record of sections
+  // plus `version`; freezing every object value freezes each section.
+  const record = settings as unknown as Record<string, unknown>;
+  for (const value of Object.values(record)) {
+    if (value !== null && typeof value === "object") Object.freeze(value);
+  }
+  // SAFETY: Object.freeze preserves the underlying NavigatorSettings value.
+  return Object.freeze(record) as unknown as NavigatorSettings;
+}
+
+export const DEFAULT_NAVIGATOR_SETTINGS: NavigatorSettings = deepFreezeDefaults(buildDefaultSettings());
 
 function cloneDefaults(): NavigatorSettings {
-  return {
-    version: SETTINGS_VERSION,
-    images: { mode: "off" },
-    icons: { enabled: false },
-    viewer: { wrap: false, markdown: "code" },
-    tree: { showHidden: false },
-  };
+  return buildDefaultSettings();
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -94,6 +189,41 @@ function warnUnknownSettings(warnings: string[], keys: readonly string[], prefix
     } else {
       warnings.push(`and ${keys.length - emitted} more unknown settings ignored`);
       return;
+    }
+  }
+}
+
+/**
+ * One per-kind validator for the normalizer's registry walk: boolean must be
+ * a boolean, enum must be one of `field.options`, number must be a finite
+ * number clamped into [min, max] (mirroring `parseNumberField`). Warning
+ * phrasing is pinned byte-for-byte by test/settings.test.ts: string
+ * defaults are quoted, boolean/number defaults bare — exactly what the
+ * hand-written section blocks emitted.
+ */
+function validateFieldValue(
+  field: NavigatorConfigField,
+  rawValue: unknown,
+): { ok: true; value: string | number | boolean } | { ok: false; error: string } {
+  switch (field.kind) {
+    case "boolean":
+      if (typeof rawValue === "boolean") return { ok: true, value: rawValue };
+      return { ok: false, error: `${field.id} "${String(rawValue)}" is invalid; using ${String(field.default)}` };
+    case "enum": {
+      const options = field.options ?? [];
+      for (const option of options) {
+        if (option === rawValue) return { ok: true, value: option };
+      }
+      return { ok: false, error: `${field.id} "${String(rawValue)}" is invalid; using "${String(field.default)}"` };
+    }
+    case "number": {
+      if (typeof rawValue === "number" && !Number.isNaN(rawValue)) {
+        let value = rawValue;
+        if (field.min !== undefined) value = Math.max(field.min, value);
+        if (field.max !== undefined) value = Math.min(field.max, value);
+        return { ok: true, value };
+      }
+      return { ok: false, error: `${field.id} "${String(rawValue)}" is invalid; using ${String(field.default)}` };
     }
   }
 }
@@ -125,145 +255,88 @@ export function normalizeNavigatorSettings(raw: unknown): { settings: NavigatorS
     }
   }
 
-  // images: absent → default; present but not an object → warning + default.
-  let mode: ImageMode = "off";
-  const rawImages = rawRec.images;
-  if (rawImages !== undefined) {
-    const imagesRec = asRecord(rawImages);
-    if (imagesRec === undefined) {
-      warnings.push('"images" must be an object; using defaults');
-    } else {
-      warnUnknownSettings(
-        warnings,
-        Object.keys(imagesRec).filter((key) => key !== "mode"),
-        "images.",
-      );
-      const rawMode = imagesRec.mode;
-      if (rawMode !== undefined) {
-        if (rawMode === "off" || rawMode === "chafa") {
-          mode = rawMode;
-        } else {
-          warnings.push(`images.mode "${String(rawMode)}" is invalid; using "off"`);
-        }
-      }
+  // One generic walk over the registry: per section (first-appearance
+  // order) guard the object shape and warn on unknown leaf keys, then
+  // validate each field against its kind. Validated values land in a fresh
+  // defaults clone, so missing and invalid leaves keep their defaults.
+  const settings = cloneDefaults();
+  // SAFETY: the clone is a fresh NavigatorSettings record; writing
+  // validated registry values through the record view never mutates the
+  // caller's input.
+  const settingsRec = settings as unknown as Record<string, Record<string, unknown>>;
+
+  // Group the registry fields per section (canonical order: images, icons,
+  // viewer, tree).
+  const sections = new Map<string, { fields: NavigatorConfigField[] }>();
+  for (const field of NAVIGATOR_CONFIG_FIELDS) {
+    if (field.path.length !== 2) continue;
+    const sectionKey = field.path[0];
+    if (sectionKey === undefined) continue;
+    let group = sections.get(sectionKey);
+    if (group === undefined) {
+      group = { fields: [] };
+      sections.set(sectionKey, group);
     }
+    group.fields.push(field);
   }
 
-  // icons: absent → default; present but not an object → warning + default.
-  let iconsEnabled = false;
-  const rawIcons = rawRec.icons;
-  if (rawIcons !== undefined) {
-    const iconsRec = asRecord(rawIcons);
-    if (iconsRec === undefined) {
-      warnings.push('"icons" must be an object; using defaults');
-    } else {
-      warnUnknownSettings(
-        warnings,
-        Object.keys(iconsRec).filter((key) => key !== "enabled"),
-        "icons.",
-      );
-      const rawEnabled = iconsRec.enabled;
-      if (rawEnabled !== undefined) {
-        if (typeof rawEnabled === "boolean") {
-          iconsEnabled = rawEnabled;
-        } else {
-          warnings.push(`icons.enabled "${String(rawEnabled)}" is invalid; using false`);
-        }
-      }
+  for (const [sectionKey, group] of sections) {
+    const rawSection = rawRec[sectionKey];
+    if (rawSection === undefined) continue;
+    const sectionRec = asRecord(rawSection);
+    if (sectionRec === undefined) {
+      warnings.push(`"${sectionKey}" must be an object; using defaults`);
+      continue;
     }
-  }
-
-  // viewer: absent → default; present but not an object → warning + default.
-  let wrap = false;
-  let markdown: ViewerMode = "code";
-  const rawViewer = rawRec.viewer;
-  if (rawViewer !== undefined) {
-    const viewerRec = asRecord(rawViewer);
-    if (viewerRec === undefined) {
-      warnings.push('"viewer" must be an object; using defaults');
-    } else {
-      warnUnknownSettings(
-        warnings,
-        Object.keys(viewerRec).filter((key) => key !== "wrap" && key !== "markdown"),
-        "viewer.",
-      );
-      const rawWrap = viewerRec.wrap;
-      if (rawWrap !== undefined) {
-        if (typeof rawWrap === "boolean") {
-          wrap = rawWrap;
-        } else {
-          warnings.push(`viewer.wrap "${String(rawWrap)}" is invalid; using false`);
-        }
+    const knownKeys = new Set(group.fields.map((field) => field.path[1]));
+    warnUnknownSettings(
+      warnings,
+      Object.keys(sectionRec).filter((key) => !knownKeys.has(key)),
+      `${sectionKey}.`,
+    );
+    const sectionSettings = settingsRec[sectionKey];
+    if (sectionSettings === undefined) continue;
+    for (const field of group.fields) {
+      const key = field.path[1];
+      if (key === undefined) continue;
+      const rawValue = sectionRec[key];
+      if (rawValue === undefined) continue;
+      const validated = validateFieldValue(field, rawValue);
+      if (!validated.ok) {
+        warnings.push(validated.error);
+        continue; // the clone's default already stands
       }
-      const rawMarkdown = viewerRec.markdown;
-      if (rawMarkdown !== undefined) {
-        if (rawMarkdown === "code" || rawMarkdown === "rendered") {
-          markdown = rawMarkdown;
-        } else {
-          warnings.push(`viewer.markdown "${String(rawMarkdown)}" is invalid; using "code"`);
-        }
-      }
-    }
-  }
-
-  // tree: absent → default; present but not an object → warning + default.
-  let showHidden = false;
-  const rawTree = rawRec.tree;
-  if (rawTree !== undefined) {
-    const treeRec = asRecord(rawTree);
-    if (treeRec === undefined) {
-      warnings.push('"tree" must be an object; using defaults');
-    } else {
-      warnUnknownSettings(
-        warnings,
-        Object.keys(treeRec).filter((key) => key !== "showHidden"),
-        "tree.",
-      );
-      const rawShowHidden = treeRec.showHidden;
-      if (rawShowHidden !== undefined) {
-        if (typeof rawShowHidden === "boolean") {
-          showHidden = rawShowHidden;
-        } else {
-          warnings.push(`tree.showHidden "${String(rawShowHidden)}" is invalid; using false`);
-        }
-      }
+      sectionSettings[key] = validated.value;
     }
   }
 
   warnUnknownSettings(
     warnings,
-    Object.keys(rawRec).filter(
-      (key) => key !== "version" && key !== "images" && key !== "icons" && key !== "viewer" && key !== "tree",
-    ),
+    Object.keys(rawRec).filter((key) => key !== "version" && !sections.has(key)),
     "",
   );
 
-  return {
-    settings: {
-      version: SETTINGS_VERSION,
-      images: { mode },
-      icons: { enabled: iconsEnabled },
-      viewer: { wrap, markdown },
-      tree: { showHidden },
-    },
-    warnings,
-  };
+  return { settings, warnings };
 }
 
 /**
  * Parses the PI_NAV_IMAGES env override: enable = 1/true/yes/on/chafa,
  * disable = 0/false/no/off, anything else ignored with one warning so the
  * file/default setting stands (§5.1). Case-insensitive, trimmed; empty input
- * is "no override", never a warning.
+ * is "no override", never a warning. The images-only `chafa` token is
+ * recognized here, before delegating to the shared `parseTruthyEnv`
+ * (env.ts), so the accepted value sets per env var stay byte-identical to
+ * the pre-#063 truth tables.
  */
 export function parseImageMode(value: string | undefined): { mode: "off" | "chafa" | undefined; warning?: string } {
   if (value === undefined) return { mode: undefined };
   const trimmed = value.trim();
   if (trimmed === "") return { mode: undefined };
   const normalized = trimmed.toLowerCase();
-  if (IMAGE_ENABLE_VALUES.has(normalized)) return { mode: "chafa" };
-  if (IMAGE_DISABLE_VALUES.has(normalized)) return { mode: "off" };
-  return { mode: undefined, warning: `${trimmed} is not a valid PI_NAV_IMAGES value; using the file/default setting` };
+  if (normalized === "chafa") return { mode: "chafa" };
+  const parsed = parseTruthyEnv(value, "PI_NAV_IMAGES");
+  if (parsed.warning !== undefined) return { mode: undefined, warning: parsed.warning };
+  return { mode: parsed.value ? "chafa" : "off" };
 }
 
 /**
@@ -313,13 +386,23 @@ export function loadNavigatorSettings(paths: {
 
 /** Inverse of the normalizer: the canonical nested object for persistence. */
 export function serializeNavigatorSettings(settings: NavigatorSettings): Record<string, unknown> {
-  return {
-    version: settings.version,
-    images: { mode: settings.images.mode },
-    icons: { enabled: settings.icons.enabled },
-    viewer: { wrap: settings.viewer.wrap, markdown: settings.viewer.markdown },
-    tree: { showHidden: settings.tree.showHidden },
-  };
+  const record: Record<string, unknown> = { version: settings.version };
+  // SAFETY: NavigatorSettings is a plain record of sections; the registry
+  // walk reads only paths the sync-guard tests pin to the interfaces.
+  const settingsRec = settings as unknown as Record<string, Record<string, unknown>>;
+  const sections = new Map<string, Record<string, unknown>>();
+  for (const field of NAVIGATOR_CONFIG_FIELDS) {
+    const [sectionKey, key] = field.path;
+    if (sectionKey === undefined || key === undefined || field.path.length !== 2) continue;
+    let section = sections.get(sectionKey);
+    if (section === undefined) {
+      section = {};
+      sections.set(sectionKey, section);
+    }
+    section[key] = settingsRec[sectionKey]?.[key];
+  }
+  for (const [sectionKey, section] of sections) record[sectionKey] = section;
+  return record;
 }
 
 /**
@@ -333,70 +416,6 @@ export function writeNavigatorSettings(path: string, settings: NavigatorSettings
   writeFileSync(tmp, JSON.stringify(serializeNavigatorSettings(settings), null, 2), "utf8");
   renameSync(tmp, path);
 }
-
-export interface NavigatorConfigField {
-  readonly id: string;
-  readonly path: readonly string[];
-  readonly kind: "enum" | "boolean" | "number";
-  readonly section: string;
-  readonly label: string;
-  readonly description: string;
-  readonly options?: readonly string[];
-  readonly min?: number;
-  readonly max?: number;
-  readonly live: boolean;
-}
-
-/** Ordered registry for the `/navigator settings` modal (§5.2, §2.1). */
-export const NAVIGATOR_CONFIG_FIELDS: readonly NavigatorConfigField[] = [
-  {
-    id: "images.mode",
-    path: ["images", "mode"],
-    kind: "enum",
-    section: "Images",
-    label: "Image rendering",
-    description: "Render image files as chafa symbol art in the viewer pane; off keeps the metadata card.",
-    options: [...IMAGE_MODES],
-    live: false,
-  },
-  {
-    id: "icons.enabled",
-    path: ["icons", "enabled"],
-    kind: "boolean",
-    section: "Icons",
-    label: "Nerd Font icons",
-    description: "Show a Nerd Font filetype icon column in the file tree (requires a Nerd Font terminal).",
-    live: false,
-  },
-  {
-    id: "viewer.wrap",
-    path: ["viewer", "wrap"],
-    kind: "boolean",
-    section: "Viewer",
-    label: "Word wrap",
-    description: "Start files with word wrap enabled; the `w` key still toggles it per session.",
-    live: false,
-  },
-  {
-    id: "viewer.markdown",
-    path: ["viewer", "markdown"],
-    kind: "enum",
-    section: "Viewer",
-    label: "Markdown view",
-    description: "Open Markdown files as rendered text or plain code; the `m` key still toggles it per session.",
-    options: [...VIEWER_MODES],
-    live: false,
-  },
-  {
-    id: "tree.showHidden",
-    path: ["tree", "showHidden"],
-    kind: "boolean",
-    section: "Tree",
-    label: "Hidden files",
-    description: "Start with hidden files visible; the `.` key still toggles it per session.",
-    live: false,
-  },
-];
 
 /**
  * Parse a raw numeric setting value, clamping into [min, max] when defined
@@ -465,19 +484,17 @@ export function applyFieldEdit(
  */
 function setField(settings: NavigatorSettings, path: readonly string[], value: string | number | boolean): NavigatorSettings {
   if (path.length !== 2) return settings;
-  const key = `${path[0]}.${path[1] ?? ""}`;
-  switch (key) {
-    case "images.mode":
-      return { ...settings, images: { ...settings.images, mode: value as ImageMode } };
-    case "icons.enabled":
-      return { ...settings, icons: { ...settings.icons, enabled: value as boolean } };
-    case "viewer.wrap":
-      return { ...settings, viewer: { ...settings.viewer, wrap: value as boolean } };
-    case "viewer.markdown":
-      return { ...settings, viewer: { ...settings.viewer, markdown: value as ViewerMode } };
-    case "tree.showHidden":
-      return { ...settings, tree: { ...settings.tree, showHidden: value as boolean } };
-    default:
-      return settings;
-  }
+  const [sectionKey, key] = path;
+  if (sectionKey === undefined || key === undefined) return settings;
+  // SAFETY: every registry path (section, key) resolves in a
+  // NavigatorSettings object; the sync-guard tests pin that.
+  const settingsRec = settings as unknown as Record<string, Record<string, unknown>>;
+  const section = settingsRec[sectionKey];
+  if (section === undefined) return settings;
+  // SAFETY: the clone keeps the NavigatorSettings shape — same sections,
+  // one path overwritten with a kind-validated value.
+  const cloned = { ...settings } as unknown as Record<string, Record<string, unknown>>;
+  cloned[sectionKey] = { ...section, [key]: value };
+  // SAFETY: the value cloned above preserved the NavigatorSettings shape.
+  return cloned as unknown as NavigatorSettings;
 }

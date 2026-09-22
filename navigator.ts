@@ -14,51 +14,64 @@
 
 import { copyToClipboard, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import {
-  CURSOR_MARKER,
   decodeKittyPrintable,
   Key,
   Markdown,
   matchesKey,
-  truncateToWidth,
   visibleWidth,
   type Focusable,
 } from "@earendil-works/pi-tui";
 
 import {
   FAMILY_MAX_DEPTH,
-  FAMILY_MAX_ROWS,
-  GIT_MIN_ROWS,
   HALF_PAGE_DIVISOR,
   IMAGE_EXTENSIONS,
   IMAGE_RESIZE_DEBOUNCE_MS,
-  LEFT_COLUMN_HIDE_BELOW,
-  LEFT_COLUMN_MAX,
-  LEFT_COLUMN_MIN,
-  LEFT_COLUMN_RATIO,
   MIN_OVERLAY_HEIGHT,
   MIN_OVERLAY_WIDTH,
 } from "./constants";
+import { NAVIGATOR_KEYBINDINGS } from "./help";
+import { buildFilesHeader, buildFileRow, buildFilesRows } from "./files_view";
+import {
+  bodyRows,
+  buildFooterRow,
+  buildTitleRow,
+  filesArea,
+  leftColumnWidth,
+  overlayHeight,
+  padTo,
+  splitRows,
+  useLeftColumn,
+  viewerArea,
+} from "./frame";
+import { buildGitHeader, buildGitRow, buildGitNavRows, buildGitRows } from "./git_view";
+import {
+  composeHelp,
+  helpMaxScroll as computeHelpMaxScroll,
+  helpVisibleRows as computeHelpVisibleRows,
+} from "./help_view";
 import { makeDeferredImageSupport, resolveChafaGeometry, type ImageSupport } from "./images";
-import { mapExtensionToIcon } from "./icons";
-import { expandAncestors, filterRows, findNode, flattenVisible, hasChanges, moveCursor, pageJump } from "./tree";
+import { expandAncestors, findNode, moveCursor, pageJump } from "./tree";
 import type { NavigatorTheme } from "./theme";
-import type { FileNode, FilesRow, Focus, GitCommit, GitRow, GitState, InputMode, SearchMatch, ViewerFile } from "./types";
-import { computeRows, extOf, formatSize, isMarkdownPath, markMatches, maxLineWidth, searchLines, type DisplayRow, type LoadFileOptions } from "./viewer";
-
-/**
- * Truncate a (possibly styled) string to a visible width and return both the
- * truncated text and its visible width. Sites that need to truncate and then
- * pad to a column previously called `truncateToWidth` and a separate
- * `visibleWidth` on the result — two char-by-char scans of the same string.
- * This collapses them into one named operation (Issue #018). The empty
- * ellipsis matches the hard-cut convention used across the overlay; pi-tui's
- * `visibleWidth` caches repeated measurements, so the single `visibleWidth`
- * here is cheap and the result width is exact.
- */
-function truncateAndWidth(text: string, maxWidth: number): { text: string; width: number } {
-  const out = truncateToWidth(text, maxWidth, "");
-  return { text: out, width: visibleWidth(out) };
-}
+import type { FileNode, FilesRow, Focus, GitRow, GitState, InputMode, SearchMatch, ViewerFile } from "./types";
+import {
+  computeRows,
+  extOf,
+  hardTruncate,
+  markMatches,
+  maxLineWidth,
+  searchLines,
+  type DisplayRow,
+  type LoadFileOptions,
+} from "./viewer";
+import {
+  buildFilterBar,
+  canRenderMarkdown,
+  paneContentArea,
+  paneContentWidth,
+  renderViewerPane,
+  type ViewerPaneView,
+} from "./viewer_view";
 
 /**
  * Support fingerprint for setImageSupport upgrade detection (D9): the knobs
@@ -105,42 +118,13 @@ export interface NavigatorOptions {
   initialRenderMarkdown?: boolean;
 }
 
-const FOCUS_HINTS: Record<Focus, string> = {
-  // Width budget: the longest hint plus the pane labels must fit the inner
-  // width at a 100-column terminal (98) so the focus indicator never gets
-  // truncated off the footer (render test enforces this at 120, 100, 80).
-  files: "j k move  Enter open  Tab  / filter  . hidden  y copy  ? help  q close",
-  git: "j k move  Enter open file / diff  l h family  g G jump  Tab  y copy  ? help  q close",
-  viewer: "j k scroll  Ctrl+d/u  w wrap  m mode  / search  n N  Tab  ? help  q close",
-};
-
-const MODE_HINTS: Record<Exclude<InputMode, "normal">, string> = {
-  filter: "type to filter  up/down move  Enter apply  Esc clear",
-  search: "type to search  up/down match  Enter apply  Esc clear",
-  help: "j k scroll  q Esc ? close help",
-};
-
-const HELP_ROWS: Array<[string, string]> = [
-  ["Tab / Shift+Tab", "cycle pane focus (files, git, viewer)"],
-  ["t", "toggle the file tree"],
-  ["j k / arrows", "move the cursor or scroll"],
-  ["g G", "jump to top or bottom"],
-  ["Ctrl+d Ctrl+u", "half page"],
-  ["Enter", "open file / commit diff, or toggle a directory / commit family"],
-  ["l h / arrows", "expand or collapse a directory / commit family"],
-  ["/", "filter the tree, search the file"],
-  ["n N", "next/prev match (viewer)"],
-  ["up/down, ^n/^p", "cycle matches (searching)"],
-  ["w", "toggle word wrap"],
-  ["m", "toggle markdown rendered / code view"],
-  ["i", "toggle image rendering / metadata card (chafa)"],
-  ["h l", "horizontal scroll when wrap is off"],
-  [".", "toggle hidden files"],
-  ["y", "copy the selected path"],
-  ["r", "refresh tree and git"],
-  ["?", "this help"],
-  ["q Esc", "close (Esc clears filter or search first)"],
-];
+/**
+ * The in-overlay `?` modal rows, derived from the shared keybinding table in
+ * help.ts so the modal and the durable /navigator help entry cannot drift
+ * (Issue #063 finding 5). Exported so the help suite can assert the modal is
+ * exactly the shared table's projection.
+ */
+export const HELP_ROWS: Array<[string, string]> = NAVIGATOR_KEYBINDINGS.map((row) => [row.keys, row.description]);
 
 /**
  * Printable character from a key event, using the platform rule: the Kitty
@@ -224,8 +208,7 @@ export class NavigatorOverlay implements Focusable {
   // touch() calls. (Issue #015.)
   private filesRowsCache: { root: FileNode | null; query: string; hidden: boolean; version: number; rows: FilesRow[] } | null =
     null;
-  // Bumped on any in-place tree mutation (expand/collapse, expandAncestors) so
-  // the filesRowsCache signature catches changes that don't swap the root ref.
+  // In-place tree mutation goes through toggleDir/expandTo only, which bump this (Issue #064).
   private treeVersion = 0;
   private gitRowsCache: { git: GitState | null; version: number; rows: GitRow[] } | null = null;
   // Bumped on any commit-family expansion toggle so gitRowsCache catches the
@@ -500,11 +483,7 @@ export class NavigatorOverlay implements Focusable {
     const hidden = this.showHidden;
     const c = this.filesRowsCache;
     if (c && c.root === root && c.query === query && c.hidden === hidden && c.version === this.treeVersion) return c.rows;
-    const rows: FilesRow[] = !root
-      ? []
-      : query
-        ? filterRows(root, query, hidden)
-        : flattenVisible(root, hidden);
+    const rows = buildFilesRows(root, query, hidden);
     this.filesRowsCache = { root, query, hidden, version: this.treeVersion, rows };
     return rows;
   }
@@ -513,108 +492,7 @@ export class NavigatorOverlay implements Focusable {
     const git = this.git;
     const c = this.gitRowsCache;
     if (c && c.git === git && c.version === this.gitTreeVersion) return c.rows;
-    const rows: GitRow[] = [];
-    if (!git || !git.available) {
-      rows.push({ kind: "group", label: git?.error ?? "git unavailable", tone: "dim" });
-      this.gitRowsCache = { git, version: this.gitTreeVersion, rows };
-      return rows;
-    }
-    if (git.unstaged.length > 0) {
-      // Group rows only render when their list is non-empty (Issue #029).
-      rows.push({
-        kind: "group",
-        label: `Unstaged (${git.unstaged.length})`,
-        tone: "warning",
-      });
-      for (const file of git.unstaged) rows.push({ kind: "file", relPath: file.relPath, code: file.code, staged: false });
-    }
-    if (git.staged.length > 0) {
-      rows.push({
-        kind: "group",
-        label: `Staged (${git.staged.length})`,
-        tone: "success",
-      });
-      for (const file of git.staged) rows.push({ kind: "file", relPath: file.relPath, code: file.code, staged: true });
-    }
-    if (git.unstaged.length === 0 && git.staged.length === 0) {
-      // Plan section 5 item 5: a dim Clean row when both lists are empty.
-      rows.push({ kind: "group", label: "Clean \u2014 nothing staged or unstaged", tone: "dim" });
-    }
-    // Build the ancestor family for every expanded commit (v3, one level per
-    // expand). Unlike the v2 deep DFS, each expanded commit emits only its
-    // *direct* parents as commit-child rows (depth = anchor depth + 1); a
-    // parent becomes an anchor only when the user expands it in turn, so the
-    // tree grows one level at a time and FAMILY_MAX_DEPTH becomes a ceiling
-    // (surfaced as a notice) instead of a silent cut. A commit that is both a
-    // top-level history entry and an ancestor of an expanded commit
-    // intentionally appears twice — once flat in history, once nested under
-    // its descendant — which mirrors a file tree where the same node can show
-    // under multiple expanded parents.
-    const familyByAnchor = new Map<string, GitRow[]>();
-    if (this.gitExpanded.size > 0) {
-      const byHash = new Map<string, GitCommit>();
-      for (const commit of git.history) byHash.set(commit.shortHash, commit);
-      // commitDepth: at what indent does a commit's row render? Computed by a
-      // walk over the *current* expand/collapse state, never incrementally:
-      // a top-level history commit is depth 0; a commit that is listed as a
-      // direct parent of an expanded anchor renders one deeper than that
-      // anchor, chained through nested expansions. The newest expanded anchor
-      // (history order) that lists the hash is the one the added-set dedup
-      // claims it for, so the walk picks the same anchor: depth = the anchor's
-      // own depth + 1. Recomputing from gitExpanded on every cache miss means
-      // collapsing a chain correctly *resets* the depths (no stale indents).
-      const memo = new Map<string, number>();
-      const commitDepth = (hash: string): number => {
-        const cached = memo.get(hash);
-        if (cached !== undefined) return cached;
-        for (const anchor of git.history) {
-          if (this.gitExpanded.has(anchor.shortHash) && (anchor.parents ?? []).includes(hash)) {
-            const depth = commitDepth(anchor.shortHash) + 1;
-            memo.set(hash, depth);
-            return depth;
-          }
-        }
-        memo.set(hash, 0);
-        return 0;
-      };
-      const added = new Set<string>();
-      let count = 0;
-      for (const commit of git.history) {
-        if (count >= FAMILY_MAX_ROWS) break;
-        if (!this.gitExpanded.has(commit.shortHash)) continue;
-        const depth = commitDepth(commit.shortHash) + 1;
-        const out: GitRow[] = [];
-        let capped = false;
-        for (const parentHash of commit.parents ?? []) {
-          if (count >= FAMILY_MAX_ROWS) {
-            capped = true;
-            break;
-          }
-          const parent = byHash.get(parentHash);
-          if (!parent || added.has(parent.shortHash)) continue;
-          added.add(parent.shortHash);
-          count += 1;
-          out.push({ kind: "commit-child", commit: parent, depth });
-        }
-        // v3: no silent cut. When the global breadth cap ends the walk
-        // mid-anchor, signal it with a dim hint row (skipped by the cursor).
-        if (capped && out.length > 0) {
-          out.push({
-            kind: "group",
-            label: "\u2026 more ancestors (narrow the view or collapse a branch)",
-            tone: "dim",
-          });
-        }
-        if (out.length > 0) familyByAnchor.set(commit.shortHash, out);
-      }
-    }
-    rows.push({ kind: "group", label: `History (${git.history.length})`, tone: "muted" });
-    for (const commit of git.history) {
-      rows.push({ kind: "commit", commit });
-      // Emit the whole family block once, directly under its expanded anchor.
-      const family = familyByAnchor.get(commit.shortHash);
-      if (family) rows.push(...family);
-    }
+    const rows = buildGitRows(git, this.gitExpanded);
     this.gitRowsCache = { git, version: this.gitTreeVersion, rows };
     return rows;
   }
@@ -623,7 +501,7 @@ export class NavigatorOverlay implements Focusable {
     const git = this.git;
     const c = this.gitNavRowsCache;
     if (c && c.git === git && c.version === this.gitTreeVersion) return c.rows;
-    const rows = this.gitRows().filter((row) => row.kind !== "group");
+    const rows = buildGitNavRows(this.gitRows());
     this.gitNavRowsCache = { git, version: this.gitTreeVersion, rows };
     return rows;
   }
@@ -639,6 +517,26 @@ export class NavigatorOverlay implements Focusable {
     if (this.gitExpanded.has(shortHash)) this.gitExpanded.delete(shortHash);
     else this.gitExpanded.add(shortHash);
     this.gitTreeVersion++;
+    this.touch();
+  }
+
+  /**
+   * Toggle `node.expanded` (or set it to `expanded` when given). The only
+   * in-place files-tree mutation entry point: treeVersion is bumped here so
+   * a future caller cannot stale the filesRowsCache (Issue #064 finding 2).
+   * touch() is idempotent (clears the render cache), so the calling handler's
+   * own trailing touch() stays harmless — no double render.
+   */
+  private toggleDir(node: FileNode, expanded?: boolean): void {
+    node.expanded = expanded === undefined ? !node.expanded : expanded;
+    this.treeVersion++;
+    this.touch();
+  }
+
+  /** Expand `node` and its ancestors (git-pane Enter on a file row, Issue #064). */
+  private expandTo(node: FileNode): void {
+    expandAncestors(node);
+    this.treeVersion++;
     this.touch();
   }
 
@@ -790,7 +688,7 @@ export class NavigatorOverlay implements Focusable {
 
   private handleFilesInput(data: string): void {
     const rows = this.filesRows();
-    const area = this.filesArea();
+    const area = filesArea(this.getTerminalRows());
     const current = rows[this.filesCursor];
 
     if (matchesKey(data, Key.up) || data === "k") {
@@ -807,21 +705,18 @@ export class NavigatorOverlay implements Focusable {
       this.filesCursor = pageJump(rows.length, this.filesCursor, -1, area);
     } else if (matchesKey(data, Key.enter)) {
       if (current?.node.isDir) {
-        current.node.expanded = !current.node.expanded;
-        this.treeVersion++;
+        this.toggleDir(current.node);
       } else if (current && current.kind !== "dir") {
         this.focus = "viewer";
         void this.openRelPath(current.node.relPath);
       }
     } else if (matchesKey(data, Key.right) || data === "l") {
       if (current?.node.isDir) {
-        current.node.expanded = true;
-        this.treeVersion++;
+        this.toggleDir(current.node, true);
       }
     } else if (matchesKey(data, Key.left) || data === "h") {
       if (current?.node.isDir) {
-        current.node.expanded = false;
-        this.treeVersion++;
+        this.toggleDir(current.node, false);
       }
     } else if (data === "/") {
       this.mode = "filter";
@@ -855,8 +750,7 @@ export class NavigatorOverlay implements Focusable {
       if (row.kind === "file") {
         if (this.root) {
           const node = findNode(this.root, row.relPath);
-          if (node) expandAncestors(node);
-          this.treeVersion++;
+          if (node) this.expandTo(node);
         }
         this.filterQuery = "";
         this.alignFilesCursor(row.relPath);
@@ -916,7 +810,7 @@ export class NavigatorOverlay implements Focusable {
 
   private handleViewerInput(data: string): void {
     const file = this.viewFile;
-    const area = this.viewerArea();
+    const area = viewerArea(this.getTerminalRows());
     const half = Math.max(1, Math.ceil(area / HALF_PAGE_DIVISOR));
     // A rendered chafa image is pre-styled content: wrap/hscroll/search are
     // meaningless, so w, h/l, /, n/N are inert on it (rendered-markdown
@@ -956,13 +850,13 @@ export class NavigatorOverlay implements Focusable {
       this.cycleSearch(-1);
     } else if (data === "w") {
       if (renderedImage) return;
-      if (this.viewRenderMarkdown && this.canRenderMarkdown(this.viewFile)) {
+      if (this.viewRenderMarkdown && canRenderMarkdown(this.viewFile)) {
         return;
       }
       this.viewWrap = !this.viewWrap;
       this.viewHscroll = 0;
     } else if (data === "m") {
-      if (this.canRenderMarkdown(this.viewFile)) {
+      if (canRenderMarkdown(this.viewFile)) {
         this.viewRenderMarkdown = !this.viewRenderMarkdown;
         this.viewHscroll = 0; // rendered mode is wrap-only
 
@@ -996,11 +890,11 @@ export class NavigatorOverlay implements Focusable {
       }
     } else if (matchesKey(data, Key.left) || data === "h") {
       if (renderedImage) return;
-      if (this.viewRenderMarkdown && this.canRenderMarkdown(this.viewFile)) return;
+      if (this.viewRenderMarkdown && canRenderMarkdown(this.viewFile)) return;
       this.viewHscroll = Math.max(0, this.viewHscroll - 4);
     } else if (matchesKey(data, Key.right) || data === "l") {
       if (renderedImage) return;
-      if (this.viewRenderMarkdown && this.canRenderMarkdown(this.viewFile)) return;
+      if (this.viewRenderMarkdown && canRenderMarkdown(this.viewFile)) return;
       this.viewHscroll += 4;
     } else {
       return;
@@ -1009,15 +903,6 @@ export class NavigatorOverlay implements Focusable {
   }
 
   // ── Actions ──
-
-  private canRenderMarkdown(file: ViewerFile | null): boolean {
-    return (
-      file !== null &&
-      file.kind !== "diff" &&
-      file.rawText !== undefined &&
-      isMarkdownPath(file.relPath)
-    );
-  }
 
   private getRenderedMarkdownLines(file: ViewerFile, width: number): string[] {
     if (width <= 0) return [];
@@ -1033,7 +918,7 @@ export class NavigatorOverlay implements Focusable {
     // Width safety clamp: pad to width and prevent bright ellipsis leakage
     const lines = rawLines.map((line) => {
       const vw = visibleWidth(line);
-      return vw < width ? line + " ".repeat(width - vw) : truncateToWidth(line, width, "");
+      return vw < width ? line + " ".repeat(width - vw) : hardTruncate(line, width);
     });
 
     this.mdCache = { file, width, lines };
@@ -1052,7 +937,7 @@ export class NavigatorOverlay implements Focusable {
   }
 
   private recomputeSearch(): void {
-    if (this.viewRenderMarkdown && this.canRenderMarkdown(this.viewFile) && this.mdCache) {
+    if (this.viewRenderMarkdown && canRenderMarkdown(this.viewFile) && this.mdCache) {
       this.recomputeSearchOnLines(this.mdCache.lines);
       return;
     }
@@ -1134,50 +1019,14 @@ export class NavigatorOverlay implements Focusable {
 
   // ── Geometry helpers ──
 
-  /**
-   * Height in rows, bounded by the terminal so the overlay never overflows it.
-   * Deliberately free to fall below MIN_OVERLAY_HEIGHT: that is what makes the
-   * compact "terminal too small" notice reachable (plan section 6).
-   */
-  private overlayHeight(): number {
-    const termRows = this.getTerminalRows() || 24;
-    return Math.max(0, Math.min(Math.floor(termRows * 0.85), termRows - 2));
-  }
-
-  private bodyRows(overlayH: number): number {
-    return Math.max(4, overlayH - 5);
-  }
-
   /** Help rows that fit. Shared by the input clamp and the renderer. */
-  private helpVisibleRows(body = this.bodyRows(this.overlayHeight())): number {
-    return Math.min(HELP_ROWS.length, Math.max(1, body - 4));
+  private helpVisibleRows(body = bodyRows(overlayHeight(this.getTerminalRows()))): number {
+    return computeHelpVisibleRows(body, HELP_ROWS.length);
   }
 
   /** Single source of truth for the help scroll limit. */
   private helpMaxScroll(): number {
-    return Math.max(0, HELP_ROWS.length - this.helpVisibleRows());
-  }
-
-  private useLeftColumn(innerW: number, bodyRows: number): boolean {
-    if (!this.showTree || bodyRows < 8) return false;
-    const candidate = this.leftColumnWidth(innerW);
-    return innerW >= LEFT_COLUMN_HIDE_BELOW && innerW - candidate - 1 >= 30;
-  }
-
-  private leftColumnWidth(innerW: number): number {
-    return Math.min(LEFT_COLUMN_MAX, Math.max(LEFT_COLUMN_MIN, Math.floor(innerW * LEFT_COLUMN_RATIO)));
-  }
-
-  private filesArea(): number {
-    const overlayH = this.overlayHeight();
-    const body = this.bodyRows(overlayH);
-    const split = this.splitRows(body);
-    return Math.max(2, split.filesH - 1);
-  }
-
-  private viewerArea(): number {
-    const overlayH = this.overlayHeight();
-    return Math.max(2, this.bodyRows(overlayH) - 1);
+    return computeHelpMaxScroll(HELP_ROWS.length, this.helpVisibleRows());
   }
 
   /**
@@ -1239,22 +1088,12 @@ export class NavigatorOverlay implements Focusable {
     this.scheduleReflow(file.relPath);
   }
 
-  private splitRows(body: number): { filesH: number; gitH: number } {
-    let filesH = Math.max(6, Math.floor(body * 0.55));
-    let gitH = body - filesH - 1;
-    if (gitH < GIT_MIN_ROWS) {
-      filesH = Math.max(3, body - GIT_MIN_ROWS - 1);
-      gitH = Math.max(2, body - filesH - 1);
-    }
-    return { filesH, gitH };
-  }
-
   // ── Render ──
 
   render(width: number): string[] {
     if (this.cachedLines && this.cachedWidth === width) return this.cachedLines;
     const T = this.T;
-    const overlayH = this.overlayHeight();
+    const overlayH = overlayHeight(this.getTerminalRows());
     const innerW = Math.max(0, width - 2);
 
     if (width < MIN_OVERLAY_WIDTH || overlayH < MIN_OVERLAY_HEIGHT) {
@@ -1262,21 +1101,21 @@ export class NavigatorOverlay implements Focusable {
       // clipped to `width`, so the notice is width-safe like the frame.
       const barW = Math.max(0, width - 2);
       const notice = (text: string) =>
-        this.padTo(T.frame("\u2502") + this.padTo(text, barW) + T.frame("\u2502"), width);
+        padTo(T.frame("\u2502") + padTo(text, barW) + T.frame("\u2502"), width);
       const lines = [
-        this.padTo(T.frame("\u250c" + "\u2500".repeat(barW) + "\u2510"), width),
+        padTo(T.frame("\u250c" + "\u2500".repeat(barW) + "\u2510"), width),
         notice(T.warning(" terminal too small for pi-navigator ")),
-        this.padTo(T.frame("\u2514" + "\u2500".repeat(barW) + "\u2518"), width),
+        padTo(T.frame("\u2514" + "\u2500".repeat(barW) + "\u2518"), width),
       ];
       this.cachedWidth = width;
       this.cachedLines = lines;
       return lines;
     }
-    const body = this.bodyRows(overlayH);
-    const withLeft = this.useLeftColumn(innerW, body);
-    const leftW = withLeft ? this.leftColumnWidth(innerW) : 0;
+    const body = bodyRows(overlayH);
+    const withLeft = useLeftColumn(innerW, body, this.showTree);
+    const leftW = withLeft ? leftColumnWidth(innerW) : 0;
     const rightW = withLeft ? innerW - leftW - 1 : innerW;
-    const { filesH } = this.splitRows(body);
+    const { filesH } = splitRows(body);
 
     const leftRows = withLeft ? this.buildLeftRows(leftW, filesH, body) : null;
     const rightRows = this.buildRightRows(rightW, body);
@@ -1284,7 +1123,11 @@ export class NavigatorOverlay implements Focusable {
 
     const lines: string[] = [];
     lines.push(T.frame("\u250c" + "\u2500".repeat(innerW) + "\u2510"));
-    lines.push(T.frame("\u2502") + this.buildTitleRow(innerW) + T.frame("\u2502"));
+    lines.push(
+      T.frame("\u2502") +
+        buildTitleRow(innerW, { theme: T, cwd: this.cwd, git: this.git, home: this.home }) +
+        T.frame("\u2502"),
+    );
     lines.push(T.frame("\u251c" + "\u2500".repeat(innerW) + "\u2524"));
 
     for (let i = 0; i < body; i++) {
@@ -1301,134 +1144,85 @@ export class NavigatorOverlay implements Focusable {
       }
     }
 
-    lines.push(T.frame("\u2502") + this.buildFooterRow(innerW) + T.frame("\u2502"));
+    // While filtering, the footer row area carries the filter bar instead of
+    // the plain hints (plan section 3.6 item 6).
+    const footerRow =
+      this.mode === "filter"
+        ? buildFilterBar(innerW, {
+            theme: T,
+            focused: this.focused,
+            filterQuery: this.filterQuery,
+            matchCount: this.filesRows().length,
+          })
+        : buildFooterRow(innerW, { theme: T, mode: this.mode, focus: this.focus, notice: this.notice });
+    lines.push(T.frame("\u2502") + footerRow + T.frame("\u2502"));
     lines.push(T.frame("\u2514" + "\u2500".repeat(innerW) + "\u2518"));
 
-    if (this.mode === "help") this.composeHelp(lines, innerW, body);
+    if (this.mode === "help") {
+      // Same limit the input handler clamps against, written back so the
+      // stored offset can never sit past what the modal can show.
+      const scroll = Math.max(0, Math.min(this.helpScroll, this.helpMaxScroll()));
+      this.helpScroll = scroll;
+      composeHelp(lines, innerW, body, { theme: T, helpRows: HELP_ROWS, helpScroll: scroll });
+    }
 
     this.cachedWidth = width;
     this.cachedLines = lines;
     return lines;
   }
 
-  // ── Frame pieces ──
-
-  private buildTitleRow(innerW: number): string {
-    const T = this.T;
-    const left = " " + T.accent(T.bold("pi-navigator")) + "  " + T.muted(this.shortPath(this.cwd));
-    const git = this.git;
-    const branchLabel = git?.available
-      ? (git.detached ? "(detached)" : git.branch ?? "(detached)")
-      : "no git";
-    const counters: string[] = [];
-    if (git?.available) {
-      if (git.ahead > 0) counters.push(T.success(`\u2191${git.ahead}`));
-      if (git.behind > 0) counters.push(T.error(`\u2193${git.behind}`));
-      const changed = git.unstaged.length + git.staged.length;
-      if (changed > 0) counters.push(T.dim(`${changed} changed`));
-    }
-    const right = " " + T.accent(branchLabel) + (counters.length > 0 ? "  " + counters.join(" ") : "") + " ";
-    return this.joinLeftRight(left, right, innerW);
-  }
-
-  private getFooterHint(): string {
-    switch (this.mode) {
-      case "help":
-        return MODE_HINTS.help;
-      case "filter":
-        return MODE_HINTS.filter;
-      case "search":
-        return MODE_HINTS.search;
-      case "normal":
-        return FOCUS_HINTS[this.focus];
-    }
-  }
-
-  private buildFooterRow(innerW: number): string {
-    const T = this.T;
-    // While filtering, the footer row area carries the filter bar instead of
-    // the plain hints (plan section 3.6 item 6).
-    if (this.mode === "filter") return this.buildFilterBar(innerW);
-    const hint = this.getFooterHint();
-    const left = " " + T.dim(hint);
-    let right = "";
-    if (this.notice) {
-      right = " " + T.warning(this.notice) + " ";
-    } else {
-      const panes: Array<[Focus, string]> = [
-        ["files", "files"],
-        ["git", "git"],
-        ["viewer", "viewer"],
-      ];
-      right =
-        " " +
-        panes.map(([pane, label]) => (this.focus === pane ? T.accent(T.bold(label)) : T.dim(label))).join("  ") +
-        " ";
-    }
-    return this.joinLeftRight(left, right, innerW);
-  }
-
-  /**
-   * Left/right split with the right side guaranteed: when both cannot fit,
-   * the left (informational hint or title path) is ellipsized and the right
-   * (pane labels, counters, branch) survives. Plain padTo would truncate the
-   * tail, which for the footer is exactly the focus indicator.
-   */
-  private joinLeftRight(left: string, right: string, width: number): string {
-    const rightW = visibleWidth(right);
-    const maxLeft = Math.max(0, width - rightW - 1);
-    // Empty ellipsis: truncateToWidth's default "..." is wrapped in \x1b[0m
-    // resets that would close the left part's style and render the ellipsis in
-    // bright default (visible against the dim footer hint / title path).
-    const leftPart = visibleWidth(left) > maxLeft ? truncateToWidth(left, maxLeft, "") : left;
-    const gap = Math.max(1, width - visibleWidth(leftPart) - rightW);
-    const line = leftPart + " ".repeat(gap) + right;
-    return this.padTo(line, width);
-  }
-
   // ── Left column ──
 
   private buildLeftRows(leftW: number, filesH: number, body: number): string[] {
     const rows: string[] = [];
-    const filesRows = this.filesRows();
-    const filesArea = Math.max(1, filesH - 1);
-    this.ensureFilesCursorVisibleFor(filesRows.length, filesArea);
+    const filesRowModel = this.filesRows();
+    const filesAreaRows = Math.max(1, filesH - 1);
+    this.ensureFilesCursorVisibleFor(filesRowModel.length, filesAreaRows);
 
-    rows.push(this.buildFilesHeader(leftW, filesRows.length));
-    for (let i = 0; i < filesArea; i++) {
+    const filesCtx = {
+      theme: this.T,
+      enableIcons: this.enableIcons,
+      filterQuery: this.filterQuery,
+      openRelPath: this.viewTargetRelPath ?? this.viewFile?.relPath ?? null,
+      filesCursor: this.filesCursor,
+      focus: this.focus,
+    };
+    rows.push(buildFilesHeader(leftW, filesRowModel.length, filesCtx));
+    for (let i = 0; i < filesAreaRows; i++) {
       const index = this.filesScroll + i;
-      const row = filesRows[index];
-      rows.push(row ? this.buildFileRow(row, index === this.filesCursor, leftW) : this.padTo("", leftW));
+      const row = filesRowModel[index];
+      rows.push(row ? buildFileRow(row, index === this.filesCursor, leftW, filesCtx) : padTo("", leftW));
     }
 
     // Placeholder so git rows start at index filesH + 1; the horizontal
     // separator row is drawn by render() and must not consume a data row.
-    rows.push(this.padTo("", leftW));
+    rows.push(padTo("", leftW));
 
-    const gitRows = this.gitRows();
+    const gitRowModel = this.gitRows();
     const navRows = this.gitNavRows();
     const gitArea = Math.max(1, body - filesH - 1 - 1);
-    this.ensureGitCursorVisibleFor(gitRows, navRows, gitArea);
+    this.ensureGitCursorVisibleFor(gitRowModel, navRows, gitArea);
 
-    rows.push(this.buildGitHeader(leftW));
+    rows.push(buildGitHeader(leftW, { theme: this.T, focus: this.focus, git: this.git, treeSource: this.treeSource }));
     // A dim … in the last slot when git rows continue below the window, unless
     // that slot holds the selection (plan section 3.6 item 4).
     const lastIndex = this.gitScroll + gitArea - 1;
     const selectedRow = navRows[this.gitCursor];
-    const selectedIndex = selectedRow ? gitRows.indexOf(selectedRow) : -1;
-    const markerIndex = gitRows.length > lastIndex + 1 && selectedIndex !== lastIndex ? lastIndex : -1;
+    const selectedIndex = selectedRow ? gitRowModel.indexOf(selectedRow) : -1;
+    const markerIndex = gitRowModel.length > lastIndex + 1 && selectedIndex !== lastIndex ? lastIndex : -1;
+    const gitCtx = { theme: this.T, expanded: this.gitExpanded };
     for (let i = 0; i < gitArea; i++) {
       const index = this.gitScroll + i;
       if (index === markerIndex) {
-        rows.push(this.padTo(" " + this.T.dim("\u2026"), leftW));
+        rows.push(padTo(" " + this.T.dim("\u2026"), leftW));
         continue;
       }
-      const row = gitRows[index];
+      const row = gitRowModel[index];
       if (!row) {
-        rows.push(this.padTo("", leftW));
+        rows.push(padTo("", leftW));
         continue;
       }
-      rows.push(this.buildGitRow(row, index === selectedIndex, leftW));
+      rows.push(buildGitRow(row, index === selectedIndex, leftW, gitCtx));
     }
 
     return rows;
@@ -1441,7 +1235,7 @@ export class NavigatorOverlay implements Focusable {
   }
 
   private ensureFilesCursorVisible(): void {
-    this.ensureFilesCursorVisibleFor(this.filesRows().length, this.filesArea());
+    this.ensureFilesCursorVisibleFor(this.filesRows().length, filesArea(this.getTerminalRows()));
   }
 
   private ensureGitCursorVisibleFor(rows: GitRow[], navRows: GitRow[], area: number): void {
@@ -1454,179 +1248,16 @@ export class NavigatorOverlay implements Focusable {
     this.gitScroll = Math.max(0, Math.min(this.gitScroll, Math.max(0, rows.length - area)));
   }
 
-  private buildFilesHeader(leftW: number, total: number): string {
-    const T = this.T;
-    const label = " " + (this.focus === "files" ? T.accent(T.bold("FILES")) : T.dim("FILES"));
-    const info = this.filterQuery
-      ? T.warning(`${total} matches`) + " "
-      : T.dim(`${Math.max(1, Math.min(this.filesCursor + 1, total))}/${total}`) + " ";
-    return this.joinLeftRight(label, info, leftW);
-  }
-
-  private buildFileRow(row: FilesRow, isCursor: boolean, leftW: number): string {
-    const T = this.T;
-    const arrow = isCursor ? T.accent(T.bold("\u25b6 ")) : "  ";
-    let body: string;
-    let badge = "";
-    // Icon column (Issue #028): two cells when PI_NAV_ICONS is on — the glyph
-    // plus the trailing space icon() emits — and zero otherwise. The glyph
-    // inherits the name color it sits next to. iconW is emission-only: the
-    // icon lives inside `body`, which truncateAndWidth measures, so reserving
-    // extra cells in room/gap below would double-count it and truncate names
-    // one cell early (Issue #060 finding 6).
-    const iconW = this.enableIcons ? 2 : 0;
-    const icon = (nameStyle: (t: string) => string) => (iconW ? nameStyle(mapExtensionToIcon(row.node.relPath, row.node.isDir)) + " " : "");
-
-    if (row.kind === "match") {
-      const prefixRaw = row.prefix.length > 18 ? "\u2026" + row.prefix.slice(-18) : row.prefix;
-      const prefix = T.dim(prefixRaw);
-      const name = row.node.name;
-      if (row.nameIndex >= 0 && this.filterQuery) {
-        const before = name.slice(0, row.nameIndex);
-        const hit = name.slice(row.nameIndex, row.nameIndex + this.filterQuery.length);
-        const after = name.slice(row.nameIndex + this.filterQuery.length);
-        body = icon(T.dim) + prefix + T.text(before) + T.warning(T.bold(hit)) + T.text(after);
-      } else {
-        body = icon(T.dim) + prefix + T.text(name);
-      }
-      if (row.node.gitCode) badge = " " + this.codeText(row.node.gitCode);
-    } else if (row.node.isDir) {
-      const marker = row.node.expanded ? "\u25be " : "\u25b8 ";
-      const indent = "  ".repeat(Math.max(0, row.node.depth));
-      const nameStyle = hasChanges(row.node) ? T.warning : row.node.hidden ? T.dim : T.muted;
-      const label = row.node.name + (row.node.isSymlink ? T.dim(" \u2197") : "");
-      // Issue #031: icon sits after the indent so it moves with depth and
-      // stays glued to the marker/name it belongs to, instead of floating at
-      // a fixed left column that desynchronizes from the indented label.
-      body = T.dim(indent) + icon(nameStyle) + T.dim(marker) + nameStyle(label);
-    } else {
-      const indent = "  ".repeat(Math.max(0, row.node.depth));
-      const openPath = this.viewTargetRelPath ?? this.viewFile?.relPath;
-      const isOpen = row.node.relPath === openPath;
-      let nameStyle = (text: string) => T.text(text);
-      if (isOpen) nameStyle = (text: string) => T.accent(T.bold(text));
-      else if (row.node.hidden) nameStyle = (text: string) => T.dim(text);
-      else if (row.node.gitCode === "??" || row.node.gitCode === "!!") nameStyle = (text: string) => T.dim(text);
-      const label = row.node.name + (row.node.isSymlink ? T.dim(" \u2197") : "");
-      // Issue #031: same depth-glued icon placement as the dir branch above.
-      body = T.dim(indent) + icon(nameStyle) + nameStyle(label);
-      if (row.node.gitCode) badge = " " + this.codeText(row.node.gitCode);
-    }
-
-    const room = Math.max(4, leftW - 2 - visibleWidth(badge));
-    // Empty ellipsis: truncateToWidth's default "..." is wrapped in \x1b[0m
-    // resets that close the styled body's open style and render "..." in bright
-    // default. truncate once, measure the result once (Issue #018).
-    const fit = truncateAndWidth(body, room);
-    const content = arrow + fit.text;
-    const gap = Math.max(0, leftW - visibleWidth(arrow) - fit.width - visibleWidth(badge));
-    const line = content + " ".repeat(gap) + badge;
-    return isCursor ? T.selectedBg(this.padTo(line, leftW)) : this.padTo(line, leftW);
-  }
-
-  private buildGitHeader(leftW: number): string {
-    const T = this.T;
-    const label = " " + (this.focus === "git" ? T.accent(T.bold("GIT")) : T.dim("GIT"));
-    const git = this.git;
-    let info = "";
-    if (git?.available) {
-      info = T.dim(`${git.unstaged.length} unstaged \u00b7 ${git.staged.length} staged`) + " ";
-      // Plan section 7: when the tree came from the filesystem walk (empty
-      // repository fallback), the panel says so instead of implying git mode.
-      if (this.treeSource === "fs") info = T.dim("fs walk") + " ";
-    } else {
-      info = T.dim(git?.error ?? "unavailable") + " ";
-    }
-    return this.joinLeftRight(label, info, leftW);
-  }
-
-  /**
-   * v3 expand/collapse marker for a commit row, mirroring the file pane's dir
-   * marker: ▾ when the family is expanded, ▸ when it has in-history parents to
-   * reveal, blank for a root (nothing to expand). Marker glyph + space = 2
-   * visible cells, same as the dir marker. A root commit gets no marker so the
-   * hash column stays aligned with rows that have one.
-   */
-  private commitMarker(commit: GitCommit): string {
-    const hasParents = (commit.parents?.length ?? 0) > 0;
-    if (!hasParents) return "  ";
-    return this.gitExpanded.has(commit.shortHash) ? "\u25be " : "\u25b8 "; // ▾ / ▸
-  }
-
-  private buildGitRow(row: GitRow, selected: boolean, leftW: number): string {
-    const T = this.T;
-    let line: string;
-    if (row.kind === "group") {
-      const tone =
-        row.tone === "warning"
-          ? T.warning
-          : row.tone === "success"
-            ? T.success
-            : row.tone === "dim"
-              ? T.dim
-              : T.muted;
-      line = " " + tone(row.label);
-    } else if (row.kind === "file") {
-      const arrow = selected ? T.accent(T.bold("\u25b6 ")) : "  ";
-      const nameStyle = selected ? T.text : row.staged ? T.success : T.warning;
-      const badge = " " + this.codeText(row.code);
-      const room = Math.max(4, leftW - 2 - visibleWidth(badge));
-      const fit = truncateAndWidth(nameStyle(row.relPath), room);
-      const gap = Math.max(0, leftW - 2 - fit.width - visibleWidth(badge));
-      line = arrow + fit.text + " ".repeat(gap) + badge;
-    } else if (row.kind === "commit-child") {
-      const arrow = selected ? T.accent(T.bold("\u25b6 ")) : "  ";
-      const marker = this.commitMarker(row.commit);
-      const hash = T.muted(row.commit.shortHash);
-      const indentW = 2 * row.depth;
-      // Width accounting: arrow(2) + indent(2·depth) + marker(2) + hash + sep(2).
-      const room = Math.max(4, leftW - 2 - indentW - 2 - visibleWidth(row.commit.shortHash) - 2);
-      const subject = T.dim(truncateToWidth(row.commit.subject, room, ""));
-      line = arrow + "  ".repeat(row.depth) + marker + hash + "  " + subject;
-    } else {
-      const arrow = selected ? T.accent(T.bold("\u25b6 ")) : "  ";
-      const marker = this.commitMarker(row.commit);
-      const hash = T.muted(row.commit.shortHash);
-      // Width accounting: arrow(2) + marker(2) + hash + sep(2).
-      const room = Math.max(4, leftW - 2 - 2 - visibleWidth(row.commit.shortHash) - 2);
-      const subject = T.dim(truncateToWidth(row.commit.subject, room, ""));
-      line = arrow + marker + hash + "  " + subject;
-    }
-    return selected ? T.selectedBg(this.padTo(line, leftW)) : this.padTo(line, leftW);
-  }
-
-  private codeText(code: string): string {
-    const T = this.T;
-    if (code === "M") return T.warning(code);
-    if (code === "A") return T.success(code);
-    if (code === "D") return T.error(code);
-    if (code === "R") return T.warning(code);
-    if (code === "C") return T.success(code);
-    if (code === "??") return T.dim("?");
-    if (code === "!!") return T.dim("!");
-    return T.muted(code);
-  }
-
   // ── Right pane ──
 
   private buildRightRows(rightW: number, body: number): string[] {
     const isSwitching = this.viewLoading && this.viewTargetRelPath !== null && this.viewTargetRelPath !== this.viewFile?.relPath;
     const file = isSwitching ? null : this.viewFile;
 
-    const canRender = this.canRenderMarkdown(file);
+    const canRender = canRenderMarkdown(file);
     const useRendered = canRender && this.viewRenderMarkdown;
 
-    let contentW: number;
-    let digits = 0;
-    if (useRendered && file) {
-      contentW = Math.max(10, rightW - 2);
-    } else if (file) {
-      digits = Math.max(2, String(file.lineCount ?? file.lines.length).length);
-      const gutterW = digits + 1;
-      contentW = Math.max(10, rightW - 2 - (gutterW + 2));
-    } else {
-      contentW = Math.max(10, rightW - 2);
-    }
+    const { contentW, digits } = paneContentWidth(file, useRendered, rightW);
 
     const mdLines = useRendered && file ? this.getRenderedMarkdownLines(file, contentW) : null;
     if (mdLines) {
@@ -1635,10 +1266,6 @@ export class NavigatorOverlay implements Focusable {
       this.recomputeSearchIfNeeded();
     }
 
-    const rows: string[] = [];
-    const headerRow = this.mode === "search" ? this.buildSearchBar(rightW) : this.buildViewerHeader(rightW);
-    rows.push(headerRow);
-
     const area = Math.max(1, body - 1);
     // Pane snapshot for chafa geometry. The chafa branch has no gutter, so
     // the pane is the full right panel width (rev. 2 amendment 3). Pure
@@ -1646,199 +1273,126 @@ export class NavigatorOverlay implements Focusable {
     // #053).
     this.lastViewerLayout = { cols: rightW, rows: area };
 
-    if (!file && this.viewLoading) {
-      for (let i = 0; i < area; i++) rows.push(this.padTo(i === 0 ? " " + this.T.dim("(loading\u2026)") : "", rightW));
-      return rows;
-    }
-    if (!file) {
-      for (let i = 0; i < area; i++) rows.push(this.padTo(i === 0 ? " " + this.T.dim("(select a file)") : "", rightW));
-      return rows;
-    }
+    // The header is built before the hscroll clamp (HEAD ordering): the
+    // `col N` badge shows the requested offset; the body rows use the clamp.
+    const hscrollForHeader = this.viewHscroll;
 
-    // Chafa render branch: no gutter, no wrap, no hscroll, no search (§7.5).
-    // Rows are pre-styled and content-stable, each carrying its own trailing
-    // reset (§8), so every row is truncated to the full pane width with an
-    // empty ellipsis (Issue #010) and padded. viewScroll clamps exactly like
-    // the text path (render-time clamp keeps the frame valid between a resize
-    // and its debounced reflow, D10).
-    if (
-      file.kind === "image" &&
-      file.imageTier === "chafa" &&
-      (file.imageLines?.length ?? 0) > 0 &&
-      !this.imageAsCard
-    ) {
-      const imageLines = file.imageLines ?? [];
-      this.viewScroll = Math.max(0, Math.min(this.viewScroll, Math.max(0, imageLines.length - area)));
-      for (let i = 0; i < area; i++) {
-        const line = imageLines[this.viewScroll + i];
-        rows.push(line === undefined ? this.padTo("", rightW) : this.padTo(truncateToWidth(line, rightW, ""), rightW));
-      }
-      return rows;
-    }
+    // Precompute the content the pure renderer lays out. Every cache write,
+    // clamp and searchJump mutation stays here, in the original order; the
+    // pure viewer renderer only pads and joins the already-computed rows.
+    let mdContent: Array<string | null> | null = null;
+    let display: DisplayRow[] | null = null;
+    let imageLines: string[] | null = null;
 
-    if (file.kind === "binary" || file.kind === "error" || (file.kind === "image" && (file.imageTier !== "chafa" || this.imageAsCard))) {
-      rows.push(...this.buildCard(file, rightW, area));
-      return rows;
-    }
-
-    // Text-like content (v3: `diff` falls through here, so a commit diff gets
-    // the same gutter / wrap / scroll / search path as a text file).
-    const T = this.T;
-    let noticeRows = 0;
-    if ((file.kind === "truncated" || file.kind === "diff") && file.notice) noticeRows += 1;
-    if (this.diskChanged) noticeRows += 1;
-    const contentArea = Math.max(1, area - noticeRows);
-
-    // Optional notices above the content.
-    // v3: the diff notice ("commit abc1234 · N files · +I −D") is a summary,
-    // not an alert, so it uses T.dim rather than the truncation warning.
-    if (file.kind === "truncated" && file.notice) rows.push(this.padTo(" " + T.warning(file.notice), rightW));
-    if (file.kind === "diff" && file.notice) rows.push(this.padTo(" " + T.dim(file.notice), rightW));
-    if (this.diskChanged) {
-      rows.push(this.padTo(" " + T.warning("file changed on disk \u2014 press r to reload"), rightW));
-    }
-
-    if (useRendered && mdLines) {
-
-      if (this.searchJump && this.searchMatches.length > 0) {
-        const currentMatch = this.searchMatches[this.searchIndex];
-        if (currentMatch) {
-          this.viewScroll = Math.max(0, currentMatch.line - Math.floor(contentArea / 2));
-        }
-        this.searchJump = false;
-      }
-      this.viewScroll = Math.max(0, Math.min(this.viewScroll, Math.max(0, mdLines.length - contentArea)));
-
-      const currentMatch = this.searchMatches.length > 0
-        ? this.searchMatches[Math.min(this.searchIndex, this.searchMatches.length - 1)]
-        : undefined;
-      const currentOccurrenceOnLine = currentMatch
-        ? this.searchMatches.filter((m) => m.line === currentMatch.line && m.start < currentMatch.start).length
-        : -1;
-
-      for (let i = 0; i < contentArea; i++) {
-        const lineIdx = this.viewScroll + i;
-        const rawLine = mdLines[lineIdx];
-        if (rawLine === undefined) {
-          rows.push(this.padTo("", rightW));
-          continue;
-        }
-
-        let styledLine = rawLine;
-        if (this.searchQuery && this.searchMatches.length > 0 && this.searchMatchLines.has(lineIdx)) {
-          styledLine = this.markRenderedLineMatches(styledLine, lineIdx, currentMatch, currentOccurrenceOnLine);
-        }
-        rows.push(this.padTo(" " + styledLine, rightW));
-      }
-    } else {
-      const marked = this.markSearch(file);
-
-      // Clamp horizontal scroll and scroll position. `maxLineWidth` depends only
-      // on visible width, which search marking does not change, so it is cached
-      // on the stable `file` reference; `computeRows` is cached on the cached
-      // `marked` reference plus width/wrap/hscroll, so vertical scrolling no
-      // longer re-wraps the whole file each keystroke.
-      const maxH = Math.max(0, this.cachedMaxLineWidth(file) - contentW);
-      this.viewHscroll = Math.max(0, Math.min(this.viewHscroll, maxH));
-
-      const display = this.cachedComputeRows(marked, contentW, this.viewWrap, this.viewHscroll);
-      if (this.searchJump && this.searchMatches.length > 0) {
-        const currentMatch = this.searchMatches[this.searchIndex];
-        const target = display.findIndex((row) => row.line === currentMatch?.line);
-        if (target >= 0) this.viewScroll = Math.max(0, target - Math.floor(contentArea / 2));
-        this.searchJump = false;
-      }
-      this.viewScroll = Math.max(0, Math.min(this.viewScroll, Math.max(0, display.length - contentArea)));
-
-      for (let i = 0; i < contentArea; i++) {
-        const row = display[this.viewScroll + i];
-        if (!row) {
-          rows.push(this.padTo("", rightW));
-          continue;
-        }
-        const gutter = row.line === null ? " ".repeat(digits) + " " : String(row.line + 1).padStart(digits) + " ";
-        const line = " " + T.dim(gutter) + T.frame("\u2502") + " " + row.text;
-        rows.push(this.padTo(line, rightW));
-      }
-    }
-
-    return rows;
-  }
-
-  private buildViewerHeader(rightW: number): string {
-    const T = this.T;
-    const isSwitching = this.viewLoading && this.viewTargetRelPath !== null && this.viewTargetRelPath !== this.viewFile?.relPath;
-    const currentPath = (isSwitching ? this.viewTargetRelPath : this.viewFile?.relPath) ?? "(no file)";
-    const file = isSwitching ? null : this.viewFile;
-    // v3: a commit diff shows "commit <hash>" instead of a path — mirrors git
-    // show's header and keeps the long commit:<hash> identity string out of
-    // the title row.
-    const isCommit = (file?.kind === "diff" && file.commitHash) || currentPath.startsWith("commit:");
-    const commitHash = file?.commitHash ?? (currentPath.startsWith("commit:") ? currentPath.slice("commit:".length) : "");
-    const headerPath = isCommit ? `commit ${commitHash}` : this.shortPath(currentPath);
-    const left = " " + (this.focus === "viewer" ? T.accent(T.bold(headerPath)) : T.muted(headerPath));
-    const meta: string[] = [];
     if (file) {
-      const size = formatSize(file.sizeBytes);
-      if (size) meta.push(size);
-      if (file.lineCount !== undefined) meta.push(`${file.lineCount}L`);
-      if (file.kind === "truncated") meta.push("truncated");
-      if (this.canRenderMarkdown(file)) {
-        meta.push(this.viewRenderMarkdown ? "m code" : "m render");
-      }
-      if (file.kind === "image" && this.imageSupport.active) {
-        // Header badge (spec §7.5): a chafa render shows the toggle affordance;
-        // a chafa-capable card shows how to get back to the render.
-        if (file.imageTier === "chafa" && !this.imageAsCard) {
-          meta.push("chafa");
-          meta.push("i card");
+      const chafaRender =
+        file.kind === "image" &&
+        file.imageTier === "chafa" &&
+        (file.imageLines?.length ?? 0) > 0 &&
+        !this.imageAsCard;
+      const isCard =
+        file.kind === "binary" ||
+        file.kind === "error" ||
+        (file.kind === "image" && (file.imageTier !== "chafa" || this.imageAsCard));
+
+      if (chafaRender) {
+        // Chafa render branch: no gutter, no wrap, no hscroll, no search
+        // (§7.5). viewScroll clamps exactly like the text path (render-time
+        // clamp keeps the frame valid between a resize and its debounced
+        // reflow, D10).
+        const imageRows = file.imageLines ?? [];
+        this.viewScroll = Math.max(0, Math.min(this.viewScroll, Math.max(0, imageRows.length - area)));
+        imageLines = imageRows;
+      } else if (!isCard) {
+        const { contentArea } = paneContentArea(area, file, this.diskChanged);
+
+        if (useRendered && mdLines) {
+          if (this.searchJump && this.searchMatches.length > 0) {
+            const currentMatch = this.searchMatches[this.searchIndex];
+            if (currentMatch) {
+              this.viewScroll = Math.max(0, currentMatch.line - Math.floor(contentArea / 2));
+            }
+            this.searchJump = false;
+          }
+          this.viewScroll = Math.max(0, Math.min(this.viewScroll, Math.max(0, mdLines.length - contentArea)));
+
+          const currentMatch =
+            this.searchMatches.length > 0
+              ? this.searchMatches[Math.min(this.searchIndex, this.searchMatches.length - 1)]
+              : undefined;
+          const currentOccurrenceOnLine = currentMatch
+            ? this.searchMatches.filter((m) => m.line === currentMatch.line && m.start < currentMatch.start).length
+            : -1;
+
+          // Pre-style the rendered-markdown content rows: per-line search
+          // marking stays in the class (markRenderedLineMatches), the pure
+          // renderer just pads the pre-styled results.
+          mdContent = [];
+          for (let i = 0; i < contentArea; i++) {
+            const lineIdx = this.viewScroll + i;
+            const rawLine = mdLines[lineIdx];
+            if (rawLine === undefined) {
+              mdContent.push(null);
+              continue;
+            }
+            let styledLine = rawLine;
+            if (this.searchQuery && this.searchMatches.length > 0 && this.searchMatchLines.has(lineIdx)) {
+              styledLine = this.markRenderedLineMatches(styledLine, lineIdx, currentMatch, currentOccurrenceOnLine);
+            }
+            mdContent.push(styledLine);
+          }
         } else {
-          meta.push("i render");
+          const marked = this.markSearch(file);
+
+          // Clamp horizontal scroll and scroll position. `maxLineWidth` depends
+          // only on visible width, which search marking does not change, so it
+          // is cached on the stable `file` reference; `computeRows` is cached
+          // on the cached `marked` reference plus width/wrap/hscroll, so
+          // vertical scrolling no longer re-wraps the whole file each
+          // keystroke.
+          const maxH = Math.max(0, this.cachedMaxLineWidth(file) - contentW);
+          this.viewHscroll = Math.max(0, Math.min(this.viewHscroll, maxH));
+
+          display = this.cachedComputeRows(marked, contentW, this.viewWrap, this.viewHscroll);
+          if (this.searchJump && this.searchMatches.length > 0) {
+            const currentMatch = this.searchMatches[this.searchIndex];
+            const target = display.findIndex((row) => row.line === currentMatch?.line);
+            if (target >= 0) this.viewScroll = Math.max(0, target - Math.floor(contentArea / 2));
+            this.searchJump = false;
+          }
+          this.viewScroll = Math.max(0, Math.min(this.viewScroll, Math.max(0, display.length - contentArea)));
         }
       }
-      if (!this.viewRenderMarkdown && this.viewWrap) meta.push("wrap");
-      if (this.viewHscroll > 0) meta.push(`col ${this.viewHscroll + 1}`);
-      if (this.viewLoading) meta.push("loading\u2026");
-    } else if (this.viewLoading && currentPath !== "(no file)") {
-      meta.push("loading\u2026");
     }
-    const right = meta.length > 0 ? T.dim(meta.join(" \u00b7 ")) + " " : " ";
-    return this.joinLeftRight(left, right, rightW);
-  }
 
-  /**
-   * A typed query plus a reverse-video cursor. While the component is focused
-   * the hardware cursor marker precedes the fake cursor, which is what lets the
-   * terminal position the IME candidate window over it (standards section 2.3).
-   */
-  private buildInputBar(query: string, placeholder: string, info: string | null, width: number): string {
-    const T = this.T;
-    const cursor = this.focused ? CURSOR_MARKER + T.text("\u2588") : T.text("\u2588");
-    const left = " " + T.text("/" + query) + cursor;
-    const right = (info ? T.warning(info) : T.dim(placeholder)) + " ";
-    return this.joinLeftRight(left, right, width);
-  }
-
-  /** Search bar: replaces the viewer header line while searching. */
-  private buildSearchBar(rightW: number): string {
-    return this.buildInputBar(
-      this.searchQuery,
-      MODE_HINTS.search,
-      this.searchQuery
-        ? `${this.searchMatches.length === 0 ? 0 : this.searchIndex + 1}/${this.searchMatches.length} matches`
-        : null,
-      rightW,
-    );
-  }
-
-  /** Filter bar: drawn in the footer row area while filtering. */
-  private buildFilterBar(width: number): string {
-    return this.buildInputBar(
-      this.filterQuery,
-      MODE_HINTS.filter,
-      this.filterQuery ? `${this.filesRows().length} matches` : null,
-      width,
-    );
+    const view: ViewerPaneView = {
+      theme: this.T,
+      focus: this.focus,
+      home: this.home,
+      focused: this.focused,
+      file,
+      loading: this.viewLoading,
+      switching: isSwitching,
+      targetRelPath: this.viewTargetRelPath,
+      diskChanged: this.diskChanged,
+      searchMode: this.mode === "search",
+      renderMarkdown: this.viewRenderMarkdown,
+      renderedMode: useRendered,
+      mdContent,
+      display,
+      digits,
+      viewScroll: this.viewScroll,
+      wrap: this.viewWrap,
+      hscroll: hscrollForHeader,
+      imageLines,
+      imageAsCard: this.imageAsCard,
+      imageSupport: this.imageSupport,
+      imageGeometry: this.currentImageGeometry(),
+      searchQuery: this.searchQuery,
+      searchMatches: this.searchMatches,
+      searchIndex: this.searchIndex,
+    };
+    return renderViewerPane(view, rightW, area);
   }
 
   private recomputeSearchIfNeeded(lines?: string[]): void {
@@ -1912,149 +1466,4 @@ export class NavigatorOverlay implements Focusable {
     return rows;
   }
 
-  private buildCard(file: ViewerFile, rightW: number, area: number): string[] {
-    const T = this.T;
-    const title = file.kind === "image" ? "Image" : file.kind === "binary" ? "Binary file" : "Cannot read";
-    const titleStyle = file.kind === "error" ? T.error : file.kind === "binary" ? T.warning : T.accent;
-    const body: string[] = [file.relPath];
-    if (file.message) body.push(file.message);
-    if (file.kind === "binary") body.push("binary content is not rendered");
-    if (file.kind === "image") body.push(...this.imageCardHints(file));
-    if (file.kind === "error") body.push("press Tab, then pick another file");
-
-    const contentWidth = Math.max(
-      4,
-      Math.min(Math.max(4, rightW - 6), Math.max(24, Math.max(...[title, ...body].map((text) => visibleWidth(text))) + 4)),
-    );
-    const boxW = contentWidth + 2;
-    const boxH = body.length + 2;
-    const topPad = Math.max(0, Math.floor((area - boxH) / 2));
-    const leftPad = Math.max(0, Math.floor((rightW - boxW) / 2));
-
-    const out: string[] = [];
-    const blank = (text: string) => " ".repeat(leftPad) + text + " ".repeat(Math.max(0, rightW - leftPad - visibleWidth(text)));
-    const borderRow = (left: string, fill: string, right: string) =>
-      blank(T.frame(left + fill.repeat(Math.max(0, boxW - 2)) + right));
-    for (let i = 0; i < topPad; i++) out.push(blank(""));
-    out.push(borderRow("\u250c", "\u2500", "\u2510"));
-    // Interior = 1 space + " title " + padding = contentWidth, so the title row
-    // is exactly as wide as the border rows (boxW = contentWidth + 2).
-    const titlePad = Math.max(0, contentWidth - visibleWidth(title) - 3);
-    out.push(blank(T.frame("\u2502") + " " + titleStyle(T.bold(" " + title + " ")) + " ".repeat(titlePad) + T.frame("\u2502")));
-    for (const text of body) {
-      // Empty ellipsis: the default "..." is wrapped in \x1b[0m resets that
-      // would close the T.muted span and render "..." in bright default.
-      // Truncate once and reuse the measured width so the padding matches.
-      const cell = truncateAndWidth(text, Math.max(0, contentWidth - 1));
-      out.push(
-        blank(T.frame("\u2502") + " " + T.muted(cell.text) + " ".repeat(Math.max(0, contentWidth - 1 - cell.width)) + T.frame("\u2502")),
-      );
-    }
-    out.push(borderRow("\u2514", "\u2500", "\u2518"));
-    while (out.length < area) out.push(this.padTo("", rightW));
-    return out.slice(0, area).map((row) => this.padTo(row, rightW));
-  }
-
-  /**
-   * Image-card guidance rows (spec §9): the first applicable hint in
-   * priority order — render failure, pane too small, pi-chafa absent, chafa
-   * missing/too-old/error, still resolving, mode off with chafa ok, host
-   * images disabled, else nothing (the header badge carries the affordance).
-   * Rows stay short; buildCard hard-cuts safely at narrow widths.
-   */
-  private imageCardHints(file: ViewerFile): string[] {
-    const support = this.imageSupport;
-    if (file.imageError) return [`chafa failed: ${file.imageError}`];
-    if (this.currentImageGeometry() === null) return ["pane too small for a rendered image"];
-    if (!support.piChafa.present) {
-      // Kept within the card's content clamp (rightW - 6) so the default
-      // 120-column layout shows the whole hint, not a hard cut.
-      return ["optional: install chafa + pi-chafa (pi install npm:pi-chafa)"];
-    }
-    if (support.chafa.state === "missing") return ["chafa not found - install it, or set CHAFA_BIN / binaryPath"];
-    if (support.chafa.state === "too-old") return ["chafa is older than 1.10 - upgrade to render images"];
-    if (support.chafa.state === "error") return [`chafa probe failed: ${support.chafa.detail}`];
-    if (support.chafa.state === "deferred") return ["checking image support\u2026"];
-    if (support.mode !== "chafa") return ["optional: enable images.mode=chafa to render images here"];
-    if (!support.hostShowImages) return ["terminal.showImages is false - image rendering disabled"];
-    return [];
-  }
-
-  // ── Help modal ──
-
-  private composeHelp(lines: string[], innerW: number, body: number): void {
-    const T = this.T;
-    const boxW = Math.min(innerW - 2, 66);
-    const visibleRows = this.helpVisibleRows(body);
-    const boxH = visibleRows + 3;
-    const startRow = Math.max(0, Math.floor((body - boxH) / 2));
-    const colPad = Math.max(0, Math.floor((innerW - boxW) / 2));
-    // The same limit the input handler clamps against, and written back so the
-    // stored offset can never sit past what the modal can show.
-    const scroll = Math.max(0, Math.min(this.helpScroll, this.helpMaxScroll()));
-    this.helpScroll = scroll;
-
-    const modal: string[] = [];
-    const inner = (text: string) => {
-      const padded = this.padTo(text, boxW - 2);
-      return T.frame("\u2502") + padded + T.frame("\u2502");
-    };
-    modal.push(T.frame("\u250c" + "\u2500".repeat(boxW - 2) + "\u2510"));
-    modal.push(inner(" " + T.accent(T.bold("pi-navigator \u2014 keys"))));
-    for (let i = 0; i < visibleRows; i++) {
-      const row = HELP_ROWS[scroll + i];
-      if (!row) {
-        modal.push(inner(""));
-        continue;
-      }
-      const [keys, description] = row;
-      const keyCell = T.accent(keys.padEnd(16));
-      // Row layout is " " + keyCell(16) + " " + descCell inside the boxW-2
-      // inner area, so the description gets boxW-20 columns (the prior
-      // boxW-22 cut two columns too early). truncateToWidth's default ellipsis
-      // wraps "..." in \x1b[0m resets; wrapping that in T.muted() would close
-      // the muted span before the ellipsis and render "..." in bright default,
-      // breaking the dim modal at narrow widths. Truncate with no ellipsis,
-      // strip the injected reset, and append our own ellipsis so the indicator
-      // stays inside the muted style.
-      const descWidth = boxW - 20;
-      let descCell = description;
-      if (visibleWidth(description) > descWidth) {
-        const cut = truncateToWidth(description, Math.max(1, descWidth - 1), "").replace(/\x1b\[[0-9;]*m/g, "");
-        descCell = cut + "\u2026";
-      }
-      modal.push(inner(" " + keyCell + " " + T.muted(descCell)));
-    }
-    modal.push(T.frame("\u2514" + "\u2500".repeat(boxW - 2) + "\u2518"));
-
-    for (let i = 0; i < modal.length; i++) {
-      const target = 3 + startRow + i; // lines[0..2] are top, title, separator
-      if (target >= lines.length - 1) break;
-      const modalRow = modal[i];
-      if (modalRow === undefined) continue;
-      const rowInner = " ".repeat(colPad) + modalRow + " ".repeat(Math.max(0, innerW - colPad - visibleWidth(modalRow)));
-      lines[target] = T.frame("\u2502") + this.padTo(rowInner, innerW) + T.frame("\u2502");
-    }
-  }
-
-  // ── Small helpers ──
-
-  private padTo(content: string, width: number): string {
-    const vw = visibleWidth(content);
-    if (vw < width) return content + " ".repeat(width - vw);
-    // Empty ellipsis: truncateToWidth's default "..." is wrapped in \x1b[0m
-    // resets that close any open style and render the ellipsis in bright
-    // default (visible against dim text). Hard-cut with a single clean reset.
-    return truncateToWidth(content, width, "");
-  }
-
-  private shortPath(path: string): string {
-    const home = this.home;
-    let shortened = path;
-    if (home && (path === home || path.startsWith(home + "/"))) {
-      shortened = "~" + path.slice(home.length);
-    }
-    if (shortened.length > 48) shortened = "\u2026" + shortened.slice(shortened.length - 47);
-    return shortened;
-  }
 }

@@ -1,6 +1,6 @@
 # Issue #063: Code-Health Review Follow-Ups (Duplication, Seams, Test Gaps)
 
-- **Status**: Open (Pending)
+- **Status**: Resolved (v0.7.2)
 - **Type**: Technical Debt
 - **Severity**: Low
 - **Component**: [`icons.ts`](file:///home/jhonny/Sources/pi-navigator/icons.ts) / [`settings.ts`](file:///home/jhonny/Sources/pi-navigator/settings.ts) / [`index.ts`](file:///home/jhonny/Sources/pi-navigator/index.ts) / [`navigator.ts`](file:///home/jhonny/Sources/pi-navigator/navigator.ts) / [`help.ts`](file:///home/jhonny/Sources/pi-navigator/help.ts) / tests
@@ -52,13 +52,24 @@ Batch of low-severity findings from the review run alongside Issue #062 (two-axi
 
 ## Acceptance Criteria
 
-- [ ] Shared env truth-table parser; both adapters project from it.
-- [ ] One notify-once implementation used by `runNavigator` and `runSettings`.
-- [ ] `hardTruncate` helper in `viewer.ts`; the 7 raw empty-ellipsis call sites use it.
-- [ ] Settings normalization driven by the field registry; `setField` no longer switches on hardcoded ids.
-- [ ] Help/command/keybinding tables have a single source or a drift test.
-- [ ] `diff.ts` and `theme.ts` gain direct suites.
-- [ ] `npm run typecheck` and `npm test` green.
+- [x] Shared env truth-table parser; both adapters project from it.
+- [x] One notify-once implementation used by `runNavigator` and `runSettings`.
+- [x] `hardTruncate` helper in `viewer.ts`; the 7 raw empty-ellipsis call sites use it.
+- [x] Settings normalization driven by the field registry; `setField` no longer switches on hardcoded ids.
+- [x] Help/command/keybinding tables have a single source or a drift test.
+- [x] `diff.ts` and `theme.ts` gain direct suites.
+- [x] `npm run typecheck` and `npm test` green.
+
+## Resolution
+
+All six findings fixed; 19 suites / 496 cases green (from 10 / 347), typecheck clean. version 0.7.2.
+
+1. **Env truth table.** New pure, dependency-free `env.ts` owns `TRUTHY_ENV_VALUES` / `FALSY_ENV_VALUES` and `parseTruthyEnv(value, envName)` → `{ value?, warning? }`. `parseIconMode` (`icons.ts`) is a three-line projection; `parseImageMode` (`settings.ts`) recognizes the literal `chafa` token itself *before* delegating, so each env var keeps its accepted set byte-for-byte (`PI_NAV_ICONS=chafa` is still invalid-with-warning; `PI_NAV_IMAGES=chafa` still means chafa). Warning template (`<value> is not a valid <ENV_NAME> value; using the file/default setting`) and the unset/empty/whitespace "no override" rule are pinned by `test/env.test.ts` (13 cases) plus the existing `toEqual` shape pins in `test/icons.test.ts` / `test/settings.test.ts`. `env.ts` was added to `package.json` `files` **and** `tsconfig.json` `include`, and the reason (Issue #037) is documented in the module header.
+2. **Notify-once.** `makeWarningNotifier(ui: Pick<ExtensionUIContext, "notify">)` in `index.ts` creates the `Set` per factory call and returns the closure; both `runNavigator` and `runSettings` call it. Per-invocation scope (not module-global) is pinned by a dedicated test, including a second `/navigator` invocation warning again for the same message.
+3. **`hardTruncate`.** Added to `viewer.ts` next to `sliceStyled` with the #010 rationale at the definition; `truncateAndWidth` (`frame.ts` after the #064 extraction) and the other seven sites now call it, `navigator.ts` no longer imports `truncateToWidth` (only one mention survives, in a comment). The two subtle sites kept their shape: the fit-or-cut branch in the rendered-markdown rows and the strip-then-re-style path in the help modal. Pinned by four focused tests (passthrough, no-ellipsis/no-injected-reset cut, wide-CJK cell safety, open-style termination).
+4. **Registry-driven settings.** `NavigatorConfigField` gained `default`; `DEFAULT_NAVIGATOR_SETTINGS`, `cloneDefaults()`, `normalizeNavigatorSettings`, `serializeNavigatorSettings` and `setField` all walk `NAVIGATOR_CONFIG_FIELDS` — the `switch` over hardcoded `"images.mode"`-style ids is gone. Warning strings, section/leaf key order and the serialized JSON byte order are unchanged (existing assertions still pass; new tests pin the registry as the source of defaults and round-tripping). `settings_menu.ts` was deliberately left alone: its `field.kind` switch formats *display* values, a different axis from the normalizer's *validation* switch, and unifying them would have added an abstraction without removing code.
+5. **One help surface.** `help.ts` owns `NAVIGATOR_SUBCOMMANDS` (`{cmd, desc, completionLabel}`) and `NAVIGATOR_KEYBINDINGS` (`{id, keys, description}`). `NAVIGATOR_COMMANDS` derives from the subcommand table, `navigatorCompletions` **and** `parseNavigatorArgs` derive from it in `index.ts`, and `navigator.ts` re-exports `HELP_ROWS` projected from the keybinding table (byte-identical `?` modal: same 19 rows, same order). Drift tests assert the completions match the help rows verbatim, every subcommand parses to its kind, `HELP_ROWS` is exactly the shared projection, and the ids are unique.
+6. **Direct suites.** `test/diff.test.ts` (30) pins the `styleDiffLines` classification table (incl. mid-line prefix safety and 1:1 content preservation) and `test/theme.test.ts` (21) pins every semantic token mapping plus the #042 optional-`underline` guard and the `searchMatch`/`searchCurrent` composition order.
 
 ## References
 

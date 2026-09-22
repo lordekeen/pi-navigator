@@ -98,6 +98,13 @@ describe("parseImageMode", () => {
     expect(result.warning ?? "").toContain("PI_NAV_IMAGES");
     expect(result.warning ?? "").toContain("file/default");
   });
+
+  it("emits the exact warning string for invalid values", () => {
+    expect(parseImageMode("native")).toEqual({
+      mode: undefined,
+      warning: "native is not a valid PI_NAV_IMAGES value; using the file/default setting",
+    });
+  });
 });
 
 // ── normalizeNavigatorSettings (§5.2) ──
@@ -126,6 +133,27 @@ describe("normalizeNavigatorSettings", () => {
       viewer: { wrap: false, markdown: "code" },
       tree: { showHidden: false },
     });
+  });
+
+  it("every registry field's default is what an empty file normalizes to", () => {
+    const defaults = normalizeNavigatorSettings({}).settings;
+    expect(defaults).toEqual(DEFAULT_NAVIGATOR_SETTINGS);
+    for (const field of NAVIGATOR_CONFIG_FIELDS) {
+      let current: unknown = defaults;
+      for (const segment of field.path) {
+        current = (current as Record<string, unknown>)[segment];
+      }
+      expect(current, field.id).toEqual(field.default);
+    }
+  });
+
+  it("the exported defaults stay deeply frozen", () => {
+    expect(Object.isFrozen(DEFAULT_NAVIGATOR_SETTINGS)).toBe(true);
+    for (const section of ["images", "icons", "viewer", "tree"]) {
+      const value = (DEFAULT_NAVIGATOR_SETTINGS as unknown as Record<string, unknown>)[section];
+      expect(value).toBeDefined();
+      if (value !== null && typeof value === "object") expect(Object.isFrozen(value), section).toBe(true);
+    }
   });
 
   it("accepts images.mode chafa", () => {
@@ -218,6 +246,29 @@ describe("normalizeNavigatorSettings", () => {
     expect(bad.warnings.some((w) => w.includes("viewer.markdown"))).toBe(true);
   });
 
+  it("keeps the exact per-kind warning phrasing for invalid values", () => {
+    expect(
+      normalizeNavigatorSettings({ version: 1, icons: { enabled: "x" }, viewer: { markdown: "x" } }).warnings,
+    ).toEqual(['icons.enabled "x" is invalid; using false', 'viewer.markdown "x" is invalid; using "code"']);
+    expect(normalizeNavigatorSettings({ version: 1, icons: "junk" }).warnings).toEqual([
+      '"icons" must be an object; using defaults',
+    ]);
+  });
+
+  it("every registry enum field warns on a non-option value and falls back to its default", () => {
+    for (const field of NAVIGATOR_CONFIG_FIELDS.filter((candidate) => candidate.kind === "enum")) {
+      const [sectionKey, key] = field.path;
+      if (sectionKey === undefined || key === undefined) continue;
+      const result = normalizeNavigatorSettings({ [sectionKey]: { [key]: "not-an-option" } });
+      expect(result.warnings.some((warning) => warning.includes(field.id)), field.id).toBe(true);
+      let current: unknown = result.settings;
+      for (const segment of field.path) {
+        current = (current as Record<string, unknown>)[segment];
+      }
+      expect(current, field.id).toEqual(field.default);
+    }
+  });
+
   it("warns once per unknown top-level key", () => {
     const result = normalizeNavigatorSettings({ version: 1, images: { mode: "off" }, bogus: 1, other: "x" });
     expect(result.warnings).toContain('unknown setting "bogus" ignored');
@@ -276,6 +327,11 @@ describe("serializeNavigatorSettings", () => {
       viewer: { wrap: false, markdown: "code" },
       tree: { showHidden: false },
     });
+    // Key order is part of the persistence contract: the writer (and thus
+    // versions of the file on disk) stays byte-identical across formats.
+    expect(JSON.stringify(serializeNavigatorSettings(DEFAULT_NAVIGATOR_SETTINGS))).toBe(
+      '{"version":1,"images":{"mode":"off"},"icons":{"enabled":false},"viewer":{"wrap":false,"markdown":"code"},"tree":{"showHidden":false}}',
+    );
     expect(serializeNavigatorSettings(fullSettings({ images: { mode: "chafa" }, icons: { enabled: true }, viewer: { wrap: true, markdown: "rendered" }, tree: { showHidden: true } }))).toEqual({
       version: 1,
       images: { mode: "chafa" },
@@ -295,6 +351,20 @@ describe("serializeNavigatorSettings", () => {
       const result = normalizeNavigatorSettings(serializeNavigatorSettings(settings));
       expect(result.settings).toEqual(settings);
       expect(result.warnings).toEqual([]);
+    }
+  });
+
+  it("round-trips each registry field through the normalizer at a non-default value", () => {
+    for (const field of NAVIGATOR_CONFIG_FIELDS) {
+      const [sectionKey, key] = field.path;
+      if (sectionKey === undefined || key === undefined) continue;
+      const rawValue =
+        field.kind === "boolean" ? true : field.kind === "enum" ? (field.options?.[field.options.length - 1] ?? "") : 3;
+      const normalized = normalizeNavigatorSettings({ [sectionKey]: { [key]: rawValue } });
+      expect(normalized.warnings, field.id).toEqual([]);
+      const reloaded = normalizeNavigatorSettings(serializeNavigatorSettings(normalized.settings));
+      expect(reloaded.settings, field.id).toEqual(normalized.settings);
+      expect(reloaded.warnings, field.id).toEqual([]);
     }
   });
 });

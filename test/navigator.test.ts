@@ -9,11 +9,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
 
 import { IMAGE_RESIZE_DEBOUNCE_MS } from "../constants";
-import { DEFAULT_PI_CHAFA_SUBSET, type ImageSupport } from "../images";
+import { DEFAULT_PI_CHAFA_SUBSET, resolveChafaGeometry, type ImageSupport } from "../images";
 import { makeNavigatorTheme } from "../theme";
 import { buildTree, entriesFromPaths, findNode } from "../tree";
 import type { GitState, ViewerFile } from "../types";
 import type { LoadFileOptions } from "../viewer";
+import { imageCardHints } from "../viewer_view";
 
 const { copyToClipboard } = vi.hoisted(() => ({ copyToClipboard: vi.fn() }));
 vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => ({
@@ -318,6 +319,84 @@ describe("files pane keys", () => {
     harness.overlay.handleInput(KEYS.ctrlD);
     harness.overlay.handleInput(KEYS.ctrlU);
     expect(harness.state.closed).toBe(0); // movement stayed in range
+  });
+});
+
+// ── Tree mutation invalidates the files rows cache ──
+
+describe("tree mutations invalidate the files rows cache (Issue #064 finding 2)", () => {
+  // The shape is render → mutate → render: the first render(120) populates
+  // filesRowsCache, so the second render can only reflect the mutation if the
+  // entry point bumped treeVersion. A post-mutation-only render would pass by
+  // accident (the cache would be cold and recomputed anyway).
+
+  it("l and right expand a collapsed directory after a render", () => {
+    const tree = buildTree("/work", entriesFromPaths(["src/deep/a.ts"]), new Map());
+    // Setup-only collapse, before any render (same as the Enter test above).
+    const src = findNode(tree, "src");
+    expect(src?.expanded).toBe(true);
+    if (src) src.expanded = false;
+
+    const harness = makeHarness();
+    harness.overlay.setTree(tree, "git");
+
+    // Render first: the rows cache now holds the collapsed rows.
+    expect(harness.overlay.render(120).join("\n")).not.toContain("deep");
+
+    harness.overlay.handleInput("l"); // cursor sits on the collapsed src
+    expect(harness.overlay.render(120).join("\n")).toContain("deep");
+
+    // Collapse again (cache hot with the expanded rows), then expand through
+    // the arrow binding — the same funnel must invalidate either way.
+    harness.overlay.handleInput("h");
+    expect(harness.overlay.render(120).join("\n")).not.toContain("deep");
+    harness.overlay.handleInput(KEYS.right);
+    expect(harness.overlay.render(120).join("\n")).toContain("deep");
+  });
+
+  it("h and left collapse an expanded directory after a render", () => {
+    const harness = makeHarness();
+    withTree(harness, ["src/deep/a.ts"]); // src is expanded by default
+
+    // Render first: the cache now holds the expanded rows.
+    expect(harness.overlay.render(120).join("\n")).toContain("deep");
+
+    harness.overlay.handleInput("h"); // cursor sits on the expanded src
+    expect(harness.overlay.render(120).join("\n")).not.toContain("deep");
+
+    // Re-expand through the arrow binding, then collapse through it too.
+    harness.overlay.handleInput(KEYS.right);
+    expect(harness.overlay.render(120).join("\n")).toContain("deep");
+    harness.overlay.handleInput(KEYS.left);
+    expect(harness.overlay.render(120).join("\n")).not.toContain("deep");
+  });
+
+  it("git-pane Enter expands the file's collapsed ancestor via expandTo, visible after switching back", () => {
+    // other.ts only ever renders in the files pane — the git pane carries
+    // changed.ts and the viewer header echoes its own path, so a second file
+    // is the unambiguous signal that the files pane re-expanded src.
+    const tree = buildTree("/work", entriesFromPaths(["src/pkg/changed.ts", "src/pkg/other.ts"]), new Map());
+    const src = findNode(tree, "src");
+    expect(src?.expanded).toBe(true);
+    if (src) src.expanded = false; // setup-only collapse, before any render
+
+    const harness = makeHarness();
+    harness.overlay.setTree(tree, "git");
+    withGit(harness); // unstaged row: src/pkg/changed.ts
+
+    // Render first with the ancestor collapsed: the cache is populated and
+    // src's children are nowhere on screen.
+    expect(harness.overlay.render(120).join("\n")).not.toContain("other.ts");
+
+    harness.overlay.handleInput(KEYS.tab); // focus git; cursor lands on the file row
+    harness.overlay.handleInput(KEYS.enter); // expandTo(src/pkg node) + open the file
+    expect(harness.opened).toEqual(["src/pkg/changed.ts"]);
+
+    harness.overlay.handleInput(KEYS.shiftTab); // viewer -> git
+    harness.overlay.handleInput(KEYS.shiftTab); // git -> files
+    // The files pane must show src's children again — a stale cache would
+    // still render src collapsed here.
+    expect(harness.overlay.render(120).join("\n")).toContain("other.ts");
   });
 });
 
@@ -1226,7 +1305,10 @@ describe("markdown rendered view", () => {
     harness.overlay.handleInput(KEYS.enter);
     await Promise.resolve();
 
-    // Scroll horizontally in code view
+    // Scroll horizontally in code view. The header badge is built before the
+    // body's hscroll clamp, so it reports the requested offset even though this
+    // four-line file cannot actually scroll — pinned pre-refactor behavior,
+    // recorded (with the contract question) in Issue #065.
     harness.overlay.handleInput("l");
     harness.overlay.handleInput("l");
     let rendered = harness.overlay.render(120).join("\n");
@@ -1322,14 +1404,24 @@ describe("markdown rendered view", () => {
 
     harness.overlay.handleInput(KEYS.enter);
 
-    // Toggle to rendered view (2 matches)
+    // Toggle to rendered view (2 matches): searchIndex must be clamped (#052).
     harness.overlay.handleInput("m");
     harness.overlay.render(120);
 
-    // searchIndex must be clamped
-    expect((harness.overlay as any).searchIndex).toBeLessThan((harness.overlay as any).searchMatches.length);
-    expect((harness.overlay as any).buildSearchBar(120)).toContain("2/2 matches");
-    expect((harness.overlay as any).buildSearchBar(120)).not.toContain("6/2 matches");
+    // Re-enter search mode and re-type the query: the match count is now 2 and
+    // the rendered counter must stay in range after cycling past the end.
+    harness.overlay.handleInput("/");
+    for (const ch of "item") {
+      harness.overlay.handleInput(ch);
+    }
+    expect(harness.overlay.render(120).join("\n")).toContain("1/2 matches");
+
+    for (let i = 0; i < 5; i++) {
+      harness.overlay.handleInput(KEYS.down);
+    }
+    const rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).toContain("2/2 matches");
+    expect(rendered).not.toContain("6/2 matches");
   });
 
   it("guards horizontal scroll keys in rendered markdown mode (#053)", async () => {
@@ -1764,21 +1856,28 @@ describe("chafa image rendering", () => {
     harness.overlay.dispose();
   });
 
-  it("hints pane-too-small when the pane rejects the render geometry", async () => {
-    const harness = makeHarness(36, async (relPath) => metadataImage(relPath), undefined, undefined, activeSupport());
-    withTree(harness, ["sample.png"]);
-    harness.overlay.render(120);
-    harness.overlay.handleInput(KEYS.enter);
-    await Promise.resolve();
-
-    const overlay = harness.overlay as any;
-    const file = overlay.viewFile;
+  it("hints pane-too-small when the pane rejects the render geometry", () => {
+    const file = metadataImage("sample.png");
+    const support = activeSupport();
+    // The caller resolves the pane snapshot through resolveChafaGeometry (§7.2)
+    // and passes null when the pane rejects the render; imageCardHints ladders
+    // from the resolved geometry.
+    const geometryFor = (pane: { cols: number; rows: number }): { cols: number; rows: number } | null => {
+      const resolved = resolveChafaGeometry({
+        paneCols: pane.cols,
+        paneRows: pane.rows,
+        preferredCols: support.config.cellWidth,
+        maxRows: support.config.maxRows,
+      });
+      return resolved.ok ? { cols: resolved.cols, rows: resolved.rows } : null;
+    };
     // No pane snapshot (nothing laid out): geometry unknown → pane hint.
-    overlay.lastViewerLayout = null;
-    expect(overlay.imageCardHints(file)).toEqual(["pane too small for a rendered image"]);
-    // A pane below IMAGE_CELLS_MIN also rejects (§7.2).
-    overlay.lastViewerLayout = { cols: 10, rows: 24 };
-    expect(overlay.imageCardHints(file)).toEqual(["pane too small for a rendered image"]);
-    harness.overlay.dispose();
+    expect(imageCardHints(file, support, null)).toEqual(["pane too small for a rendered image"]);
+    // A pane below IMAGE_CELLS_MIN resolves to null and also rejects (§7.2).
+    expect(imageCardHints(file, support, geometryFor({ cols: 10, rows: 24 }))).toEqual([
+      "pane too small for a rendered image",
+    ]);
+    // An acceptable pane geometry renders the image with no hint.
+    expect(imageCardHints(file, support, geometryFor({ cols: 60, rows: 24 }))).toEqual([]);
   });
 });

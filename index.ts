@@ -22,6 +22,7 @@ import {
   type ExtensionAPI,
   type ExtensionCommandContext,
   type ExtensionContext,
+  type ExtensionUIContext,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 
@@ -46,7 +47,7 @@ import {
   toCwdRelative,
 } from "./git";
 import { ICONS_ENV } from "./icons";
-import { buildHelpLines, HELP_COMMANDS_TITLE, HELP_HEADER_PREFIX, HELP_HINT, HELP_ENTRY_TYPE, helpCommandColumnWidth, type NavigatorHelpData } from "./help";
+import { buildHelpLines, HELP_COMMANDS_TITLE, HELP_HEADER_PREFIX, HELP_HINT, HELP_ENTRY_TYPE, helpCommandColumnWidth, NAVIGATOR_CMD_PREFIX, NAVIGATOR_SUBCOMMANDS, type NavigatorHelpData } from "./help";
 import { makeDeferredImageSupport, resolveImageSupport, runChafaRender, type ImageSupport } from "./images";
 import { loadNavigatorSettings, writeNavigatorSettings } from "./settings";
 import { openSettingsMenu } from "./settings_menu";
@@ -84,24 +85,43 @@ export type ParsedNavigatorArgs =
 export function parseNavigatorArgs(args: string): ParsedNavigatorArgs {
   const token = args.trim().split(/\s+/).filter(Boolean)[0];
   if (token === undefined) return { kind: "overlay" };
-  switch (token) {
-    case "settings":
-      return { kind: "settings" };
-    case "help":
-      return { kind: "help" };
-    default:
-      return { kind: "unknown", raw: token };
-  }
+  // Subcommand tokens come from the shared help table (Issue #063 finding 5);
+  // the kind and the token are the same identifier by construction.
+  const known = NAVIGATOR_SUBCOMMANDS.some((sub) => sub.cmd.slice(NAVIGATOR_CMD_PREFIX.length) === token);
+  if (known) return { kind: token as "settings" | "help" };
+  return { kind: "unknown", raw: token };
 }
 
-/** Argument completions for /navigator: settings / help, filtered by prefix. */
-function navigatorCompletions(prefix: string): { value: string; label: string; description: string }[] | null {
-  const items = [
-    { value: "settings", label: "Open the settings menu", description: "Configure images, icons, viewer, and tree behavior" },
-    { value: "help", label: "Show the command list", description: "Lists every /navigator subcommand" },
-  ];
+/**
+ * Argument completions for /navigator: settings / help, filtered by prefix.
+ * Rows project from NAVIGATOR_SUBCOMMANDS (Issue #063 finding 5) so the
+ * completion descriptions cannot drift from the /navigator help rows.
+ */
+export function navigatorCompletions(prefix: string): { value: string; label: string; description: string }[] | null {
+  const items = NAVIGATOR_SUBCOMMANDS.map((sub) => ({
+    value: sub.cmd.slice(NAVIGATOR_CMD_PREFIX.length),
+    label: sub.completionLabel,
+    description: sub.desc,
+  }));
   const filtered = items.filter((item) => item.value.startsWith(prefix));
   return filtered.length > 0 ? filtered : null;
+}
+
+/**
+ * Notify-once-per-invocation warning channel (§5.2 convention): prefixes
+ * "pi-navigator: ", uses "warning" severity, and dedupes per call — the Set
+ * is created here per factory call, so a later /navigator invocation warns
+ * again for the same message instead of silently swallowing it.
+ */
+export function makeWarningNotifier(
+  ui: Pick<ExtensionUIContext, "notify">,
+): (message: string) => void {
+  const emittedWarnings = new Set<string>();
+  return (message: string): void => {
+    if (emittedWarnings.has(message)) return;
+    emittedWarnings.add(message);
+    ui.notify("pi-navigator: " + message, "warning");
+  };
 }
 
 async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionCommandContext): Promise<void> {
@@ -142,12 +162,7 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
         userPath: join(agentDir, NAVIGATOR_SETTINGS_FILE),
         env: { images: process.env[NAVIGATOR_IMAGES_ENV], icons: process.env[ICONS_ENV] },
       });
-      const emittedWarnings = new Set<string>();
-      const notifyWarning = (message: string): void => {
-        if (emittedWarnings.has(message)) return;
-        emittedWarnings.add(message);
-        ctx.ui.notify("pi-navigator: " + message, "warning");
-      };
+      const notifyWarning = makeWarningNotifier(ctx.ui);
       for (const warning of loaded.warnings) notifyWarning(warning);
       const imagePaths = {
         userSettings: join(agentDir, "settings.json"),
@@ -509,12 +524,7 @@ async function runSettings(ctx: ExtensionCommandContext): Promise<void> {
   }
 
   const userPath = join(getAgentDir(), NAVIGATOR_SETTINGS_FILE);
-  const emittedWarnings = new Set<string>();
-  const notifyWarning = (message: string): void => {
-    if (emittedWarnings.has(message)) return;
-    emittedWarnings.add(message);
-    ctx.ui.notify("pi-navigator: " + message, "warning");
-  };
+  const notifyWarning = makeWarningNotifier(ctx.ui);
 
   const fileLoaded = loadNavigatorSettings({ userPath });
   for (const warning of fileLoaded.warnings) notifyWarning(warning);

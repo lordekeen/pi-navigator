@@ -19,6 +19,7 @@ import {
   expandTabs,
   extOf,
   formatSize,
+  hardTruncate,
   imageDimensions,
   isMarkdownPath,
   loadFile,
@@ -93,6 +94,46 @@ describe("stripAnsi / visibleTextWidth / sliceStyled", () => {
     expect(sliceStyled("日本語", 1, 2)).toBe("");
     expect(sliceStyled("日本語", 2, 4)).toBe("本");
     expect(sliceStyled("日本語", 0, 2)).toBe("日");
+  });
+});
+
+describe("hardTruncate", () => {
+  it("passes exact-width (and shorter) text through untouched", () => {
+    expect(hardTruncate("whole line", 10)).toBe("whole line");
+    expect(hardTruncate("abc", 3)).toBe("abc");
+    // A styled string that fits is returned as-is, escapes included.
+    expect(hardTruncate("\x1b[31mred\x1b[0m", 3)).toBe("\x1b[31mred\x1b[0m");
+    expect(hardTruncate("日本語", 6)).toBe("日本語"); // 2 cells per char
+  });
+
+  it("hard-cuts with no ellipsis and no bright-ellipsis reset pair (Issue #010)", () => {
+    // truncateToWidth's default "..." ellipsis is wrapped in \x1b[0m resets
+    // that render the dots bright; hardTruncate never emits an ellipsis, so
+    // the reset+three-dot artifact is absent. Like sliceStyled, a cut is
+    // reset-terminated so an open style cannot leak into later padding.
+    const cut = hardTruncate("abcdef", 3);
+    expect(cut).not.toContain("...");
+    expect(cut).not.toMatch(/\x1b\[0m\.\.\./);
+    expect(stripAnsi(cut)).toBe("abc");
+    expect(visibleTextWidth(cut)).toBe(3);
+    expect(hardTruncate("abcdef", 0)).toBe("");
+  });
+
+  it("keeps wide (CJK) characters whole and never overflows the width", () => {
+    // 日/本/語 are two cells each. A cut inside a glyph keeps the previous
+    // whole glyph and under-fills — never splits a grapheme, never +1.
+    expect(stripAnsi(hardTruncate("日本語", 3))).toBe("日");
+    expect(visibleTextWidth(hardTruncate("日本語", 3))).toBe(2);
+    expect(visibleTextWidth(hardTruncate("日本語", 5))).toBe(4);
+    expect(visibleTextWidth(hardTruncate("日本語", 5))).toBeLessThanOrEqual(5);
+  });
+
+  it("keeps a styled input's open style until the cut, then closes it", () => {
+    // The \x1b[31m opens before the kept text and is still open at the cut;
+    // the reset closes it there, exactly like sliceStyled's termination.
+    expect(hardTruncate("\x1b[31mabcdef", 3)).toBe("\x1b[31mabc\x1b[0m");
+    // A style that starts mid-string stays open through the kept suffix.
+    expect(hardTruncate("abc\x1b[31mdef", 5)).toBe("abc\x1b[31mde\x1b[0m");
   });
 });
 

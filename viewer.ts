@@ -15,7 +15,7 @@
 
 import { open, readFile, stat } from "node:fs/promises";
 import { getLanguageFromPath, highlightCode } from "@earendil-works/pi-coding-agent";
-import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 import {
   BINARY_SNIFF_BYTES,
@@ -102,6 +102,23 @@ export function sliceStyled(styled: string, start: number, end: number): string 
   }
   if (styledOut && out.length > 0 && !out.endsWith("\x1b[0m")) out += "\x1b[0m";
   return out;
+}
+
+/**
+ * Hard-truncate a (possibly styled) string to a visible width with no
+ * ellipsis. `truncateToWidth`'s default `"..."` ellipsis is wrapped in
+ * `\x1b[0m` resets, which close any enclosing style and render the ellipsis
+ * in bright default (Issue #010); overlay callers instead pass an empty
+ * ellipsis so they can re-style or pad the cut themselves. This helper is
+ * that convention in one named place: it delegates to
+ * `truncateToWidth(text, width, "")`, so like `sliceStyled` the result is
+ * reset-terminated when a cut actually happens (a bare `\x1b[0m` closes an
+ * open style at the cut, which cannot leak into later padding), and it never
+ * splits a wide (CJK) character — the contiguous prefix simply under-fills
+ * the last cell.
+ */
+export function hardTruncate(text: string, width: number): string {
+  return truncateToWidth(text, width, "");
 }
 
 /**
