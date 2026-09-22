@@ -768,10 +768,12 @@ export function readHostImageSettings(
  * step. Pure; no terminal access; never throws.
  */
 /**
- * Terminals positively identified as image-incapable. For these, honoring
- * the `terminal.images` settings or `PI_IMAGE_PROTOCOL` overrides would emit
- * protocol sequences the terminal ignores, leaving a blank viewer instead of
- * the chafa/card fallback (Issue #100).
+ * Terminals positively identified as image-incapable. For these, no declared
+ * protocol may be honored: the `terminal.images` settings override, pi's own
+ * host capability overrides (which push `terminal.images` into pi-tui's
+ * `setCapabilityOverrides`), or `PI_IMAGE_PROTOCOL` would all emit sequences
+ * the terminal ignores, leaving a blank viewer instead of the chafa/card
+ * fallback (Issue #100).
  *
  * Mirrors pi-tui's negative detection table, plus Alacritty's real markers:
  * pi-tui (and therefore this mirror) keys on `TERM_PROGRAM === "alacritty"`,
@@ -809,16 +811,19 @@ export function resolveNativeProtocol(deps?: {
   if (isMultiplexer) {
     return null;
   }
-  const caps = deps?.capabilities?.().images;
-  if (caps !== null && caps !== undefined) return caps;
-  // A terminal pi-tui positively identifies as image-incapable must not have
-  // the settings/env overrides forced on it — its sequences would be
-  // ignored and the viewer would render blank instead of falling back.
-  // Positive detections (above) still win, so explicit forcing through
-  // pi-tui's PI_IMAGE_PROTOCOL handling keeps working (Issue #100).
+  // A terminal positively identified as image-incapable must not receive a
+  // declared protocol from ANY source: pi itself pushes `terminal.images`
+  // into pi-tui's capability overrides (pi main.js: setCapabilityOverrides),
+  // so the caps step below can report kitty in Alacritty too. The negative
+  // guard must precede every declaration — emit nothing and let auto/chafa/
+  // card take over (Issue #100). Terminals with real capability (kitty,
+  // ghostty, wezterm, iTerm2 …) are never in the negative table, so their
+  // detection and forcing are unaffected.
   if (knownNoImageSupport(env)) {
     return null;
   }
+  const caps = deps?.capabilities?.().images;
+  if (caps !== null && caps !== undefined) return caps;
   if (deps?.userSettings !== undefined) {
     const fromSettings = readHostImageSettings(
       { userSettings: deps.userSettings },

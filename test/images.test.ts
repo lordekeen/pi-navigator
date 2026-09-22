@@ -1009,15 +1009,43 @@ describe("resolveNativeProtocol", () => {
     ).toBe("kitty");
   });
 
-  it("keeps positive detection authoritative over the no-image guard (Issue #100)", () => {
+  it("known no-image terminals cannot be forced even by a positive caps report (Issue #100)", () => {
+    // pi pushes terminal.images into pi-tui's capability overrides, so caps
+    // can report kitty in Alacritty too — the negative guard precedes every
+    // declaration, including the capability step.
+    for (const env of [
+      { TERM_PROGRAM: "alacritty" },
+      { ALACRITTY_LOG: "/tmp/Alacritty-x.log" },
+      { WT_SESSION: "1" },
+    ]) {
+      expect(
+        resolveNativeProtocol({
+          capabilities: () => ({ images: "kitty" }),
+          readText: settingsWith("iterm2"),
+          env: { ...env, PI_IMAGE_PROTOCOL: "iterm2" },
+          userSettings,
+        }),
+      ).toBeNull();
+    }
+  });
+
+  it("keeps positive capability reports for real terminals (no negative markers, Issue #100)", () => {
+    // kitty/ghostty/wezterm/iTerm2 are never in the negative table: their
+    // host capability report (or PI_IMAGE_PROTOCOL forcing) still wins.
     expect(
       resolveNativeProtocol({
         capabilities: () => ({ images: "kitty" }),
         readText: settingsWith("iterm2"),
-        env: { TERM_PROGRAM: "alacritty", PI_IMAGE_PROTOCOL: "iterm2" },
+        env: { TERM_PROGRAM: "kitty", PI_IMAGE_PROTOCOL: "iterm2" },
         userSettings,
       }),
     ).toBe("kitty");
+    expect(
+      resolveNativeProtocol({
+        capabilities: () => ({ images: "iterm2" }),
+        env: {},
+      }),
+    ).toBe("iterm2");
   });
 
   it("never lets settings garbage block the env step (positive-only ladder)", () => {

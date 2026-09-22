@@ -77,7 +77,7 @@ sync responsibility. The general case (terminals that *advertise* the
 protocol but cannot decode a payload, real kitty + JPEG question) is tracked
 as #101.
 
-### Follow-up (Linux Alacritty)
+### Follow-up 1 (Linux Alacritty)
 
 The first fix keyed on `TERM_PROGRAM === "alacritty"`, mirroring pi-tui — but
 Alacritty sets `TERM_PROGRAM` only on macOS. On Linux it exports
@@ -86,3 +86,22 @@ Alacritty sets `TERM_PROGRAM` only on macOS. On Linux it exports
 Alacritty session still went blank via the settings override. Added the three
 `ALACRITTY_*` markers to `knownNoImageSupport` (verified from the live
 process environment) and pinned them in `test/images.test.ts`.
+
+### Follow-up 2 (pi's host capability overrides — the real root cause)
+
+Even with the markers, a fresh Alacritty session was still blank. The actual
+transmission chain: **pi pushes `terminal.images` into pi-tui's capability
+overrides at startup** (`pi main.js`: `setCapabilityOverrides(
+settingsManager.getTerminalCapabilityOverrides())`), and pi-tui's
+`getCapabilities()` merges overrides *after* its own detection. So
+`caps.images` reports `"kitty"` in every terminal — Alacritty included — and
+the ladder's capability step returned it before the negative guard (placed
+after caps) could run. Konsole worked because the override is true there;
+tmux worked only because the multiplexer guard precedes the caps step.
+
+Fix: `resolveNativeProtocol` now checks `knownNoImageSupport` **before** the
+capability step, so a positively no-image terminal can never receive a
+declared protocol from any source (host overrides, settings file,
+`PI_IMAGE_PROTOCOL`). Real protocol terminals (kitty, ghostty, wezterm,
+iTerm2 …) are never in the negative table, so their detection and explicit
+forcing are unaffected.

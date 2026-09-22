@@ -156,9 +156,12 @@ emits pi-tui-shaped image lines.**
   false; otherwise native. Forced `format=native` on a non-capable session
   throws; on a capable-but-images-off host it degrades to symbols.
 - Capability ladder (`src/detect.ts:36 resolveCapsImages`):
-  `getCapabilities().images` → (known no-image terminal? null — Issue #100) →
-  settings `terminal.images` (`"kitty"|"iterm2"` only) → `PI_IMAGE_PROTOCOL`
-  (`kitty|iterm2`) → null.
+  (known no-image terminal? null — Issue #100) → `getCapabilities().images`
+  → settings `terminal.images` (`"kitty"|"iterm2"` only) → `PI_IMAGE_PROTOCOL`
+  (`kitty|iterm2`) → null. The negative guard precedes the capability step
+  because pi pushes `terminal.images` into pi-tui's `setCapabilityOverrides`,
+  so caps can report kitty on Alacritty too; real protocol terminals are
+  never in the negative table.
 - Native-safe mime gate: only png/jpeg/gif/webp (a *provider* constraint for
   content blocks; not binding for us, but the same set is what pi-tui can size).
 - Documented hazard: a precompiled-ESM extension can bind its own pi-tui module
