@@ -1046,9 +1046,8 @@ describe("makeDeferredImageSupport", () => {
       config: DEFAULT_PI_CHAFA_SUBSET,
       hostShowImages: true,
       hostImageWidthCells: 60,
-      active: false,
     });
-    expect(makeDeferredImageSupport("off").active).toBe(false);
+    expect(makeDeferredImageSupport("off").tier).toBe("none");
   });
 
   it("never resolves a tier or probes for any mode", () => {
@@ -1062,7 +1061,6 @@ describe("makeDeferredImageSupport", () => {
         config: DEFAULT_PI_CHAFA_SUBSET,
         hostShowImages: true,
         hostImageWidthCells: 60,
-        active: false,
       });
     }
   });
@@ -1104,7 +1102,6 @@ describe("resolveImageSupport", () => {
       { images: { mode: "chafa" } },
       { readText: supportFiles(), exec: okProbeExec, env: {} },
     );
-    expect(support.active).toBe(true);
     expect(support.tier).toBe("chafa");
     expect(support.mode).toBe("chafa");
     expect(support.nativeProtocol).toBeNull();
@@ -1129,7 +1126,6 @@ describe("resolveImageSupport", () => {
       { images: { mode: "off" } },
       { readText: supportFiles(), exec: okProbeExec, env: {} },
     );
-    expect(support.active).toBe(false);
     expect(support.tier).toBe("none");
     expect(support.piChafa.present).toBe(true);
     expect(support.chafa.state).toBe("ok"); // still probed for the hint copy
@@ -1152,7 +1148,6 @@ describe("resolveImageSupport", () => {
         env: {},
       },
     );
-    expect(support.active).toBe(false);
     expect(support.tier).toBe("none");
     expect(support.chafa).toEqual({ state: "deferred" });
     expect(support.piChafa).toEqual({ present: false, via: "none" });
@@ -1171,7 +1166,6 @@ describe("resolveImageSupport", () => {
         env: {},
       },
     );
-    expect(support.active).toBe(false);
     expect(support.tier).toBe("none");
     expect(support.hostShowImages).toBe(false);
   });
@@ -1183,7 +1177,6 @@ describe("resolveImageSupport", () => {
       { images: { mode: "chafa" } },
       { readText: supportFiles(), exec: failProbeExec, env: {} },
     );
-    expect(support.active).toBe(false);
     expect(support.tier).toBe("none");
     expect(support.chafa.state).toBe("missing");
   });
@@ -1196,7 +1189,7 @@ describe("resolveImageSupport", () => {
       { images: { mode: "chafa" } },
       { readText: supportFiles(), exec, env: {} },
     );
-    expect(first.active).toBe(true);
+    expect(first.tier).toBe("chafa");
     const second = await resolveImageSupport(
       chafaApi(),
       paths,
@@ -1205,7 +1198,6 @@ describe("resolveImageSupport", () => {
     );
     expect(exec).toHaveBeenCalledTimes(1);
     expect(second.chafa).toEqual(first.chafa);
-    expect(second.active).toBe(true);
     expect(second.tier).toBe("chafa");
   });
 
@@ -1276,7 +1268,6 @@ describe("resolveImageSupport", () => {
     );
     expect(support.config.colors).toBe("16");
     expect(onWarning).not.toHaveBeenCalled();
-    expect(support.active).toBe(true);
     expect(support.tier).toBe("chafa");
   });
 
@@ -1298,7 +1289,6 @@ describe("resolveImageSupport", () => {
     );
     expect(support.tier).toBe("native");
     expect(support.nativeProtocol).toBe("kitty");
-    expect(support.active).toBe(false);
     expect(support.chafa).toEqual({ state: "deferred" });
     expect(exec).not.toHaveBeenCalled();
   });
@@ -1318,7 +1308,6 @@ describe("resolveImageSupport", () => {
     );
     expect(support.tier).toBe("none");
     expect(support.nativeProtocol).toBeNull();
-    expect(support.active).toBe(false);
     expect(exec).not.toHaveBeenCalled();
   });
 
@@ -1336,7 +1325,6 @@ describe("resolveImageSupport", () => {
     );
     expect(support.tier).toBe("native");
     expect(support.nativeProtocol).toBe("kitty");
-    expect(support.active).toBe(false);
     expect(support.config.preferNative).toBe(true); // default
   });
 
@@ -1356,7 +1344,6 @@ describe("resolveImageSupport", () => {
     );
     expect(support.tier).toBe("chafa");
     expect(support.nativeProtocol).toBe("kitty");
-    expect(support.active).toBe(true);
     expect(support.chafa.state).toBe("ok");
   });
 
@@ -1375,7 +1362,6 @@ describe("resolveImageSupport", () => {
       },
     );
     expect(support.tier).toBe("none");
-    expect(support.active).toBe(false);
     expect(support.chafa.state).toBe("missing");
   });
 
@@ -1393,7 +1379,6 @@ describe("resolveImageSupport", () => {
     );
     expect(support.tier).toBe("chafa");
     expect(support.nativeProtocol).toBeNull();
-    expect(support.active).toBe(true);
   });
 
   it("mode off resolves tier none regardless of capability", async () => {
@@ -1410,7 +1395,6 @@ describe("resolveImageSupport", () => {
     );
     expect(support.tier).toBe("none");
     expect(support.nativeProtocol).toBe("kitty");
-    expect(support.active).toBe(false);
   });
 
   it("host showImages false forces tier none for every mode", async () => {
@@ -1429,7 +1413,6 @@ describe("resolveImageSupport", () => {
         },
       );
       expect(support.tier).toBe("none");
-      expect(support.active).toBe(false);
       expect(support.hostShowImages).toBe(false);
     }
   });

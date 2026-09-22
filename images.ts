@@ -947,15 +947,10 @@ export interface ImageSupport {
   hostShowImages: boolean;
   /**
    * pi's `terminal.imageWidthCells` — the preferred native width (spec §7.2
-   * Q2 amendment); pi defaults it to 60. Step 5 consumes it for the native
-   * geometry (min(paneCols, hostImageWidthCells)); this step only carries it.
+   * Q2 amendment); pi defaults it to 60. Native geometry uses
+   * min(paneCols, hostImageWidthCells).
    */
   hostImageWidthCells: number;
-  /**
-   * #057-era flag kept temporarily: true ⇔ tier === "chafa". Removed when
-   * the view migrates to tier (step 5).
-   */
-  active: boolean;
 }
 
 /** Deferred snapshot for overlay construction (D9): never blocks, never probes. */
@@ -970,7 +965,6 @@ export function makeDeferredImageSupport(mode: NavigatorImageMode): ImageSupport
     hostShowImages: true,
     // pi's default width preference (spec §7.2 Q2 amendment).
     hostImageWidthCells: 60,
-    active: false,
   };
 }
 
@@ -992,7 +986,7 @@ export interface ImageSupportDeps {
 
 /**
  * Resolve the aggregate support snapshot (spec §6.4): host settings + pi-chafa
- * presence + config + chafa probe, then `active`. pi-chafa absent → chafa
+ * presence + config + chafa probe, then `tier`. pi-chafa absent → chafa
  * stays "deferred" (no probe). A previous "ok" probe is reused when the
  * resolved binaryPath is unchanged. A pi-chafa config `version > 1` substitutes
  * defaults and warns via deps.onWarning (rev. 2 amendment 4).
@@ -1079,6 +1073,5 @@ export async function resolveImageSupport(
     config,
     hostShowImages: hostSettings.showImages,
     hostImageWidthCells: hostSettings.imageWidthCells,
-    active: tier === "chafa",
   };
 }

@@ -101,12 +101,29 @@ export function shortPath(path: string, home: string): string {
 }
 
 /**
+ * True when a row carries a native terminal-image protocol sequence: the
+ * kitty APC prefix (`\x1b_G`) or the iTerm2 OSC-1337 `File=` prefix. Mirrors
+ * pi-tui's isImageLine; kept local because pi's jiti loader aliases only the
+ * exact package specifier, so a `@earendil-works/pi-tui/dist/...` deep import
+ * would load an unaliased second pi-tui instance at runtime.
+ */
+export function isImageLine(line: string): boolean {
+  return line.includes("\x1b_G") || line.includes("\x1b]1337;File=");
+}
+
+/**
  * Left/right split with the right side guaranteed: when both cannot fit,
  * the left (informational hint or title path) is ellipsized and the right
  * (pane labels, counters, branch) survives. Plain padTo would truncate the
  * tail, which for the footer is exactly the focus indicator.
+ *
+ * A native image row is pass-through (D9, spec §8): its anchor is owned by
+ * its emitter, and width-joining cannot preserve it — the image side is
+ * returned unchanged, byte-identical.
  */
 export function joinLeftRight(left: string, right: string, width: number): string {
+  if (isImageLine(left)) return left;
+  if (isImageLine(right)) return right;
   const rightW = visibleWidth(right);
   const maxLeft = Math.max(0, width - rightW - 1);
   const leftPart = visibleWidth(left) > maxLeft ? hardTruncate(left, maxLeft) : left;

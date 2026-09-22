@@ -70,7 +70,6 @@ function activeSupport(overrides: Partial<ImageSupport> = {}): ImageSupport {
     config: { ...DEFAULT_PI_CHAFA_SUBSET },
     hostShowImages: true,
     hostImageWidthCells: 60,
-    active: true,
     ...overrides,
   };
 }
@@ -1844,43 +1843,43 @@ describe("chafa image rendering", () => {
       },
       {
         name: "mode off",
-        support: activeSupport({ mode: "off", tier: "none", active: false }),
-        expects: ["optional: enable images.mode=chafa to render images here"],
+        support: activeSupport({ mode: "off", tier: "none" }),
+        expects: ["optional: enable images.mode=chafa, native, or auto to render images here"],
         absent: [],
       },
       {
         name: "pi-chafa absent",
-        support: activeSupport({ piChafa: { present: false, via: "none" }, tier: "none", active: false }),
+        support: activeSupport({ piChafa: { present: false, via: "none" }, tier: "none" }),
         expects: ["optional: install chafa + pi-chafa (pi install npm:pi-chafa)"],
         absent: [],
       },
       {
         name: "chafa missing",
-        support: activeSupport({ chafa: { state: "missing", detail: "not found" }, tier: "none", active: false }),
+        support: activeSupport({ chafa: { state: "missing", detail: "not found" }, tier: "none" }),
         expects: ["chafa not found - install it, or set CHAFA_BIN / binaryPath"],
         absent: [],
       },
       {
         name: "chafa too old",
-        support: activeSupport({ chafa: { state: "too-old", detail: "old" }, tier: "none", active: false }),
+        support: activeSupport({ chafa: { state: "too-old", detail: "old" }, tier: "none" }),
         expects: ["chafa is older than 1.10 - upgrade to render images"],
         absent: [],
       },
       {
         name: "chafa probe error",
-        support: activeSupport({ chafa: { state: "error", detail: "bogus" }, tier: "none", active: false }),
+        support: activeSupport({ chafa: { state: "error", detail: "bogus" }, tier: "none" }),
         expects: ["chafa probe failed: bogus"],
         absent: [],
       },
       {
         name: "still resolving",
-        support: activeSupport({ chafa: { state: "deferred" }, tier: "none", active: false }),
+        support: activeSupport({ chafa: { state: "deferred" }, tier: "none" }),
         expects: ["checking image support\u2026"],
         absent: [],
       },
       {
         name: "host images disabled",
-        support: activeSupport({ hostShowImages: false, tier: "none", active: false }),
+        support: activeSupport({ hostShowImages: false, tier: "none" }),
         expects: ["terminal.showImages is false - image rendering disabled"],
         absent: [],
       },
@@ -1942,5 +1941,153 @@ describe("chafa image rendering", () => {
     ]);
     // An acceptable pane geometry renders the image with no hint.
     expect(imageCardHints(file, support, geometryFor({ cols: 60, rows: 24 }))).toEqual([]);
+  });
+});
+
+// ── Native image rendering (§12.4) ──
+
+describe("native image rendering", () => {
+  const KITTY_ROW = "\x1b_Ga=T,f=100,q=2,C=1,c=20,r=3,i=77;AAAA\x1b\\";
+
+  /** Native ViewerFile whose recorded geometry is the REQUEST (viewer.ts). */
+  function nativeImage(relPath: string, cols = 20, rows = 3): ViewerFile {
+    return {
+      kind: "image",
+      relPath,
+      imageTier: "native",
+      imageCols: cols,
+      imageRows: rows,
+      imageLines: [KITTY_ROW, "", ""],
+      lines: [],
+      sizeBytes: 1024,
+      message: "1.0 KB \u00b7 32x32",
+    };
+  }
+
+  function nativeSupport(overrides: Partial<ImageSupport> = {}): ImageSupport {
+    return activeSupport({ mode: "native", nativeProtocol: "kitty", tier: "native", hostImageWidthCells: 100, ...overrides });
+  }
+
+  /** Loader that mirrors viewer.ts: native rows, request geometry recorded. */
+  const nativeLoader = async (relPath: string, opts?: LoadFileOptions): Promise<ViewerFile> =>
+    opts?.image ? nativeImage(relPath, opts.image.cols, opts.image.rows) : metadataImage(relPath);
+
+  it("opens with min(pane, hostImageWidthCells) geometry and renders the sequence", async () => {
+    const harness = makeHarness(36, nativeLoader, undefined, undefined, nativeSupport({ hostImageWidthCells: 30 }));
+    withTree(harness, ["sample.png"]);
+    harness.overlay.render(120); // records the pane snapshot (rightW = 82)
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+
+    expect(harness.loads[0]?.opts?.image).toEqual({ cols: 30, rows: 24 });
+    const joined = harness.overlay.render(120).join("\n");
+    expect(joined).toContain(KITTY_ROW);
+    expect(joined).toContain("kitty \u00b7 i card");
+  });
+
+  it("honors the pane when it is narrower than the host preference", async () => {
+    const harness = makeHarness(36, nativeLoader, undefined, undefined, nativeSupport());
+    withTree(harness, ["sample.png"]);
+    harness.overlay.render(80); // rightW = 53 < hostImageWidthCells 100
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+    expect(harness.loads[0]?.opts?.image).toEqual({ cols: 53, rows: 24 });
+  });
+
+  it("toggles between the native render and the card with i without reloading", async () => {
+    const harness = makeHarness(36, nativeLoader, undefined, undefined, nativeSupport());
+    withTree(harness, ["sample.png"]);
+    harness.overlay.render(120);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+    expect(harness.overlay.render(120).join("\n")).toContain(KITTY_ROW);
+
+    harness.overlay.handleInput("i");
+    let joined = harness.overlay.render(120).join("\n");
+    expect(joined).not.toContain(KITTY_ROW);
+    expect(joined).toContain("i render");
+
+    harness.overlay.handleInput("i");
+    joined = harness.overlay.render(120).join("\n");
+    expect(joined).toContain(KITTY_ROW);
+    expect(joined).toContain("kitty \u00b7 i card");
+    expect(harness.loads).toHaveLength(1);
+  });
+
+  it("pins scroll: j/k/g/G/Ctrl+d/Ctrl+u leave a native frame unchanged", async () => {
+    const harness = makeHarness(36, nativeLoader, undefined, undefined, nativeSupport());
+    withTree(harness, ["sample.png"]);
+    harness.overlay.render(120);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+
+    const before = harness.overlay.render(120).join("\n");
+    for (const key of ["j", "k", "g", "G", KEYS.ctrlD, KEYS.ctrlU]) {
+      harness.overlay.handleInput(key);
+    }
+    const after = harness.overlay.render(120).join("\n");
+    expect(after).toBe(before);
+    expect(after).toContain(KITTY_ROW);
+  });
+
+  it("upgrades a deferred snapshot: card first, then native after the debounce", async () => {
+    vi.useFakeTimers();
+    try {
+      const loads: Array<{ relPath: string; opts?: LoadFileOptions }> = [];
+      const harness = makeHarness(36, async (relPath, opts): Promise<ViewerFile> => {
+        loads.push({ relPath, opts });
+        return opts?.image ? nativeImage(relPath, opts.image.cols, opts.image.rows) : metadataImage(relPath);
+      });
+      withTree(harness, ["sample.png"]);
+      harness.overlay.render(120);
+      harness.overlay.handleInput(KEYS.enter); // deferred support → metadata card
+      await Promise.resolve();
+      expect(loads[0]?.opts).toBeUndefined();
+      expect(harness.overlay.render(120).join("\n")).toContain("Image");
+
+      harness.overlay.setImageSupport(nativeSupport());
+      expect(loads).toHaveLength(1); // debounced
+      vi.advanceTimersByTime(IMAGE_RESIZE_DEBOUNCE_MS);
+      await Promise.resolve();
+      expect(loads).toHaveLength(2);
+      expect(loads[1]?.opts?.image).toEqual({ cols: 82, rows: 24 });
+      expect(harness.overlay.render(120).join("\n")).toContain(KITTY_ROW);
+      harness.overlay.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-renders once at a new pane geometry and then stays stable (no reflow loop)", async () => {
+    vi.useFakeTimers();
+    try {
+      const loads: Array<{ relPath: string; opts?: LoadFileOptions }> = [];
+      const harness = makeHarness(36, async (relPath, opts): Promise<ViewerFile> => {
+        loads.push({ relPath, opts });
+        return opts?.image ? nativeImage(relPath, opts.image.cols, opts.image.rows) : metadataImage(relPath);
+      }, undefined, undefined, nativeSupport());
+      withTree(harness, ["sample.png"]);
+      harness.overlay.render(120); // rightW 82
+      harness.overlay.handleInput(KEYS.enter);
+      await Promise.resolve();
+      expect(loads[0]?.opts?.image).toEqual({ cols: 82, rows: 24 });
+
+      // "Resize" to 100 wide: one debounced re-render at the new geometry.
+      harness.overlay.render(100); // rightW 68
+      expect(loads).toHaveLength(1);
+      vi.advanceTimersByTime(IMAGE_RESIZE_DEBOUNCE_MS);
+      await Promise.resolve();
+      expect(loads).toHaveLength(2);
+      expect(loads[1]?.opts?.image).toEqual({ cols: 68, rows: 24 });
+
+      // Stable at the new geometry: the recorded request matches, so no loop.
+      harness.overlay.render(100);
+      vi.advanceTimersByTime(IMAGE_RESIZE_DEBOUNCE_MS * 3);
+      await Promise.resolve();
+      expect(loads).toHaveLength(2);
+      harness.overlay.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -18,6 +18,7 @@ import {
   filesArea,
   FOCUS_HINTS,
   getFooterHint,
+  isImageLine,
   joinLeftRight,
   leftColumnWidth,
   MODE_HINTS,
@@ -148,6 +149,25 @@ describe("joinLeftRight", () => {
     expect(out.startsWith("ab")).toBe(true);
     expect(out.endsWith("cd")).toBe(true);
     expect(visibleWidth(out)).toBe(10);
+  });
+
+  it("passes a native image row through unchanged on either side", () => {
+    const kitty = "\x1b_Ga=T,f=100,q=2,C=1,c=20,r=5,i=7;AAAA\x1b\\" + " ".repeat(12);
+    const iterm2 = "\x1b]1337;File=inline=1;size=9;width=20:AAAA\x07";
+    expect(joinLeftRight("left", kitty, 40)).toBe(kitty);
+    expect(joinLeftRight(kitty, "right", 40)).toBe(kitty);
+    expect(joinLeftRight("left", iterm2, 40)).toBe(iterm2);
+    expect(joinLeftRight(iterm2, "right", 40)).toBe(iterm2);
+  });
+});
+
+describe("isImageLine", () => {
+  it("recognizes the kitty APC and iTerm2 OSC-1337 prefixes, not plain or styled text", () => {
+    expect(isImageLine("\x1b_Ga=T,f=100,q=2,C=1,c=20,r=5,i=1;AAAA\x1b\\")).toBe(true);
+    expect(isImageLine("\x1b]1337;File=inline=1;size=9;width=20:AAAA\x07")).toBe(true);
+    expect(isImageLine("plain text")).toBe(false);
+    expect(isImageLine("\x1b[31mstyled\x1b[0m")).toBe(false);
+    expect(isImageLine("")).toBe(false);
   });
 });
 

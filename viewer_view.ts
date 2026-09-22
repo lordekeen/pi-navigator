@@ -11,11 +11,12 @@
 
 import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 
-import type { ImageSupport } from "./images";
+import type { ImageSupport, NativeProtocol } from "./images";
 import type { NavigatorTheme } from "./theme";
 import type { Focus, SearchMatch, ViewerFile } from "./types";
-import { formatSize, hardTruncate, isMarkdownPath, type DisplayRow } from "./viewer";
-import { joinLeftRight, MODE_HINTS, padTo, shortPath, truncateAndWidth } from "./frame";
+import { NATIVE_IMAGE_MIME } from "./constants";
+import { formatSize, hardTruncate, isMarkdownPath, extOf, type DisplayRow } from "./viewer";
+import { isImageLine, joinLeftRight, MODE_HINTS, padTo, shortPath, truncateAndWidth } from "./frame";
 
 /** Markdown files get an alternative rendered view (Issue #053). */
 export function canRenderMarkdown(file: ViewerFile | null): boolean {
@@ -138,13 +139,28 @@ export function renderViewerPane(view: ViewerPaneView, width: number, area: numb
   }
   const file = view.file;
 
-  // Chafa render branch: rows are pre-styled and content-stable, each
-  // carrying its own trailing reset (§8), so every row is truncated to the
-  // full pane width with an empty ellipsis (Issue #010) and padded.
+  // Rendered-image branch: chafa rows are pre-styled and content-stable,
+  // each carrying its own trailing reset (§8), so every row is truncated to
+  // the full pane width with an empty ellipsis (Issue #010) and padded;
+  // native rows are pass-through with right-side fill (spec §8, D9).
   if (view.imageLines) {
+    // Native rows (spec §8.2, D9): the sequence row is emitted first,
+    // un-truncated, with right-side space fill only — the image anchors where
+    // the sequence appears, so no width function may cut or re-anchor it.
+    // Filler rows are `""` at this boundary and become blank pane rows. Chafa
+    // rows keep their hard-cut + pad contract.
+    const native = file.imageTier === "native";
     for (let i = 0; i < area; i++) {
       const line = view.imageLines[view.viewScroll + i];
-      rows.push(line === undefined ? padTo("", width) : padTo(hardTruncate(line, width), width));
+      if (line === undefined || line === "") {
+        rows.push(padTo("", width));
+        continue;
+      }
+      rows.push(
+        native && isImageLine(line)
+          ? line + " ".repeat(width)
+          : padTo(hardTruncate(line, width), width),
+      );
     }
     return rows;
   }
@@ -212,11 +228,14 @@ export function buildViewerHeader(view: ViewerPaneView, rightW: number): string 
     if (canRenderMarkdown(file)) {
       meta.push(view.renderMarkdown ? "m code" : "m render");
     }
-    if (file.kind === "image" && view.imageSupport.active) {
-      // Header badge (spec §7.5): a chafa render shows the toggle affordance;
-      // a chafa-capable card shows how to get back to the render.
+    if (file.kind === "image" && view.imageSupport.tier !== "none") {
+      // Header badge (spec §7.5, §10): a rendered image shows its renderer and
+      // the toggle affordance; a capable card shows how to get back to it.
       if (file.imageTier === "chafa" && !view.imageAsCard) {
         meta.push("chafa");
+        meta.push("i card");
+      } else if (file.imageTier === "native" && !view.imageAsCard) {
+        meta.push(view.imageSupport.nativeProtocol ?? "native");
         meta.push("i card");
       } else {
         meta.push("i render");
@@ -318,19 +337,52 @@ export function buildCard(file: ViewerFile, rightW: number, area: number, view: 
 }
 
 /**
- * Image-card guidance rows (spec §9): the first applicable hint in
- * priority order — render failure, pane too small, pi-chafa absent, chafa
- * missing/too-old/error, still resolving, mode off with chafa ok, host
- * images disabled, else nothing (the header badge carries the affordance).
- * Rows stay short; buildCard hard-cuts safely at narrow widths.
+ * Which renderer's failure an `imageError` belongs to (spec §10): the strict
+ * mode names it, and under auto the chafa seam ran exactly when pi-chafa is
+ * present and the probe succeeded — otherwise the native reason is the one
+ * that reached the card.
+ */
+function imageErrorLabel(support: ImageSupport): string {
+  if (support.mode === "chafa") return "chafa";
+  if (support.mode === "native") return support.nativeProtocol ?? "native";
+  const chafaAttempted = support.piChafa.present && support.chafa.state === "ok";
+  return chafaAttempted ? "chafa" : (support.nativeProtocol ?? "native");
+}
+
+/** True when runNativeRender's mime gate (D5) would accept this path. */
+function nativelyRenderable(relPath: string, protocol: NativeProtocol): boolean {
+  const mime = NATIVE_IMAGE_MIME[extOf(relPath)];
+  if (mime === undefined) return false;
+  return protocol !== "kitty" || mime === "image/png";
+}
+
+/**
+ * Image-card guidance rows (spec §9/§10): the first applicable hint in
+ * priority order — render failure (labelled with the renderer that failed),
+ * pane too small, host images disabled, the strict-native states (no
+ * capability, format not natively renderable), then the #057 chafa ladder,
+ * then the mode-off enable hint. Rows stay short; buildCard hard-cuts safely
+ * at narrow widths.
  */
 export function imageCardHints(
   file: ViewerFile,
   support: ImageSupport,
   geometry: { cols: number; rows: number } | null,
 ): string[] {
-  if (file.imageError) return [`chafa failed: ${file.imageError}`];
+  if (file.imageError) return [`${imageErrorLabel(support)} failed: ${file.imageError}`];
   if (geometry === null) return ["pane too small for a rendered image"];
+  if (!support.hostShowImages) return ["terminal.showImages is false - image rendering disabled"];
+  if (support.mode === "native") {
+    if (support.nativeProtocol === null) {
+      return ["this terminal does not support kitty/iTerm2 - use auto or chafa"];
+    }
+    if (!nativelyRenderable(file.relPath, support.nativeProtocol)) {
+      return support.nativeProtocol === "kitty"
+        ? ["kitty rendering needs PNG - chafa or auto can render this format"]
+        : ["this image format cannot be rendered natively - use chafa or auto"];
+    }
+    return [];
+  }
   if (!support.piChafa.present) {
     // Kept within the card's content clamp (rightW - 6) so the default
     // 120-column layout shows the whole hint, not a hard cut.
@@ -340,7 +392,6 @@ export function imageCardHints(
   if (support.chafa.state === "too-old") return ["chafa is older than 1.10 - upgrade to render images"];
   if (support.chafa.state === "error") return [`chafa probe failed: ${support.chafa.detail}`];
   if (support.chafa.state === "deferred") return ["checking image support\u2026"];
-  if (support.mode !== "chafa") return ["optional: enable images.mode=chafa to render images here"];
-  if (!support.hostShowImages) return ["terminal.showImages is false - image rendering disabled"];
+  if (support.mode === "off") return ["optional: enable images.mode=chafa, native, or auto to render images here"];
   return [];
 }

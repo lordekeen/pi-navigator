@@ -55,10 +55,17 @@ function activeSupport(overrides: Partial<ImageSupport> = {}): ImageSupport {
     config: { ...DEFAULT_PI_CHAFA_SUBSET },
     hostShowImages: true,
     hostImageWidthCells: 60,
-    active: true,
     ...overrides,
   };
 }
+
+/** Strict-native support fixture (mode native, kitty capable by default). */
+function nativeSupport(overrides: Partial<ImageSupport> = {}): ImageSupport {
+  return activeSupport({ mode: "native", nativeProtocol: "kitty", tier: "native", ...overrides });
+}
+
+/** A byte-stable kitty sequence row (3 fitted rows). */
+const KITTY_SEQ = "\x1b_Ga=T,f=100,q=2,C=1,c=20,r=3,i=9;AAAA\x1b\\";
 
 function paneView(partial: Partial<ViewerPaneView> = {}): ViewerPaneView {
   return {
@@ -153,6 +160,21 @@ describe("renderViewerPane", () => {
     expect(visibleWidth(rows[3]!)).toBe(width); // beyond the payload: blank, still padded
   });
 
+  it("emits native rows verbatim with right-side space fill only", () => {
+    const image = viewerFile({ kind: "image", relPath: "pic.png", imageTier: "native", lines: [] });
+    const rows = renderViewerPane(
+      paneView({ file: image, imageLines: [KITTY_SEQ, "", ""], imageSupport: nativeSupport() }),
+      width,
+      4,
+    );
+    // The sequence row is unreduced: sequence bytes first, then pane padding.
+    expect(rows[1]).toBe(KITTY_SEQ + " ".repeat(width));
+    // Filler rows are empty at the boundary and become blank pane rows.
+    expect(rows[2]).toBe(" ".repeat(width));
+    expect(rows[3]).toBe(" ".repeat(width));
+    expect(visibleWidth(rows[1]!)).toBe(width);
+  });
+
   it("draws the card box border rows for error files", () => {
     const bad = viewerFile({ kind: "error", relPath: "locked.ts", message: "EACCES" });
     const rows = renderViewerPane(paneView({ file: bad }), width, 10);
@@ -196,6 +218,39 @@ describe("buildViewerHeader", () => {
     expect(buildViewerHeader(paneView({ file: diff }), 60)).toContain("commit abc1234");
   });
 
+  it("badges a native render with its protocol and the i card affordance", () => {
+    const image = viewerFile({
+      kind: "image",
+      relPath: "pic.png",
+      imageTier: "native",
+      imageLines: [KITTY_SEQ],
+      lines: [],
+    });
+    const kitty = buildViewerHeader(
+      paneView({ file: image, imageLines: [KITTY_SEQ], imageSupport: nativeSupport() }),
+      70,
+    );
+    expect(kitty).toContain("kitty");
+    expect(kitty).toContain("i card");
+
+    const iterm = buildViewerHeader(
+      paneView({
+        file: image,
+        imageLines: [KITTY_SEQ],
+        imageSupport: nativeSupport({ nativeProtocol: "iterm2" }),
+      }),
+      70,
+    );
+    expect(iterm).toContain("iterm2");
+
+    const card = buildViewerHeader(
+      paneView({ file: image, imageLines: [KITTY_SEQ], imageAsCard: true, imageSupport: nativeSupport() }),
+      70,
+    );
+    expect(card).toContain("i render");
+    expect(card).not.toContain("i card");
+  });
+
   it("carries the wrap / column / loading meta badges", () => {
     const wrap = buildViewerHeader(paneView({ file: viewerFile(), wrap: true }), 60);
     expect(wrap).toContain("wrap");
@@ -230,13 +285,60 @@ describe("imageCardHints", () => {
       "chafa probe failed: exit 1",
     ]);
     expect(imageCardHints(image, activeSupport({ chafa: { state: "deferred" } }), geometry)).toEqual(["checking image support\u2026"]);
-    expect(imageCardHints(image, activeSupport({ mode: "off", tier: "none", active: false }), geometry)).toEqual([
-      "optional: enable images.mode=chafa to render images here",
+    expect(imageCardHints(image, activeSupport({ mode: "off", tier: "none" }), geometry)).toEqual([
+      "optional: enable images.mode=chafa, native, or auto to render images here",
     ]);
     expect(imageCardHints(image, activeSupport({ hostShowImages: false }), geometry)).toEqual([
       "terminal.showImages is false - image rendering disabled",
     ]);
     expect(imageCardHints(image, activeSupport(), geometry)).toEqual([]);
+  });
+
+  it("follows the strict-native ladder and labels failures with the renderer", () => {
+    const png = viewerFile({ kind: "image", relPath: "pic.png", imageTier: "metadata", lines: [] });
+    const failed = { ...png, imageError: "boom" };
+    const native = nativeSupport();
+
+    // Failure label: strict native names the protocol; auto names chafa when
+    // the chafa seam was available, else the protocol.
+    expect(imageCardHints(failed, native, geometry)).toEqual(["kitty failed: boom"]);
+    expect(
+      imageCardHints(failed, activeSupport({ mode: "auto", nativeProtocol: "kitty", tier: "native" }), geometry),
+    ).toEqual(["chafa failed: boom"]);
+    expect(
+      imageCardHints(
+        failed,
+        activeSupport({
+          mode: "auto",
+          nativeProtocol: "kitty",
+          tier: "native",
+          piChafa: { present: false, via: "none" },
+          chafa: { state: "deferred" },
+        }),
+        geometry,
+      ),
+    ).toEqual(["kitty failed: boom"]);
+
+    // The pane and host gates outrank the native-specific states (a render
+    // error outranks both, per the ladder's first rung).
+    expect(imageCardHints(png, native, null)).toEqual(["pane too small for a rendered image"]);
+    expect(imageCardHints(png, nativeSupport({ hostShowImages: false }), geometry)).toEqual([
+      "terminal.showImages is false - image rendering disabled",
+    ]);
+
+    // Supported format under a capable strict-native session: no hint.
+    expect(imageCardHints(png, native, geometry)).toEqual([]);
+    // A non-PNG on kitty and an unsupported format on iTerm2 get format hints.
+    expect(imageCardHints({ ...png, relPath: "pic.jpg" }, native, geometry)).toEqual([
+      "kitty rendering needs PNG - chafa or auto can render this format",
+    ]);
+    expect(
+      imageCardHints({ ...png, relPath: "pic.bmp" }, nativeSupport({ nativeProtocol: "iterm2" }), geometry),
+    ).toEqual(["this image format cannot be rendered natively - use chafa or auto"]);
+    // No capability under strict native: the unsupported-terminal hint.
+    expect(imageCardHints(png, activeSupport({ mode: "native", nativeProtocol: null, tier: "none" }), geometry)).toEqual([
+      "this terminal does not support kitty/iTerm2 - use auto or chafa",
+    ]);
   });
 });
 

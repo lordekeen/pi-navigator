@@ -777,7 +777,6 @@ describe("chafa image render width safety (§12.5)", () => {
     config: { ...DEFAULT_PI_CHAFA_SUBSET },
     hostShowImages: true,
     hostImageWidthCells: 60,
-    active: true,
   });
 
   // Synthetic SANITIZED chafa payload (post-sanitizer imageLines): an
@@ -865,7 +864,7 @@ describe("chafa image render width safety (§12.5)", () => {
     // Inactive support (mode off) is the real card-only path: openRelPath
     // passes no image opts, so the loader serves the metadata card and no
     // chafa payload can reach the frame.
-    const overlay = makeChafaHarness(24, { ...activeChafaSupport(), mode: "off", tier: "none", active: false });
+    const overlay = makeChafaHarness(24, { ...activeChafaSupport(), mode: "off", tier: "none" });
     await overlay.openRelPath("sample.png");
     const lines = expectWidthSafe(overlay, 60);
     const joined = lines.join("\n");
@@ -874,5 +873,93 @@ describe("chafa image render width safety (§12.5)", () => {
     expect(joined).not.toContain("\u754c"); // no CJK payload row
     // Truncation injects SGR resets (allowed); no other escape may appear.
     expect(joined).not.toMatch(/\x1b(?!\[[0-9;]*m)/);
+  });
+});
+
+describe("native image render width safety (§12.4)", () => {
+  const NATIVE_SEQ = "\x1b_Ga=T,f=100,q=2,C=1,c=20,r=3,i=12345;AAAA\x1b\\";
+
+  const nativeSupport = (): ImageSupport => ({
+    mode: "native",
+    nativeProtocol: "kitty",
+    tier: "native",
+    piChafa: { present: false, via: "none" },
+    chafa: { state: "deferred" },
+    config: { ...DEFAULT_PI_CHAFA_SUBSET },
+    hostShowImages: true,
+    hostImageWidthCells: 60,
+  });
+
+  function makeNativeHarness(rows: number): NavigatorOverlay {
+    const theme = makeNavigatorTheme({
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+      underline: (text: string) => text,
+      inverse: (text: string) => text,
+    } as never);
+
+    const overlay = new NavigatorOverlay({
+      cwd: "/work/repo",
+      theme,
+      getTerminalRows: () => rows,
+      requestRender: () => undefined,
+      onClose: () => undefined,
+      loadFile: async (relPath: string, opts?: LoadFileOptions): Promise<ViewerFile> => {
+        if (!opts?.image) {
+          return { kind: "image", relPath, imageTier: "metadata", lines: [], sizeBytes: 1024, message: "1.0 KB \u00b7 40x40", mtimeMs: 0 };
+        }
+        return {
+          kind: "image",
+          relPath,
+          imageTier: "native",
+          imageLines: [NATIVE_SEQ, "", ""],
+          imageCols: opts.image.cols,
+          imageRows: opts.image.rows,
+          lines: [],
+          sizeBytes: 1024,
+          message: "1.0 KB \u00b7 40x40",
+          mtimeMs: 0,
+        };
+      },
+      refresh: () => undefined,
+      imageSupport: nativeSupport(),
+    });
+
+    overlay.setTree(buildTree("/work/repo", entriesFromPaths(["sample.png"]), new Map()), "git");
+    return overlay;
+  }
+
+  it("keeps the kitty sequence byte-identical and every row width-safe at every suite size", async () => {
+    const sizes = [
+      [120, 36],
+      [100, 28],
+      [80, 24],
+      [60, 24],
+      [50, 24],
+    ] as const;
+    for (const [width, rows] of sizes) {
+      const overlay = makeNativeHarness(rows);
+      overlay.render(width); // first frame records the pane snapshot
+      await overlay.openRelPath("sample.png");
+      const lines = expectWidthSafe(overlay, width);
+      // The sequence reached the frame byte-identically: no truncation, no
+      // reordering by any width helper in the pane/frame path.
+      expect(lines.join("\n"), `sequence missing at ${width}`).toContain(NATIVE_SEQ);
+      for (let i = 0; i < lines.length; i++) {
+        expect(lines[i] ?? "", `line ${i} contains a carriage return`).not.toContain("\r");
+      }
+    }
+  });
+
+  it("serves a card-only frame when the pane geometry is refused (narrow terminal)", async () => {
+    const overlay = makeNativeHarness(24);
+    overlay.render(60); // records a valid pane snapshot
+    await overlay.openRelPath("sample.png");
+    expect(overlay.render(60).join("\n")).toContain(NATIVE_SEQ);
+    // The compact-notice frame below MAX_OVERLAY_WIDTH must not leak the
+    // sequence: the loader is never asked for an image at that size.
+    const narrow = overlay.render(MIN_OVERLAY_WIDTH - 1);
+    expect(narrow.join("\n")).not.toContain(NATIVE_SEQ);
   });
 });

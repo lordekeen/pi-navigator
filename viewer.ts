@@ -385,8 +385,12 @@ export async function loadFile(
             message,
             imageTier: "native",
             imageLines: out.lines,
-            imageCols: out.cols,
-            imageRows: out.rows,
+            // The REQUESTED cap, not pi-tui's aspect-fitted result: resize
+            // detection compares pane-derived requests, so a fitted height
+            // shorter than the pane would otherwise read as a permanent
+            // geometry mismatch and reflow every frame.
+            imageCols: opts.image.cols,
+            imageRows: opts.image.rows,
           };
         }
         nativeReason = out.reason;
