@@ -2,7 +2,7 @@
 
 Read-only project file navigator for pi. Opens a centered overlay inside a running pi session with a file tree, git state, and a syntax-highlighted viewer. No file editing, no runtime dependencies; images optionally render through a user-installed `chafa` (see [Images](#images-optional)).
 
-![status](https://img.shields.io/badge/status-v0.7.3-green)
+![status](https://img.shields.io/badge/status-v0.7.4-green)
 
 ## Install
 
@@ -46,7 +46,7 @@ Environment variables override the file (precedence: defaults ← file ← env):
 
 Edit either the file or the variables in your shell profile (e.g. `export PI_NAV_ICONS=1` in `~/.zshrc`) before launching pi, or pass inline: `PI_NAV_ICONS=1 pi`.
 
-**`/navigator settings`** opens a settings menu (interactive TUI) over the same fields — Enter/Space cycles a row and the change is written atomically; Esc closes without writing. Rows shadowed by an environment variable are annotated (`— overridden by PI_NAV_IMAGES (env wins)`); editing one still writes the file, and the env value stays effective until it is unset. Settings are read once per `/navigator` invocation, so **changes apply the next time /navigator opens** — there is nothing applied live mid-session.
+**`/navigator settings`** opens a settings menu (interactive TUI) over the same fields — Enter/Space cycles a row and the change is written atomically; Esc closes without writing. The menu follows the host settings-panel standard: it docks above the message input, uses the host list roles (bright labels, muted values), and is framed by full-width rules like pi's own `/settings`; mouse wheel and click work in fullscreen mode. Rows shadowed by an environment variable are annotated (`— overridden by PI_NAV_IMAGES (env wins)`); editing one still writes the file, and the env value stays effective until it is unset. Settings are read once per `/navigator` invocation, so **changes apply the next time /navigator opens** — there is nothing applied live mid-session.
 
 Icons depend on a terminal Nerd Font — without one, glyphs render as placeholder boxes (tofu). The overlay shows a one-time, non-blocking hint when icons are on. The git pane, commit-family view, and viewer follow the active pi theme with no hardcoded colors.
 
@@ -164,7 +164,7 @@ runtime dependencies, ever — `node_modules` is dev-only.
   than the plan's original "NodeNext" because pi loads extensions through jiti,
   which resolves the code's intentionally extensionless relative imports;
   NodeNext would demand `.js` extensions the runtime does not need.
-- `npm test` — nineteen vitest suites (498 cases): porcelain `-z` parsing plus a
+- `npm test` — nineteen vitest suites (501 cases): porcelain `-z` parsing plus a
   real-git scratch-repo integration pass, tree building/fs-walk fixtures
   (ignores, dot entries, symlink cycles), viewer caps and UTF-8 head decoding,
   the keymap reducer (escape precedence, focus cycling, copy), settings

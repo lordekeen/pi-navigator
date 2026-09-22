@@ -4,10 +4,13 @@
  *
  * `buildSettingItems` is pure and pi-free (unit-tested directly); the TUI
  * layer lazily imports pi-tui behind a dynamic shape check and wraps its
- * `SettingsList` in a navigator-style titled frame. The menu renders as a
- * plain (non-overlay) `ctx.ui.custom` component, so it docks in the editor
- * area on/above the message textbox like pi's own `/settings` selector and the
- * reference extensions — the transcript stays visible. The module never
+ * `SettingsList` in a host-framed wrapper following the settings-panel
+ * convention (top/bottom full-width rule in the `border` token, like pi's
+ * own `/settings` and pi-overseer). Mouse events are forwarded to the list
+ * with y translated past the frame chrome. The menu renders as a plain
+ * (non-overlay) `ctx.ui.custom` component, so it docks in the editor
+ * area on/above the message textbox like pi's own `/settings` selector and
+ * the reference extensions — the transcript stays visible. The module never
  * touches the filesystem (fs stays in settings.ts/index.ts) and hardcodes no
  * colors — the SettingsListTheme is built from the injected pi `Theme` tokens.
  */
@@ -92,6 +95,7 @@ export interface SettingsMenuDeps {
 interface ComponentLike {
   render(width: number): string[];
   handleInput?(data: string): void;
+  handleMouse?(event: PituiMouseEvent): PituiMouseResult | undefined;
   invalidate(): void;
 }
 
@@ -105,7 +109,47 @@ type PituiSettingItem = {
   values?: string[];
 };
 
-type PituiSettingsListTheme = {
+// pi-tui TuiMouseEvent / TuiMouseEventResult (structural mirrors, as for the
+// SettingsList types above — pi-tui is imported only at call time).
+type PituiMouseEventType = "press" | "release" | "move" | "drag" | "click" | "wheel";
+type PituiMouseButton = "left" | "middle" | "right" | "none";
+type PituiMouseEvent = {
+  type: PituiMouseEventType;
+  button: PituiMouseButton;
+  x: number;
+  y: number;
+  screenX: number;
+  screenY: number;
+  width: number;
+  height: number;
+  shift: boolean;
+  alt: boolean;
+  ctrl: boolean;
+  wheelDelta?: number;
+  clickCount?: number;
+};
+type PituiMouseResult = {
+  handled?: boolean;
+  capture?: boolean;
+  focus?: boolean;
+  render?: boolean;
+};
+
+/**
+ * Host settings-list theme roles (pi's `getSettingsListTheme`): unselected
+ * labels stay plain, unselected values are muted, the selection is accent.
+ */
+export function buildSettingsMenuTheme(theme: SettingsMenuTheme): SettingsListThemeLike {
+  return {
+    label: (t, selected) => (selected ? theme.fg("accent", t) : t),
+    value: (t, selected) => (selected ? theme.fg("accent", t) : theme.fg("muted", t)),
+    description: (t) => theme.fg("dim", t),
+    cursor: theme.fg("accent", "\u2192 "),
+    hint: (t) => theme.fg("dim", t),
+  };
+}
+
+export type SettingsListThemeLike = {
   label(text: string, selected: boolean): string;
   value(text: string, selected: boolean): string;
   description(text: string): string;
@@ -117,7 +161,7 @@ type PituiModule = {
   SettingsList: new (
     items: PituiSettingItem[],
     maxVisible: number,
-    theme: PituiSettingsListTheme,
+    theme: SettingsListThemeLike,
     onChange: (id: string, newValue: string) => void,
     onCancel: () => void,
     options?: { enableSearch?: boolean },
@@ -127,9 +171,15 @@ type PituiModule = {
 
 const MAX_VISIBLE_ROWS = 10;
 
+/** Rows the frame renders before the SettingsList (rule, title, blank). */
+const FRAME_HEADER_ROWS = 3;
+/** Host frame rule glyph (pi's DynamicBorder, pi-overseer's BorderLine). */
+const FRAME_RULE = "\u2500";
+
 /**
- * The navigator-style wrapper: titled frame (`pi-navigator · settings`), the
- * SettingsList, and a dim footer note. Every line it produces itself is
+ * Host-framed wrapper: top/bottom rules in the border token, the title row,
+ * the SettingsList, and a dim footer note. Mouse events are translated into
+ * list coordinates and forwarded. Every line it produces itself is
  * width-safe (truncateToWidth with the repo's empty-ellipsis convention);
  * the SettingsList truncates its own lines. Rendered in the editor dock, so
  * it fills whatever width the editor area has.
@@ -139,26 +189,43 @@ class SettingsMenuFrame implements ComponentLike {
   private readonly title: string;
   private readonly footer: string;
   private readonly truncate: (text: string, maxWidth: number) => string;
+  private readonly rule: (text: string) => string;
+  private listHeight = 0;
 
   constructor(list: SettingsListLike, theme: SettingsMenuTheme, truncate: (text: string, maxWidth: number) => string) {
     this.list = list;
     this.title = theme.fg("accent", theme.bold("pi-navigator \u00b7 settings"));
     this.footer = theme.fg("dim", "changes apply the next time /navigator opens");
     this.truncate = truncate;
+    this.rule = (text) => theme.fg("border", text);
   }
 
   render(width: number): string[] {
+    const rule = this.truncate(this.rule(FRAME_RULE.repeat(Math.max(1, width))), width);
+    const listLines = this.list.render(width);
+    this.listHeight = listLines.length;
     return [
+      rule,
       this.truncate(this.title, width),
       "",
-      ...this.list.render(width),
+      ...listLines,
       "",
       this.truncate(this.footer, width),
+      rule,
     ];
   }
 
   handleInput(data: string): void {
     this.list.handleInput?.(data);
+  }
+
+  handleMouse(event: PituiMouseEvent): PituiMouseResult | undefined {
+    // Mirror pi-tui Container's child dispatch: only rows inside the list
+    // receive the event, with y translated past the frame chrome. The
+    // SettingsList owns wheel scroll and click selection itself.
+    const y = event.y - FRAME_HEADER_ROWS;
+    if (y < 0 || y >= this.listHeight) return undefined;
+    return this.list.handleMouse?.({ ...event, y, height: this.listHeight });
   }
 
   invalidate(): void {
@@ -206,13 +273,7 @@ export async function openSettingsMenu(ui: SettingsMenuUi, deps: SettingsMenuDep
 
   await ui.custom<void>(
     (_tui, theme, _keybindings, done) => {
-      const settingsTheme: PituiSettingsListTheme = {
-        label: (t, selected) => (selected ? theme.fg("accent", t) : theme.fg("muted", t)),
-        value: (t, selected) => (selected ? theme.fg("accent", t) : t),
-        description: (t) => theme.fg("dim", t),
-        cursor: theme.fg("accent", "\u2192 "),
-        hint: (t) => theme.fg("dim", t),
-      };
+      const settingsTheme = buildSettingsMenuTheme(theme);
 
       const items: PituiSettingItem[] = buildSettingItems(current, deps.overrides).map((data) => ({
         id: data.id,

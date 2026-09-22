@@ -9,11 +9,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { NavigatorSettings } from "../settings";
-import { buildSettingItems, openSettingsMenu, type SettingsMenuDeps, type SettingsMenuTheme, type SettingsMenuUi } from "../settings_menu";
+import { buildSettingItems, buildSettingsMenuTheme, openSettingsMenu, type SettingsMenuDeps, type SettingsMenuTheme, type SettingsMenuUi } from "../settings_menu";
 
 interface ComponentLike {
   render(width: number): string[];
   handleInput?(data: string): void;
+  handleMouse?(event: unknown): unknown;
   invalidate(): void;
 }
 
@@ -122,6 +123,27 @@ describe("buildSettingItems", () => {
   });
 });
 
+describe("buildSettingsMenuTheme (host settings-list roles)", () => {
+  const theme: SettingsMenuTheme = {
+    fg: (color, text) => `<${color}>${text}</>`,
+    bold: (text) => `*${text}*`,
+  };
+  const themed = buildSettingsMenuTheme(theme);
+
+  it("keeps unselected labels plain and mutes unselected values", () => {
+    expect(themed.label("Label", false)).toBe("Label");
+    expect(themed.label("Label", true)).toBe("<accent>Label</>");
+    expect(themed.value("Value", false)).toBe("<muted>Value</>");
+    expect(themed.value("Value", true)).toBe("<accent>Value</>");
+  });
+
+  it("styles description, cursor and hint with the host tokens", () => {
+    expect(themed.description("Desc")).toBe("<dim>Desc</>");
+    expect(themed.cursor).toBe("<accent>\u2192 </>");
+    expect(themed.hint("Hint")).toBe("<dim>Hint</>");
+  });
+});
+
 describe("settings menu integration (real SettingsList)", () => {
   it("cycles a value and persists each change through commit", async () => {
     const commit = vi.fn((next: NavigatorSettings): CommitResult => ({ ok: true, settings: next }));
@@ -177,6 +199,32 @@ describe("settings menu integration (real SettingsList)", () => {
     const commit = vi.fn((_next: NavigatorSettings): CommitResult => ({ ok: true, settings: _next }));
     const onWarning = vi.fn();
     const { component, closed } = await openMenu({ settings: fullSettings(), overrides: {}, commit, onWarning });
+
+    component.handleInput?.(KEYS.escape);
+    await closed;
+    expect(commit).not.toHaveBeenCalled();
+    expect(onWarning).not.toHaveBeenCalled();
+  });
+
+  it("frames with full-width rules and forwards in-list mouse rows to the SettingsList", async () => {
+    const commit = vi.fn((next: NavigatorSettings): CommitResult => ({ ok: true, settings: next }));
+    const onWarning = vi.fn();
+    const { component, closed } = await openMenu({ settings: fullSettings(), overrides: {}, commit, onWarning });
+
+    const lines = component.render(80);
+    expect(lines[0]).toBe("\u2500".repeat(80));
+    expect(lines[lines.length - 1]).toBe("\u2500".repeat(80));
+    expect(lines[1]).toContain("pi-navigator \u00b7 settings");
+
+    // Chrome rows (rule/title/blank) are not forwarded to the list.
+    expect(component.handleMouse?.({ type: "wheel", wheelDelta: 1, y: 1, height: lines.length })).toBeUndefined();
+
+    // A wheel inside the list region scrolls the selection; the frame's
+    // three header rows are subtracted before dispatch.
+    const before = lines.findIndex((line) => line.startsWith("\u2192 "));
+    component.handleMouse?.({ type: "wheel", wheelDelta: 1, y: 5, height: lines.length });
+    const after = component.render(80).findIndex((line) => line.startsWith("\u2192 "));
+    expect(after).toBe(before + 1);
 
     component.handleInput?.(KEYS.escape);
     await closed;
