@@ -8,9 +8,9 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
-| **Pending / Open** | 1 | 1 | 1 | **3** |
+| **Pending / Open** | 8 | 10 | 15 | **33** |
 | **Resolved** | 10 | 20 | 36 | **66** |
-| **Total** | **11** | **21** | **37** | **69** |
+| **Total** | **18** | **30** | **51** | **99** |
 
 ---
 
@@ -21,6 +21,36 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | [#020](020-no-viewer-cache-blocking-highlight.md) | No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread | Bug / Performance | High | `viewer.ts` | Open (partial — cache done; event-loop yielding deferred: blocked by pi's bundled-runtime virtual-module boundary, needs a pi-side API) |
 | [#067](067-typed-config-registry-paths.md) | Typed Config Registry Paths (`path` is `readonly string[]`) | Technical Debt / Type Safety | Low | `settings.ts` | **Deferred** — tracked, not scheduled: the compile-time path/default check is not worth the rework at five fields. Revisit when the schema grows (~15+ fields or a third level), `live: true` lands, the byte-pinned serialize test is relaxed, or a defect escapes that a type check would have caught |
 | [#069](069-native-image-rendering.md) | Native Terminal Image Rendering (kitty / iTerm2 via pi-tui) | Feature | Medium | `images.ts` / `viewer_view.ts` / `index.ts` | Open — implemented in v0.8.0 (spec [`native-image-rendering.md`](../specs/native-image-rendering.md)); awaiting the live-terminal QA checklist ([`qa-evidence.md`](../plans/qa-evidence.md)) before close |
+| [#070](070-kitty-protocol-crash-in-tmux.md) | Kitty Protocol Bypass of Tmux Guard Causes Terminal Freeze/Crash | Bug | High | `images.ts` / `index.ts` | Open |
+| [#071](071-kitty-native-image-gate-jpeg-webp.md) | Kitty Native Image Mime Gate Restricts to PNG Only, Bypassing Native JPEG/WebP Support | Enhancement | Medium | `images.ts` / `constants.ts` | Open |
+| [#072](072-settings-infinity-number-validation.md) | Infinity Accepted as Valid Setting Value in `validateFieldValue` | Bug | High | `settings.ts` | Open |
+| [#073](073-settings-parse-number-empty-string.md) | `parseNumberField` Accepts Empty String as Zero and Accepts `Infinity` | Bug | High | `settings.ts` | Open |
+| [#074](074-settings-atomic-write-tmp-race.md) | Fixed `.tmp` Filename in `writeNavigatorSettings` Creates Concurrency Race and File Leak | Bug / Reliability | High | `settings.ts` | Open |
+| [#075](075-settings-menu-number-field-uneditable.md) | Number Settings Are Uneditable in TUI Settings Menu | Bug / UX | High | `settings_menu.ts` | Open |
+| [#076](076-settings-menu-fieldvalue-partial-settings-crash.md) | `fieldValue` Throws `TypeError` on Partial Settings or Missing Sections | Bug / Robustness | High | `settings_menu.ts` | Open |
+| [#077](077-settings-menu-mouse-outside-stale-click.md) | Settings Menu Drops Mouse Events Outside List Bounds, Causing Stale Click State and Dead Scroll Zones | Bug / UI Consistency | High | `settings_menu.ts` | Open |
+| [#078](078-settings-unknown-key-warning-cap-not-global.md) | Unknown Settings Warning Cap Is Per-Section Rather Than Global | Bug / Robustness | Medium | `settings.ts` | Open |
+| [#079](079-settings-shallow-readonly-nested-interfaces.md) | Shallow `readonly` on `NavigatorSettings` Leaves Nested Section Properties Mutable | Technical Debt / Type Safety | Medium | `settings.ts` | Open |
+| [#080](080-settings-menu-duplicate-field-id-warning.md) | Duplicate Field ID in Settings Menu Warning Notifications | Bug / UI Consistency | Medium | `settings_menu.ts` / `settings.ts` | Open |
+| [#081](081-settings-menu-max-visible-rows-small-terminal.md) | Fixed `MAX_VISIBLE_ROWS = 10` Overflows Small Viewports in Settings Menu | Bug / UI Consistency | Medium | `settings_menu.ts` | Open |
+| [#082](082-settings-menu-commit-exception-stale-display.md) | Uncaught Exception in Settings Menu `commit` Leaves Stale Row Display | Bug / Robustness | Medium | `settings_menu.ts` | Open |
+| [#083](083-viewer-slicestyled-ignores-osc-sequences.md) | `sliceStyled` Only Handles CSI Sequences, Ignoring OSC Hyperlink Sequences | Technical Debt / Robustness | Low | `viewer.ts` | Open |
+| [#084](084-viewer-hscroll-recomputes-full-file-rows.md) | Horizontal Scroll Recomputes and Slices Entire File in `computeRows` | Performance | Low | `viewer.ts` / `navigator.ts` | Open |
+| [#085](085-settings-unknown-keys-grammar-pluralization.md) | Grammatical Pluralization Error in Unknown Settings Overflow Warning | Bug / UI Polish | Low | `settings.ts` | Open |
+| [#086](086-settings-deepfreezedefaults-shallow-freeze.md) | `deepFreezeDefaults` Performs Shallow Two-Level Freeze Instead of Recursive Deep Freeze | Technical Debt | Low | `settings.ts` | Open |
+| [#087](087-settings-config-field-unused-properties.md) | `NavigatorConfigField` Interface Declares Unused and Dead Properties | Technical Debt / Code Hygiene | Low | `settings.ts` | Open |
+| [#088](088-settings-parse-image-mode-lowercased-warning.md) | `parseImageMode` Warning Uses Lowercased Input Contrary to `parseIconMode` | Bug / UI Consistency | Low | `settings.ts` / `env.ts` | Open |
+| [#089](089-settings-menu-lazy-import-pitui-defeated.md) | Lazy Dynamic Import of `pi-tui` in Settings Menu Is Defeated by Static Import in `index.ts` | Technical Debt / Code Hygiene | Low | `settings_menu.ts` / `index.ts` | Open |
+| [#090](090-tree-walktree-abort-entire-traversal.md) | `walkTree` Abort Semantics Terminates Entire Traversal Rather Than Skipping Subtree | Technical Debt / API Design | Low | `tree.ts` | Open |
+| [#091](091-viewer-unicode-smart-case-search.md) | Smart-Case Search Fails to Detect Non-ASCII Unicode Uppercase Characters | Bug | Medium | `viewer.ts` | Open |
+| [#092](092-test-commit-family-cap-false-positive.md) | Obsolete v2 Commit-Family Row Cap Test Passes Ineffectively Under v3 Semantics | Technical Debt / Test Quality | Low | `test/navigator.test.ts` | Open |
+| [#093](093-test-search-index-clamping-masked.md) | Search Index Clamping Test Masked by Re-typing Query in `navigator.test.ts` | Technical Debt / Test Quality | Low | `test/navigator.test.ts` | Open |
+| [#094](094-test-git-cache-assertion-missing.md) | Git Availability Cache Test Does Not Assert Subprocess Caching | Technical Debt / Test Quality | Low | `test/git.test.ts` | Open |
+| [#095](095-test-coverage-index-lifecycle-routing.md) | Test Coverage Gap: Extension Entry Point `index.ts` Is 93% Untested | Technical Debt / Test Coverage | Medium | `index.ts` / `test/index.test.ts` | Open |
+| [#096](096-test-coverage-git-edge-states.md) | Test Coverage Gap: Git Edge States Untested in `git.test.ts` | Technical Debt / Test Coverage | Low | `git.ts` / `test/git.test.ts` | Open |
+| [#097](097-test-coverage-images-tmux-degradation.md) | Test Coverage Gap: Tmux Native Image Degradation Untested in `images.test.ts` | Technical Debt / Test Coverage | Medium | `images.ts` / `test/images.test.ts` | Open |
+| [#098](098-test-fragility-overlay-as-any-casts.md) | Test Fragility: Tests Inspect Private Component Fields via `(overlay as any)` Casts | Technical Debt / Test Quality | Low | `test/navigator.test.ts` | Open |
+| [#099](099-test-flakiness-wall-clock-timeouts.md) | Test Flakiness: Async Tests Rely on Arbitrary Wall-Clock `setTimeout` Sleeps | Technical Debt / Test Quality | Low | `test/navigator.test.ts` | Open |
 
 ---
 
@@ -100,6 +130,19 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 ## 📂 Issues by Category
 
 ### Bug Fixes & UI Consistency
+- [#070: Kitty Protocol Bypass of Tmux Guard Causes Terminal Freeze/Crash](070-kitty-protocol-crash-in-tmux.md)
+- [#072: Infinity Accepted as Valid Setting Value in `validateFieldValue`](072-settings-infinity-number-validation.md)
+- [#073: `parseNumberField` Accepts Empty String as Zero and Accepts `Infinity`](073-settings-parse-number-empty-string.md)
+- [#074: Fixed `.tmp` Filename in `writeNavigatorSettings` Creates Concurrency Race and File Leak](074-settings-atomic-write-tmp-race.md)
+- [#076: `fieldValue` Throws `TypeError` on Partial Settings or Missing Sections](076-settings-menu-fieldvalue-partial-settings-crash.md)
+- [#077: Settings Menu Drops Mouse Events Outside List Bounds, Causing Stale Click State and Dead Scroll Zones](077-settings-menu-mouse-outside-stale-click.md)
+- [#078: Unknown Settings Warning Cap Is Per-Section Rather Than Global](078-settings-unknown-key-warning-cap-not-global.md)
+- [#080: Duplicate Field ID in Settings Menu Warning Notifications](080-settings-menu-duplicate-field-id-warning.md)
+- [#081: Fixed `MAX_VISIBLE_ROWS = 10` Overflows Small Viewports in Settings Menu](081-settings-menu-max-visible-rows-small-terminal.md)
+- [#082: Uncaught Exception in Settings Menu `commit` Leaves Stale Row Display](082-settings-menu-commit-exception-stale-display.md)
+- [#085: Grammatical Pluralization Error in Unknown Settings Overflow Warning](085-settings-unknown-keys-grammar-pluralization.md)
+- [#088: `parseImageMode` Warning Uses Lowercased Input Contrary to `parseIconMode`](088-settings-parse-image-mode-lowercased-warning.md)
+- [#091: Smart-Case Search Fails to Detect Non-ASCII Unicode Uppercase Characters](091-viewer-unicode-smart-case-search.md)
 - [#065: Viewer Header `col N` Badge Shows the Requested Offset, Not the Clamped One](065-viewer-header-hscroll-badge-stale-clamp.md) *(resolved)*
 - [#010: Help Modal Leaks a Bright Ellipsis Out of the Muted Style at Narrow Widths](010-help-modal-bright-ellipsis-leak.md)
 - [#009: CRLF Line Endings Break the Viewer Layout (Carriage Return Resets Cursor)](009-crlf-line-endings-break-viewer-layout.md)
@@ -129,6 +172,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#059: Nowrap Viewer Hscroll Locked at 0 on Wide-Char Lines](059-nowrap-wide-char-hscroll-lock.md) *(resolved)*
 
 ### Performance & Resource Optimization
+- [#084: Horizontal Scroll Recomputes and Slices Entire File in `computeRows`](084-viewer-hscroll-recomputes-full-file-rows.md)
 - [#020: No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread](020-no-viewer-cache-blocking-highlight.md) *(partial — cache done)*
 - [#011: `sliceStyled` Allocates a String Suffix Per Character (O(n²))](011-slicestyled-quadratic-suffix-alloc.md) *(resolved)*
 - [#012: Full-File `computeRows` Re-Derived Every Render](012-computerows-full-file-per-render.md) *(resolved)*
@@ -149,12 +193,28 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#054: Redundant `getRenderedMarkdownLines` Invocation in `buildRightRows`](054-redundant-rendered-markdown-line-call.md) *(resolved)*
 
 ### User Experience & Keyboard Navigation
+- [#071: Kitty Native Image Mime Gate Restricts to PNG Only, Bypassing Native JPEG/WebP Support](071-kitty-native-image-gate-jpeg-webp.md)
+- [#075: Number Settings Are Uneditable in TUI Settings Menu](075-settings-menu-number-field-uneditable.md)
 - [#004: Ambiguous Key Hints for Search Navigation (`n`/`N`) Between Input Modes](004-search-navigation-keybindings-inconsistency.md)
 - [#044: Tree Sort Collator Lacks `numeric: true` — `file10` Sorts Before `file2`](044-collator-missing-numeric-sorting.md) *(resolved)*
 - [#049: `copyContext` Copies Raw `commit:<hash>` Identity String in Viewer Pane](049-copy-context-raw-commit-scheme.md) *(resolved)*
 - [#055: `isMarkdownPath` Excludes Common Markdown Extensions (`.mdx`, `.mkd`, `.mdown`)](055-markdown-extensions-whitelist.md) *(resolved)*
 
 ### Technical Debt & Code Robustness
+- [#079: Shallow `readonly` on `NavigatorSettings` Leaves Nested Section Properties Mutable](079-settings-shallow-readonly-nested-interfaces.md)
+- [#083: `sliceStyled` Only Handles CSI Sequences, Ignoring OSC Hyperlink Sequences](083-viewer-slicestyled-ignores-osc-sequences.md)
+- [#086: `deepFreezeDefaults` Performs Shallow Two-Level Freeze Instead of Recursive Deep Freeze](086-settings-deepfreezedefaults-shallow-freeze.md)
+- [#087: `NavigatorConfigField` Interface Declares Unused and Dead Properties](087-settings-config-field-unused-properties.md)
+- [#089: Lazy Dynamic Import of `pi-tui` in Settings Menu Is Defeated by Static Import in `index.ts`](089-settings-menu-lazy-import-pitui-defeated.md)
+- [#090: `walkTree` Abort Semantics Terminates Entire Traversal Rather Than Skipping Subtree](090-tree-walktree-abort-entire-traversal.md)
+- [#092: Obsolete v2 Commit-Family Row Cap Test Passes Ineffectively Under v3 Semantics](092-test-commit-family-cap-false-positive.md)
+- [#093: Search Index Clamping Test Masked by Re-typing Query in `navigator.test.ts`](093-test-search-index-clamping-masked.md)
+- [#094: Git Availability Cache Test Does Not Assert Subprocess Caching](094-test-git-cache-assertion-missing.md)
+- [#095: Test Coverage Gap: Extension Entry Point `index.ts` Is 93% Untested](095-test-coverage-index-lifecycle-routing.md)
+- [#096: Test Coverage Gap: Git Edge States Untested in `git.test.ts`](096-test-coverage-git-edge-states.md)
+- [#097: Test Coverage Gap: Tmux Native Image Degradation Untested in `images.test.ts`](097-test-coverage-images-tmux-degradation.md)
+- [#098: Test Fragility: Tests Inspect Private Component Fields via `(overlay as any)` Casts](098-test-fragility-overlay-as-any-casts.md)
+- [#099: Test Flakiness: Async Tests Rely on Arbitrary Wall-Clock `setTimeout` Sleeps](099-test-flakiness-wall-clock-timeouts.md)
 - [#066: Post-#064 Review Gaps (last inline `padTo`, env literal, docs drift)](066-post-064-review-gaps.md) *(resolved)*
 - [#067: Typed Config Registry Paths](067-typed-config-registry-paths.md) *(deferred — tracked, not scheduled)*
 - [#064: `navigator.ts` Holds Six Responsibilities; Tree-Cache Counters Unsynchronized by Convention](064-navigator-decomposition.md) *(resolved)*
