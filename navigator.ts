@@ -18,7 +18,6 @@ import {
   Key,
   Markdown,
   matchesKey,
-  visibleWidth,
   type Focusable,
 } from "@earendil-works/pi-tui";
 
@@ -57,7 +56,6 @@ import type { FileNode, FilesRow, Focus, GitRow, GitState, InputMode, SearchMatc
 import {
   computeRows,
   extOf,
-  hardTruncate,
   markMatches,
   maxLineWidth,
   searchLines,
@@ -916,10 +914,7 @@ export class NavigatorOverlay implements Focusable {
     const rawLines = this.mdRenderer.render(width);
 
     // Width safety clamp: pad to width and prevent bright ellipsis leakage
-    const lines = rawLines.map((line) => {
-      const vw = visibleWidth(line);
-      return vw < width ? line + " ".repeat(width - vw) : hardTruncate(line, width);
-    });
+    const lines = rawLines.map((line) => padTo(line, width));
 
     this.mdCache = { file, width, lines };
     this.searchDirty = true;
@@ -1273,10 +1268,6 @@ export class NavigatorOverlay implements Focusable {
     // #053).
     this.lastViewerLayout = { cols: rightW, rows: area };
 
-    // The header is built before the hscroll clamp (HEAD ordering): the
-    // `col N` badge shows the requested offset; the body rows use the clamp.
-    const hscrollForHeader = this.viewHscroll;
-
     // Precompute the content the pure renderer lays out. Every cache write,
     // clamp and searchJump mutation stays here, in the original order; the
     // pure viewer renderer only pads and joins the already-computed rows.
@@ -1350,6 +1341,8 @@ export class NavigatorOverlay implements Focusable {
           // on the cached `marked` reference plus width/wrap/hscroll, so
           // vertical scrolling no longer re-wraps the whole file each
           // keystroke.
+          // Clamp before the header is built (Issue #065): the `col N` badge
+          // reads this.viewHscroll after this point, so badge and body agree.
           const maxH = Math.max(0, this.cachedMaxLineWidth(file) - contentW);
           this.viewHscroll = Math.max(0, Math.min(this.viewHscroll, maxH));
 
@@ -1383,7 +1376,11 @@ export class NavigatorOverlay implements Focusable {
       digits,
       viewScroll: this.viewScroll,
       wrap: this.viewWrap,
-      hscroll: hscrollForHeader,
+      // Post-clamp by construction (Issue #065): the text branch above has
+      // already clamped this.viewHscroll, so the badge reports the same offset
+      // the body rows were rendered at. Moving this record above the clamp
+      // would re-introduce the divergent badge.
+      hscroll: this.viewHscroll,
       imageLines,
       imageAsCard: this.imageAsCard,
       imageSupport: this.imageSupport,

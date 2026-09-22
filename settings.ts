@@ -14,6 +14,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 // pi-lens-ignore: TS2304
 import { dirname } from "node:path";
 
+import { NAVIGATOR_IMAGES_ENV } from "./constants";
 import { parseIconMode } from "./icons";
 import { parseTruthyEnv } from "./env";
 
@@ -334,7 +335,7 @@ export function parseImageMode(value: string | undefined): { mode: "off" | "chaf
   if (trimmed === "") return { mode: undefined };
   const normalized = trimmed.toLowerCase();
   if (normalized === "chafa") return { mode: "chafa" };
-  const parsed = parseTruthyEnv(value, "PI_NAV_IMAGES");
+  const parsed = parseTruthyEnv(normalized, NAVIGATOR_IMAGES_ENV);
   if (parsed.warning !== undefined) return { mode: undefined, warning: parsed.warning };
   return { mode: parsed.value ? "chafa" : "off" };
 }

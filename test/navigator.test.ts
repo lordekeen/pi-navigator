@@ -1128,6 +1128,53 @@ describe("nowrap wide-char hscroll (Issue #059)", () => {
   });
 });
 
+describe("Issue #065: col badge follows the clamped offset", () => {
+  it("reports the offset the body rows use, never the requested overshoot", async () => {
+    const harness = makeHarness(36, async () => ({
+      kind: "text",
+      relPath: "wide.txt",
+      sizeBytes: 240,
+      lineCount: 1,
+      lines: [Array.from({ length: 60 }, (_, i) => String.fromCodePoint(0x4e00 + i)).join("")],
+    }));
+    const { overlay } = harness;
+    withTree(harness, ["wide.txt"]);
+    overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+
+    // `l` adds 4 unclamped per press, so these 40 presses request 160 cells of
+    // scroll on a line with far less overflow; the render clamps it. Before the
+    // fix the badge reported the requested offset (col 161) while the body sat
+    // at the clamped one.
+    for (let i = 0; i < 40; i++) overlay.handleInput("l");
+    const rendered = overlay.render(120).join("\n");
+    const effective = (overlay as any).viewHscroll as number;
+    expect(effective).toBeGreaterThan(0);
+    expect(rendered).toContain(`col ${effective + 1}`);
+    expect(rendered).not.toContain("col 161");
+  });
+
+  it("shows no badge and does not scroll a file that cannot overflow the pane", async () => {
+    const harness = makeHarness(24, async () => ({
+      kind: "text",
+      relPath: "narrow.txt",
+      sizeBytes: 10,
+      lineCount: 1,
+      lines: ["short line"],
+    }));
+    const { overlay } = harness;
+    withTree(harness, ["narrow.txt"]);
+    overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+
+    overlay.handleInput("l");
+    overlay.handleInput("l");
+    const rendered = overlay.render(120).join("\n");
+    expect((overlay as any).viewHscroll).toBe(0);
+    expect(rendered).not.toContain("col ");
+  });
+});
+
 describe("Issue #048: reloadOpenFile on commit diff", () => {
   it("reloads commit diff without routing to loadFile or crashing into error card", async () => {
     let commitLoads = 0;
@@ -1300,24 +1347,37 @@ describe("markdown rendered view", () => {
   });
 
   it("resets hscroll on mode toggle and makes w wrap toggle a no-op while rendered", async () => {
-    const harness = makeHarness(24, async () => mdFile);
+    // The fixture's first line is wider than the viewer pane, so hscroll is
+    // real here: since Issue #065 the badge reports the *clamped* offset, so a
+    // file that cannot scroll can no longer stand in for a scrolled one.
+    const longHeading = "# " + "wide heading ".repeat(12);
+    const mdWide: ViewerFile = {
+      kind: "text",
+      relPath: "README.md",
+      sizeBytes: 400,
+      lineCount: 2,
+      lines: [longHeading, "tail line"],
+      rawText: `${longHeading}\ntail line`,
+    };
+    const harness = makeHarness(24, async () => mdWide);
     withTree(harness, ["README.md"]);
     harness.overlay.handleInput(KEYS.enter);
     await Promise.resolve();
 
-    // Scroll horizontally in code view. The header badge is built before the
-    // body's hscroll clamp, so it reports the requested offset even though this
-    // four-line file cannot actually scroll — pinned pre-refactor behavior,
-    // recorded (with the contract question) in Issue #065.
+    // Scroll horizontally in code view: two 4-cell steps are well inside this
+    // line's overflow, so the body scrolls and the badge reports the offset the
+    // body was rendered at (8 + 1).
     harness.overlay.handleInput("l");
     harness.overlay.handleInput("l");
     let rendered = harness.overlay.render(120).join("\n");
+    expect((harness.overlay as any).viewHscroll).toBe(8);
     expect(rendered).toContain("col 9");
 
     // Switch to rendered view: hscroll resets
     harness.overlay.handleInput("m");
     rendered = harness.overlay.render(120).join("\n");
-    expect(rendered).not.toContain("col 9");
+    expect((harness.overlay as any).viewHscroll).toBe(0);
+    expect(rendered).not.toContain("col ");
 
     // Pressing 'w' in rendered view is a no-op (wrap stays off in code view, not shown in header)
     harness.overlay.handleInput("w");
