@@ -11,11 +11,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { IMAGE_NATIVE_CACHE_MAX_CHARS, MAX_FS_ENTRIES } from "../constants";
-import { KITTY_PROBE_SAMPLES } from "../images";
+import { DEFAULT_PI_CHAFA_SUBSET, KITTY_PROBE_SAMPLES, type ImageSupport, type KittyProbeVerdict } from "../images";
 import type { ViewerFile } from "../types";
 import registerNavigatorExtension, {
   createViewerCache,
   isCacheableRender,
+  makeImageSeams,
   makeTreeTruncationWarner,
   makeTuiKittyDecodeProbe,
   makeWarningNotifier,
@@ -490,5 +491,77 @@ describe("makeTreeTruncationWarner (Issue #108)", () => {
     b(true);
     expect(notifyA).toHaveBeenCalledTimes(1);
     expect(notifyB).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("makeImageSeams (Issue #116 fix 1)", () => {
+  /** A resolved auto-mode snapshot; overrides narrow it per case. */
+  function snapshot(overrides: Partial<ImageSupport> = {}): ImageSupport {
+    return {
+      mode: "auto",
+      nativeProtocol: "kitty",
+      tier: "native",
+      piChafa: { present: true, via: "settings" },
+      chafa: { state: "ok", binary: "chafa", version: { major: 1, minor: 18 } },
+      config: { ...DEFAULT_PI_CHAFA_SUBSET },
+      hostShowImages: true,
+      hostImageWidthCells: 60,
+      ...overrides,
+    };
+  }
+
+  const neverProbe = async (): Promise<KittyProbeVerdict> => "no-reply";
+
+  it("gates the native seam on the snapshot it was built from", async () => {
+    // The whole point of the snapshot binding: a load that captured a
+    // non-native support must refuse natively even if the session has since
+    // become native-capable, so the seam can never disagree with the tier the
+    // loader chose when it picked the seams.
+    const seams = makeImageSeams({
+      support: snapshot({ tier: "chafa", nativeProtocol: null }),
+      probeDecode: neverProbe,
+      nextAbortSlot: () => new AbortController(),
+    });
+    await expect(seams.renderNativeImage("/work/x.png", { cols: 10, rows: 5 })).resolves.toEqual({
+      ok: false,
+      reason: "native rendering is not available",
+    });
+  });
+
+  it("gates the chafa seam on the snapshot (deferred chafa refuses without spawning)", async () => {
+    // mode: "native" keeps chafa deferred, so the seam must refuse before it
+    // ever reaches the binary — that is what makes the no-fallback path work.
+    const seams = makeImageSeams({
+      support: snapshot({ mode: "native", chafa: { state: "deferred" } }),
+      probeDecode: neverProbe,
+      nextAbortSlot: () => new AbortController(),
+    });
+    await expect(seams.renderImage("/work/x.png", { cols: 10, rows: 5 })).resolves.toEqual({
+      ok: false,
+      reason: "chafa is not available",
+    });
+  });
+
+  it("takes a fresh abort slot per render", async () => {
+    const slots: AbortController[] = [];
+    const seams = makeImageSeams({
+      support: snapshot(),
+      probeDecode: neverProbe,
+      nextAbortSlot: () => {
+        const controller = new AbortController();
+        slots.push(controller);
+        return controller;
+      },
+    });
+    // A missing path fails after the slot is taken, so the seam's slot
+    // ownership is observable without a terminal or a real image. (Aborting
+    // the previous controller is nextAbortSlot's own job in index.ts, not the
+    // seam's, so it is deliberately not asserted through a fake slot.)
+    await seams.renderNativeImage("/work/missing.png", { cols: 10, rows: 5 });
+    expect(slots).toHaveLength(1);
+
+    await seams.renderNativeImage("/work/missing.png", { cols: 10, rows: 5 });
+    expect(slots).toHaveLength(2);
+    expect(slots[1]).not.toBe(slots[0]);
   });
 });

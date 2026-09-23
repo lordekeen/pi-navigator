@@ -70,7 +70,7 @@ import {
   type TreeEntry,
 } from "./tree";
 import type { FileNode, GitState, ViewerFile } from "./types";
-import { extOf, loadFile, type LoadFileOptions } from "./viewer";
+import { extOf, loadFile, type ImageRenderer, type LoadFileOptions } from "./viewer";
 
 type TuiLike = {
   terminal: { rows: number; write: (data: string) => void };
@@ -149,6 +149,63 @@ export function makeTuiKittyDecodeProbe(
     }
     return probe;
   };
+}
+
+/**
+ * One immutable-snapshot-bound pair of image render seams (Issue #116 fix 1).
+ *
+ * The loader captures `const s = imageSupport` at load start and decides
+ * useNative / chafaSeam / variant from it; the seams must gate and render
+ * from THAT same snapshot. Re-reading the live `imageSupport` mid-load let a
+ * `setImageSupport` that lands between the capture and the seam call make the
+ * seam disagree with the loader that chose it (e.g. a native-bound load
+ * answering "native rendering is not available" and silently degrading to
+ * chafa through viewer.ts's fallback). `nextAbortSlot` keeps the shared abort
+ * lifecycle unchanged: one controller per load, a newer load aborts the
+ * previous render, cleanup aborts the newest.
+ */
+export function makeImageSeams(opts: {
+  /** The ONE snapshot this load renders under (Issue #116). */
+  support: ImageSupport;
+  probeDecode: (mime: string) => Promise<KittyProbeVerdict>;
+  /** Abort the in-flight render and return the new slot owner. */
+  nextAbortSlot: () => AbortController;
+}): { renderNativeImage: ImageRenderer; renderImage: ImageRenderer } {
+  /** Injected render seam (viewer.ts ImageRenderer contract): owns the
+   * abort lifecycle (one controller per load; aborted on dispose and on
+   * a newer load) and the chafa availability check. The result carries
+   * the requested geometry back so the viewer stores imageCols/imageRows. */
+  const renderImage: ImageRenderer = async (absPath, req) => {
+    const support = opts.support;
+    if (support.chafa.state !== "ok") return { ok: false, reason: "chafa is not available" };
+    const controller = opts.nextAbortSlot();
+    const out = await runChafaRender(absPath, req, {
+      binary: support.chafa.binary,
+      config: support.config,
+      signal: controller.signal,
+    });
+    return out.ok ? { ok: true, lines: out.lines, cols: req.cols, rows: req.rows } : out;
+  };
+
+  /** Injected native render seam (same ImageRenderer contract and abort
+   * lifecycle as renderImage): gates on the snapshot's effective tier — a
+   * strict-native session with no capability rejects cleanly so the loader
+   * can degrade per file under auto. runNativeRender never throws; every
+   * failure is a bounded {ok:false}. */
+  const renderNativeImage: ImageRenderer = async (absPath, req) => {
+    const support = opts.support;
+    if (support.tier !== "native" || support.nativeProtocol === null) {
+      return { ok: false, reason: "native rendering is not available" };
+    }
+    const controller = opts.nextAbortSlot();
+    return runNativeRender(absPath, req, {
+      protocol: support.nativeProtocol,
+      signal: controller.signal,
+      probeDecode: opts.probeDecode,
+    });
+  };
+
+  return { renderNativeImage, renderImage };
 }
 
 /**
@@ -384,6 +441,18 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
       let supportResolving = false;
       let imageAbort: AbortController | null = null;
 
+      /**
+       * Shared abort slot (unchanged lifecycle, Issue #116 fix 1): each seam
+       * call clears the previous in-flight render's controller before
+       * starting its own; cleanup() aborts the newest one on close.
+       */
+      const nextAbortSlot = (): AbortController => {
+        imageAbort?.abort();
+        const controller = new AbortController();
+        imageAbort = controller;
+        return controller;
+      };
+
       /** Stop everything this overlay owns. Safe to call more than once. */
       const cleanup = (): void => {
         if (pollTimer) {
@@ -431,54 +500,6 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
       const imageVariant = (g: { cols: number; rows: number }, s: ImageSupport): string =>
         `${g.cols}x${g.rows}:${s.config.binaryPath ?? ""}:${s.config.colors}:${s.config.symbolsSet}:${s.config.dither}:${s.config.timeoutMs}`;
 
-      /**
-       * Injected render seam (viewer.ts ImageRenderer contract): owns the
-       * abort lifecycle (one controller per load; aborted on dispose and on
-       * a newer load) and the chafa availability check. The result carries
-       * the requested geometry back so the viewer stores imageCols/imageRows.
-       */
-      const renderImage = async (
-        absPath: string,
-        req: { cols: number; rows: number },
-      ): Promise<{ ok: true; lines: string[]; cols: number; rows: number } | { ok: false; reason: string }> => {
-        const support = imageSupport;
-        if (support.chafa.state !== "ok") return { ok: false, reason: "chafa is not available" };
-        imageAbort?.abort();
-        const controller = new AbortController();
-        imageAbort = controller;
-        const out = await runChafaRender(absPath, req, {
-          binary: support.chafa.binary,
-          config: support.config,
-          signal: controller.signal,
-        });
-        return out.ok ? { ok: true, lines: out.lines, cols: req.cols, rows: req.rows } : out;
-      };
-
-      /**
-       * Injected native render seam (same ImageRenderer contract and abort
-       * lifecycle as renderImage): owns the abort controller and gates on the
-       * effective tier — a strict-native session with no capability rejects
-       * cleanly so the loader can degrade per file under auto. runNativeRender
-       * never throws; every failure is a bounded {ok:false}.
-       */
-      const renderNativeImage = async (
-        absPath: string,
-        req: { cols: number; rows: number },
-      ): Promise<{ ok: true; lines: string[]; cols: number; rows: number } | { ok: false; reason: string }> => {
-        const support = imageSupport;
-        if (support.tier !== "native" || support.nativeProtocol === null) {
-          return { ok: false, reason: "native rendering is not available" };
-        }
-        imageAbort?.abort();
-        const controller = new AbortController();
-        imageAbort = controller;
-        return runNativeRender(absPath, req, {
-          protocol: support.nativeProtocol,
-          signal: controller.signal,
-          probeDecode: kittyProbe,
-        });
-      };
-
       const loadFileCached = async (relPath: string, opts?: LoadFileOptions): Promise<ViewerFile> => {
         const absPath = join(cwd, relPath);
         let mtimeMs: number;
@@ -517,10 +538,18 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
         if (cached) return cached;
         let file: ViewerFile;
         if ((useNative || chafaSeam) && image) {
+          // The seams render under the ONE snapshot captured at load start
+          // (Issue #116 fix 1): a mid-load setImageSupport cannot make them
+          // disagree with the tier decision made above.
+          const seams = makeImageSeams({
+            support: s,
+            probeDecode: kittyProbe,
+            nextAbortSlot,
+          });
           file = await loadFile(absPath, relPath, {
             image,
-            ...(useNative ? { renderNativeImage } : {}),
-            ...(chafaSeam ? { renderImage } : {}),
+            ...(useNative ? { renderNativeImage: seams.renderNativeImage } : {}),
+            ...(chafaSeam ? { renderImage: seams.renderImage } : {}),
           });
         } else {
           file = await loadFile(absPath, relPath);

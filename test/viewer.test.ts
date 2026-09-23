@@ -12,7 +12,8 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { IMAGE_ERROR_MAX_CHARS, MAX_HIGHLIGHT_LINES } from "../constants";
+import { IMAGE_ERROR_MAX_CHARS, IMAGE_NATIVE_MAX_BYTES, MAX_HIGHLIGHT_LINES } from "../constants";
+import { runNativeRender } from "../images";
 import {
   computeRows,
   decodeUtf8Head,
@@ -627,7 +628,43 @@ describe("loadFile", () => {
       expect(file.imageLines).toEqual(["\x1b[32m██\x1b[0m"]);
       expect(file.imageCols).toBe(30);
       expect(file.imageRows).toBe(8);
-      expect(file.imageError).toBeUndefined();
+      // Issue #116 fix 2: the clean native failure keeps its reason on the
+      // chafa output so the fallback is diagnosable from the UI.
+      expect(file.imageError).toBe("terminal protocol unsupported");
+    });
+
+    it("keeps the over-cap native reason on the chafa fallback (Issue #116: the live 4 MiB scenario)", async () => {
+      // The real chain behind the reported bug: runNativeRender's bounded
+      // read rejects the file with the cap reason (c2), viewer.ts falls
+      // through to the chafa seam under auto, and the reason must survive
+      // onto the chafa output.
+      const path = await writePng("over-cap.png");
+      const native: ImageRenderer = (absPath, req) =>
+        runNativeRender(absPath, req, {
+          protocol: "kitty",
+          readBytes: async () => new Uint8Array(IMAGE_NATIVE_MAX_BYTES + 1),
+        });
+      const chafa: ImageRenderer = async (_absPath, req) => ({
+        ok: true,
+        lines: ["\x1b[32m██\x1b[0m"],
+        cols: req.cols,
+        rows: req.rows,
+      });
+      // mode auto: chafa seam present → chafa render with the reason kept.
+      const auto = await loadFile(path, "over-cap.png", {
+        renderNativeImage: native,
+        renderImage: chafa,
+        image: { cols: 30, rows: 8 },
+      });
+      expect(auto.imageTier).toBe("chafa");
+      expect(auto.imageError).toBe("image exceeds the 4 MiB native rendering cap");
+      // mode native: no chafa seam → metadata card carries the same reason.
+      const strict = await loadFile(path, "over-cap.png", {
+        renderNativeImage: native,
+        image: { cols: 30, rows: 8 },
+      });
+      expect(strict.imageTier).toBe("metadata");
+      expect(strict.imageError).toBe("image exceeds the 4 MiB native rendering cap");
     });
 
     it("returns a metadata card with the native reason when native fails cleanly and no chafa seam exists", async () => {

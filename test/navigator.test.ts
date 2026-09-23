@@ -1891,6 +1891,103 @@ describe("chafa image rendering", () => {
     }
   });
 
+  it("arms the upgrade reflow when support lands while the first image load is in flight (Issue #116 fix 3)", async () => {
+    vi.useFakeTimers();
+    try {
+      const loads: Array<{ relPath: string; opts?: LoadFileOptions }> = [];
+      let release: (() => void) | undefined;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const harness = makeHarness(
+        36,
+        async (relPath, opts): Promise<ViewerFile> => {
+          loads.push({ relPath, opts });
+          await gate; // hold the first load pending
+          return opts?.image ? chafaImage(relPath, opts.image.cols, opts.image.rows) : metadataImage(relPath);
+        },
+      );
+      withTree(harness, ["sample.png"]);
+      harness.overlay.render(120); // layout recorded before the open
+      harness.overlay.handleInput(KEYS.enter); // deferred support → card requested
+      await Promise.resolve();
+      expect(loads).toHaveLength(1);
+      expect(loads[0]?.opts).toBeUndefined();
+
+      // Support resolves while that load is STILL in flight (viewFile is null),
+      // which is the case the old gate missed: it required viewFile to be an
+      // image, so no reflow was ever armed and the card stuck.
+      harness.overlay.setImageSupport(activeSupport());
+      expect(loads).toHaveLength(1); // debounced, not immediate
+
+      release?.();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(harness.overlay.render(120).join("\n")).toContain("Image");
+
+      vi.advanceTimersByTime(IMAGE_RESIZE_DEBOUNCE_MS);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(loads).toHaveLength(2);
+      expect(loads[1]?.opts?.image).toBeDefined();
+      expect(harness.overlay.render(120).join("\n")).toContain("chafa-row-");
+      harness.overlay.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-arms a reflow while a load is in flight instead of firing it (Issue #116 fix 4)", async () => {
+    vi.useFakeTimers();
+    try {
+      const loads: Array<{ relPath: string; opts?: LoadFileOptions }> = [];
+      let release: (() => void) | undefined;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const harness = makeHarness(
+        36,
+        async (relPath, opts): Promise<ViewerFile> => {
+          loads.push({ relPath, opts });
+          await gate;
+          // mtimeMs is the settle signal: getOpenMtime() is undefined while a
+          // load is still pending for a different target.
+          return opts?.image
+            ? { ...chafaImage(relPath, opts.image.cols, opts.image.rows), mtimeMs: 0 }
+            : { ...metadataImage(relPath), mtimeMs: 0 };
+        },
+        undefined,
+        undefined,
+        activeSupport(),
+      );
+      withTree(harness, ["sample.png"]);
+      harness.overlay.render(120);
+      harness.overlay.handleInput(KEYS.enter);
+      await Promise.resolve();
+      expect(loads).toHaveLength(1);
+
+      // Support lands while that load is still in flight, which is what arms
+      // the upgrade reflow (fix 3). The timer must then re-arm rather than
+      // fire, so the pending load's work is not discarded by a loadSeq bump.
+      // (A resize pass cannot arm it here: with viewFile still null there is
+      // no rendered geometry to compare, so nothing is scheduled.)
+      harness.overlay.setImageSupport(activeSupport());
+      vi.advanceTimersByTime(IMAGE_RESIZE_DEBOUNCE_MS * 3);
+      await Promise.resolve();
+      expect(loads).toHaveLength(1);
+
+      release?.();
+      await vi.advanceTimersByTimeAsync(IMAGE_RESIZE_DEBOUNCE_MS * 2);
+      expect(harness.overlay.getOpenMtime(), "load never settled").toBe(0);
+      // The re-armed reflow lands once the load has settled.
+      expect(loads).toHaveLength(2);
+      expect(loads[1]?.opts?.image).toBeDefined();
+      harness.overlay.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("re-renders at a new pane geometry after the debounce and cancels the reflow on dispose", async () => {
     vi.useFakeTimers();
     try {

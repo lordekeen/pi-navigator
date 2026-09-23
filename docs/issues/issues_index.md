@@ -8,9 +8,9 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
-| **Pending / Open** | 1 | 1 | 1 | **3** |
+| **Pending / Open** | 1 | 2 | 1 | **4** |
 | **Resolved** | 18 | 36 | 58 | **112** |
-| **Total** | **19** | **37** | **59** | **115** |
+| **Total** | **19** | **38** | **59** | **116** |
 
 ---
 
@@ -21,6 +21,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | [#020](020-no-viewer-cache-blocking-highlight.md) | No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread | Bug / Performance | High | `viewer.ts` | Open (partial — cache done; event-loop yielding deferred: blocked by pi's bundled-runtime virtual-module boundary, needs a pi-side API) |
 | [#067](067-typed-config-registry-paths.md) | Typed Config Registry Paths (`path` is `readonly string[]`) | Technical Debt / Type Safety | Low | `settings.ts` | **Deferred** — tracked, not scheduled: the compile-time path/default check is not worth the rework at five fields. Revisit when the schema grows (~15+ fields or a third level), `live: true` lands, the byte-pinned serialize test is relaxed, or a defect escapes that a type check would have caught |
 | [#069](069-native-image-rendering.md) | Native Terminal Image Rendering (kitty / iTerm2 via pi-tui) | Feature | Medium | `images.ts` / `viewer_view.ts` / `index.ts` | Open — implemented in v0.8.0 (spec [`native-image-rendering.md`](../specs/native-image-rendering.md)); awaiting the live-terminal QA checklist ([`qa-evidence.md`](../plans/qa-evidence.md)) before close |
+| [#116](116-first-image-chafa-tier-flip.md) | First Image of a Session Renders as Chafa, Later Ones Render Natively | Bug / Image Tier | Medium | `index.ts` / `navigator.ts` / `viewer.ts` | **Open** — root cause established live: the image is over `IMAGE_NATIVE_MAX_BYTES` (4 MiB), so `runNativeRender` refuses it cleanly; `native` mode shows the card ("kitty failed: image exceeds the 4 MiB native rendering cap") while `auto` falls through to chafa and **discards the reason** — deterministic per file size, not a race. Fixing the invisibility (surface the reason next to chafa art) plus three collateral defects: a stuck metadata card when support lands mid-load, reflow re-entrancy, and a tier decided from a mutable snapshot. A shared-abort cascade was hypothesised and disproven |
 
 ---
 
@@ -146,6 +147,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 ## 📂 Issues by Category
 
 ### Bug Fixes & UI Consistency
+- [#116: First Image of a Session Renders as Chafa, Later Ones Render Natively](116-first-image-chafa-tier-flip.md)
 - [#113: Git Group Rows Ignore `leftW`, Clipping the Status-Error Hint](113-git-group-row-ignores-leftw.md) *(resolved)*
 - [#110: Keybinding Help Description and Documentation Drift Following Native Image Rendering](110-help-keybinding-description-native-image-drift.md) *(resolved)*
 - [#069: Native Terminal Image Rendering (kitty / iTerm2 via pi-tui)](069-native-image-rendering.md) *(open — live QA pending)*

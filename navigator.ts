@@ -330,15 +330,27 @@ export class NavigatorOverlay implements Focusable {
     this.imageSupport = support;
     const fingerprint = supportFingerprint(support);
     this.lastSupportFingerprint = fingerprint;
-    // A rendered image (chafa or native) reflows on a knob fingerprint
-    // change; an unrendered image file (metadata card) re-requests the
-    // render whenever an effective tier exists (upgrade path, D9).
-    if (support.tier !== "none" && this.viewFile?.kind === "image" && !this.imageAsCard) {
-      const rendered =
-        this.viewFile.imageTier === "chafa" || this.viewFile.imageTier === "native";
-      if (!rendered || fingerprint !== previousFingerprint) {
-        this.scheduleReflow(this.viewFile.relPath);
-      }
+    // Reflow triggers (Issue #116 fix 3): a rendered image (chafa or native)
+    // reflows on a knob fingerprint change; an unrendered image — a metadata
+    // card, or the in-flight target of a load that has not landed yet
+    // (viewFile still null) — re-requests the render whenever an effective
+    // tier exists (upgrade path, D9). The target is the in-flight path first
+    // (viewTargetRelPath, then viewFile), so support landing while the first
+    // image load of a session is still pending arms the upgrade too.
+    const target = this.viewTargetRelPath ?? this.viewFile?.relPath ?? null;
+    const viewIsRenderedImage =
+      target !== null &&
+      this.viewFile !== null &&
+      this.viewFile.relPath === target &&
+      (this.viewFile.imageTier === "chafa" || this.viewFile.imageTier === "native");
+    if (
+      support.tier !== "none" &&
+      target !== null &&
+      IMAGE_EXTENSIONS.has(extOf(target)) &&
+      !this.imageAsCard &&
+      (!viewIsRenderedImage || fingerprint !== previousFingerprint)
+    ) {
+      this.scheduleReflow(target);
     }
     this.touch();
   }
@@ -1131,8 +1143,17 @@ export class NavigatorOverlay implements Focusable {
     if (this.disposed || this.reflowTimer !== null) return;
     this.reflowTimer = setTimeout(() => {
       this.reflowTimer = null;
+      if (this.disposed) return;
+      // Issue #116 fix 4: never fire a reflow while a load is in flight —
+      // re-arm the debounce instead. Firing would bump loadSeq and discard the
+      // pending load's work (its finally is a no-op, so the newer load owns
+      // clearing viewLoading); IMAGE_RESIZE_DEBOUNCE_MS (250 ms) equals the
+      // chafa probe timeout, so the overlap was reachable in practice.
+      if (this.viewLoading) {
+        this.scheduleReflow(relPath);
+        return;
+      }
       if (
-        !this.disposed &&
         this.imageSupport.tier !== "none" &&
         this.viewFile?.relPath === relPath &&
         this.viewFile.kind === "image"

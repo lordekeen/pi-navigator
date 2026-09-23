@@ -822,7 +822,7 @@ describe("chafa image render width safety (§12.5)", () => {
     "\u754c".repeat(26), // wide CJK glyphs: 52 cells, truncation must be column-aware
   ];
 
-  function makeChafaHarness(rows: number, support: ImageSupport): NavigatorOverlay {
+  function makeChafaHarness(rows: number, support: ImageSupport, imageError?: string): NavigatorOverlay {
     const theme = makeNavigatorTheme({
       fg: (_color: string, text: string) => text,
       bg: (_color: string, text: string) => text,
@@ -851,6 +851,7 @@ describe("chafa image render width safety (§12.5)", () => {
           lines: [],
           sizeBytes: 1024,
           message: "1.0 KB \u00b7 40x40",
+          ...(imageError !== undefined ? { imageError } : {}),
           mtimeMs: 0,
         };
       },
@@ -888,6 +889,35 @@ describe("chafa image render width safety (§12.5)", () => {
         // pair must never leak into a chafa row (Issue #010).
         expect(line, `line ${i} leaks a bright ellipsis`).not.toMatch(/\x1b\[0m\.\.\./);
       }
+    }
+  });
+
+  it("keeps a chafa fallback reason in the header width-safe at every suite size (Issue #116 fix 2)", async () => {
+    // A native render can fail cleanly and fall through to chafa; the reason is
+    // now kept on the rendered file and shown as a dim header suffix. It must
+    // never push a row past the pane width — the failure this pins is exactly
+    // the width-safety class this suite exists for.
+    const reason =
+      "image exceeds the 4 MiB native rendering cap, which is a deliberately long reason to force clamping";
+    const sizes = [
+      [120, 36],
+      [100, 28],
+      [80, 24],
+      [60, 24],
+      [50, 24],
+    ] as const;
+    for (const [width, rows] of sizes) {
+      const overlay = makeChafaHarness(rows, activeChafaSupport(), reason);
+      overlay.render(width); // first frame records the pane snapshot
+      await overlay.openRelPath("sample.png");
+      const joined = expectWidthSafe(overlay, width).join("\n");
+      // The art still rendered: the reason is additive, never a card.
+      expect(joined, `chafa payload missing at ${width}`).toContain("\x1b[31m");
+      expect(joined, `card hints leaked at ${width}`).not.toContain("optional:");
+      // The header only carries the reason where the pane has budget for it
+      // (the suffix is deliberately budgeted, then clamped); at the widest size
+      // it must be there in full prefix form.
+      if (width === 120) expect(joined, "reason missing at 120").toContain("4 MiB");
     }
   });
 
