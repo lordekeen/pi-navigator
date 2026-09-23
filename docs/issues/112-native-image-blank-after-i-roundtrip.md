@@ -87,8 +87,10 @@ two loads; a new chafa roundtrip test pins the reload-free path; three
 `isCacheableRender` cases pin the policy. Suite: 19 files / 647 cases (was 643).
 Spec amended (`native-image-rendering.md` §7.4, §7.5, D7b).
 
-Live verification is the user's: the failure needs a kitty-protocol terminal
-that drops image data across the hidden period. Prediction for the diagnosis —
-a *small* native image blanks on both the `i` roundtrip and a reopen, while an
-image over `IMAGE_NATIVE_CACHE_MAX_CHARS` (never cached before this fix)
-blanked on the roundtrip only.
+**Verified live (2026-09-22):** the reporter confirmed that the `i` roundtrip
+on a kitty-protocol terminal now redraws the image, with no tracker status
+change needed. Because the roundtrip symptom was fixed by the fresh-id
+re-render alone, the causal chain is now empirical as well as structural:
+reusing the stored row ⇒ no re-transmission ⇒ blank; a fresh id ⇒ full `a=T` ⇒
+drawn. The small-image vs over-cap prediction above was not separately
+exercised.
