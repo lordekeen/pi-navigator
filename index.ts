@@ -205,6 +205,25 @@ export function makeWarningNotifier(
 }
 
 /**
+ * One-shot file-tree truncation warning (Issue #108): the three tree walks —
+ * the git-mode untracked-dir subtrees (one shared budget), the fs walk, and
+ * the empty-repo fs fallback — all draw from the single MAX_FS_ENTRIES cap.
+ * The identical warning therefore fires at most once per instance, the first
+ * time a walk reports truncation (same timing as the inline blocks it
+ * replaces: immediate, not deferred to the end of the refresh).
+ */
+export function makeTreeTruncationWarner(
+  notify: (message: string) => void,
+): (truncated: boolean) => void {
+  let warned = false;
+  return (truncated: boolean): void => {
+    if (!truncated || warned) return;
+    warned = true;
+    notify(`file tree truncated at ${MAX_FS_ENTRIES} entries \u2014 some files are not listed`);
+  };
+}
+
+/**
  * Refresh a cache key's recency so Map iteration order is LRU-first
  * (Issue #109): delete + re-set moves the key to the insertion tail (most
  * recent). No-op when the key is absent.
@@ -230,6 +249,81 @@ export function touchCacheEntry<K, V>(cache: Map<K, V>, key: K): void {
  */
 export function isCacheableRender(useNative: boolean, protocol: NativeProtocol | null): boolean {
   return !(useNative && protocol === "kitty");
+}
+
+/**
+ * Viewer cache policy (Issues #020, #109, #112, D7): owns the per-file render
+ * cache as an opaque Map plus its retention and eviction rules, so the policy
+ * is testable through lookup/store/drop instead of living inline in
+ * loadFileCached (a closure recreated per command invocation). `maxEntries`
+ * bounds the entry count. Semantics preserved from the original inline
+ * implementation:
+ * - lookup misses when the render is not cacheable, the key is absent, the
+ *   mtime moved by more than ±1 ms, or the variant changed; a genuine hit
+ *   refreshes recency via touchCacheEntry so eviction stays LRU, not FIFO.
+ * - store is a no-op unless the render is cacheable and the file carries an
+ *   mtime; on a store at capacity the least-recently-used key is evicted
+ *   BEFORE the insert. One deliberate improvement: the eviction check is
+ *   gated on the key being NEW — re-storing an existing key no longer
+ *   silently drops an unrelated LRU entry.
+ */
+export interface ViewerCache {
+  lookup(
+    relPath: string,
+    opts: { cacheable: boolean; mtimeMs: number; variant: string },
+  ): ViewerFile | undefined;
+  store(relPath: string, opts: { cacheable: boolean; variant: string; file: ViewerFile }): void;
+  drop(relPath: string): void;
+  readonly size: number;
+}
+
+export function createViewerCache(maxEntries: number): ViewerCache {
+  const entries = new Map<string, { mtimeMs: number; variant: string; file: ViewerFile }>();
+  return {
+    lookup(relPath, { cacheable, mtimeMs, variant }) {
+      // Kitty native renders are excluded outright by `cacheable` (#112):
+      // every open re-renders through pi-tui with a fresh image id.
+      if (!cacheable) return undefined;
+      const entry = entries.get(relPath);
+      if (entry === undefined) return undefined;
+      if (Math.abs(entry.mtimeMs - mtimeMs) > 1 || entry.variant !== variant) return undefined;
+      // Genuine hit: refresh recency so eviction is LRU, not FIFO (#109).
+      touchCacheEntry(entries, relPath);
+      return entry.file;
+    },
+    store(relPath, { cacheable, variant, file }) {
+      // Kitty native renders are excluded outright by `cacheable` (#112).
+      if (!cacheable) return;
+      // Cache only results that carry an mtime (text/binary/image/truncated);
+      // error cards have none and are cheap to rebuild.
+      const mtimeMs = file.mtimeMs;
+      if (mtimeMs === undefined) return;
+      // Native over-cap renders (D7) display but are not retained: the
+      // entry-count cache is not a byte bound, so the base64 rows are dropped
+      // on the next open.
+      if (
+        file.imageTier === "native" &&
+        (file.imageLines ?? []).join("").length > IMAGE_NATIVE_CACHE_MAX_CHARS
+      ) {
+        return;
+      }
+      // Evict only when inserting a NEW key (deliberate improvement over the
+      // original inline eviction, which ran unconditionally at capacity).
+      if (!entries.has(relPath) && entries.size >= maxEntries) {
+        // LRU eviction (Issue #109): hits refreshed recency via
+        // touchCacheEntry, so the first key is the least recently used.
+        const oldest = entries.keys().next();
+        if (!oldest.done) entries.delete(oldest.value);
+      }
+      entries.set(relPath, { mtimeMs, variant, file });
+    },
+    drop(relPath) {
+      entries.delete(relPath);
+    },
+    get size() {
+      return entries.size;
+    },
+  };
 }
 
 async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionCommandContext): Promise<void> {
@@ -275,6 +369,9 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
         env: { images: process.env[NAVIGATOR_IMAGES_ENV], icons: process.env[ICONS_ENV] },
       });
       const notifyWarning = makeWarningNotifier(ctx.ui);
+      // One-shot tree truncation warning (Issue #108): the tree walks share a
+      // single MAX_FS_ENTRIES cap; the first truncating walk warns immediately.
+      const noteTruncation = makeTreeTruncationWarner(notifyWarning);
       for (const warning of loaded.warnings) notifyWarning(warning);
       const imagePaths = {
         userSettings: join(agentDir, "settings.json"),
@@ -324,10 +421,11 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
       // unchanged reuses the cached highlighted lines instead of re-running
       // the stat → sniff → read → normalize → expandTabs → highlight pipeline.
       // A cheap stat decides validity; the full loadFile only runs on a real
-      // change. Bounded by MAX_VIEWER_CACHE_ENTRIES (oldest insertion evicted).
-      // Chafa renders add a variant key (D11) so a geometry or knob change is
-      // a cache miss; non-image entries keep variant "" and behave as today.
-      const viewerCache = new Map<string, { mtimeMs: number; variant: string; file: ViewerFile }>();
+      // change. Bounded by MAX_VIEWER_CACHE_ENTRIES (least recently used
+      // evicted, #109). Chafa renders add a variant key (D11) so a geometry or
+      // knob change is a cache miss; non-image entries keep variant "" and
+      // behave as today.
+      const viewerCache = createViewerCache(MAX_VIEWER_CACHE_ENTRIES);
 
       /** Variant key for a chafa cache entry: geometry + rendering knobs. */
       const imageVariant = (g: { cols: number; rows: number }, s: ImageSupport): string =>
@@ -389,7 +487,7 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
         } catch {
           // Stat failed (deleted/permissions): let loadFile produce the error
           // card; drop any stale cache entry for this path.
-          viewerCache.delete(relPath);
+          viewerCache.drop(relPath);
           return loadFile(absPath, relPath);
         }
         const image = opts?.image;
@@ -415,12 +513,8 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
               ? imageVariant(image, s)
               : "";
         const cacheable = isCacheableRender(useNative, s.nativeProtocol);
-        const cached = cacheable ? viewerCache.get(relPath) : undefined;
-        if (cached && Math.abs(cached.mtimeMs - mtimeMs) <= 1 && cached.variant === variant) {
-          // Genuine hit: refresh recency so eviction is LRU, not FIFO (#109).
-          touchCacheEntry(viewerCache, relPath);
-          return cached.file;
-        }
+        const cached = viewerCache.lookup(relPath, { cacheable, mtimeMs, variant });
+        if (cached) return cached;
         let file: ViewerFile;
         if ((useNative || chafaSeam) && image) {
           file = await loadFile(absPath, relPath, {
@@ -431,23 +525,10 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
         } else {
           file = await loadFile(absPath, relPath);
         }
-        // Cache only results that carry an mtime (text/binary/image/truncated);
-        // error cards have none and are cheap to rebuild. Native over-cap
-        // renders (D7) display but are not retained: the 16-entry cache is not
-        // a byte bound, so the base64 rows are dropped on the next open.
-        // Kitty native renders are excluded outright by `cacheable` (#112).
-        const nativeOverCap =
-          file.imageTier === "native" &&
-          (file.imageLines ?? []).join("").length > IMAGE_NATIVE_CACHE_MAX_CHARS;
-        if (file.mtimeMs !== undefined && cacheable && !nativeOverCap) {
-          if (viewerCache.size >= MAX_VIEWER_CACHE_ENTRIES) {
-            // LRU eviction (Issue #109): hits refresh recency via
-            // touchCacheEntry, so the first key is the least recently used.
-            const oldest = viewerCache.keys().next();
-            if (!oldest.done) viewerCache.delete(oldest.value);
-          }
-          viewerCache.set(relPath, { mtimeMs: file.mtimeMs, variant, file });
-        }
+        // Retention/eviction policy lives in createViewerCache (#109, #112,
+        // D7): cacheable gate, mtime requirement, native over-cap carve-out,
+        // and LRU eviction at capacity.
+        viewerCache.store(relPath, { cacheable, variant, file });
         return file;
       };
 
@@ -574,16 +655,12 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
                 declaredDirs.map((dir) => collectDirEntries(cwd, dir.relPath, fsBudget)),
               );
               entries = [...base, ...subtreeEntries.flat()];
-              if (fsBudget.truncated) {
-                notifyWarning(`file tree truncated at ${MAX_FS_ENTRIES} entries \u2014 some files are not listed`);
-              }
+              noteTruncation(fsBudget.truncated);
               nextSource = "git";
             } else {
               const fsResult = await collectFsEntries(cwd);
               entries = fsResult.entries;
-              if (fsResult.truncated) {
-                notifyWarning(`file tree truncated at ${MAX_FS_ENTRIES} entries \u2014 some files are not listed`);
-              }
+              noteTruncation(fsResult.truncated);
               nextSource = "fs";
             }
             if (git.available && entries.length === 0) {
@@ -591,9 +668,7 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
               // filesystem walk (plan section 9, empty repository row).
               const fsFallback = await collectFsEntries(cwd);
               entries = fsFallback.entries;
-              if (fsFallback.truncated) {
-                notifyWarning(`file tree truncated at ${MAX_FS_ENTRIES} entries \u2014 some files are not listed`);
-              }
+              noteTruncation(fsFallback.truncated);
               nextSource = "fs";
             }
             if (closed) return;

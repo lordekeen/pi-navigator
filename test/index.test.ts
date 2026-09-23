@@ -1,6 +1,8 @@
 /**
  * index.ts unit and integration suites (Issue #063, Issue #095):
  * - makeWarningNotifier deduplication and channel isolation
+ * - makeTreeTruncationWarner one-shot truncation policy (Issue #108)
+ * - createViewerCache retention/eviction policy (Issues #020, #109, #112, D7)
  * - parseNavigatorArgs subcommand parsing
  * - navigatorCompletions argument prefix completions
  * - extension lifecycle: command registration, subcommand routing, help renderer, headless guard
@@ -8,9 +10,13 @@
 
 import { describe, expect, it, vi } from "vitest";
 
+import { IMAGE_NATIVE_CACHE_MAX_CHARS, MAX_FS_ENTRIES } from "../constants";
 import { KITTY_PROBE_SAMPLES } from "../images";
+import type { ViewerFile } from "../types";
 import registerNavigatorExtension, {
+  createViewerCache,
   isCacheableRender,
+  makeTreeTruncationWarner,
   makeTuiKittyDecodeProbe,
   makeWarningNotifier,
   navigatorCompletions,
@@ -342,5 +348,147 @@ describe("isCacheableRender (Issue #112)", () => {
   it("retains every non-native render", () => {
     expect(isCacheableRender(false, "kitty")).toBe(true);
     expect(isCacheableRender(false, null)).toBe(true);
+  });
+});
+
+describe("createViewerCache (Issues #020, #109, #112, D7)", () => {
+  function file(overrides: Partial<ViewerFile> = {}): ViewerFile {
+    return { kind: "text", relPath: "x", lines: [], mtimeMs: 1000, ...overrides };
+  }
+
+  it("never serves or retains a kitty native render, even over an existing entry (#112)", () => {
+    const cache = createViewerCache(2);
+    const text = file({ relPath: "img.png" });
+    cache.store("img.png", { cacheable: true, variant: "", file: text });
+    expect(cache.size).toBe(1);
+
+    // A cacheable:false lookup (kitty native render in flight) is a clean miss
+    // even though a cacheable entry for the same path exists.
+    expect(cache.lookup("img.png", { cacheable: false, mtimeMs: 1000, variant: "" })).toBeUndefined();
+    // Storing the kitty render is a no-op: the previous entry survives.
+    const kitty = file({ relPath: "img.png", kind: "image", imageTier: "native", imageLines: ["\x1b_Gf=100..."] });
+    cache.store("img.png", { cacheable: false, variant: "native:kitty:2x2", file: kitty });
+    expect(cache.size).toBe(1);
+    expect(cache.lookup("img.png", { cacheable: true, mtimeMs: 1000, variant: "" })).toBe(text);
+  });
+
+  it("evicts the least recently used entry at capacity — the recency touch in lookup is what keeps `a` (#109)", () => {
+    const cache = createViewerCache(2);
+    const a = file({ relPath: "a" });
+    const b = file({ relPath: "b" });
+    const c = file({ relPath: "c" });
+    cache.store("a", { cacheable: true, variant: "", file: a });
+    cache.store("b", { cacheable: true, variant: "", file: b });
+    // Genuine hit refreshes a's recency (this is the #109 fix under test).
+    expect(cache.lookup("a", { cacheable: true, mtimeMs: 1000, variant: "" })).toBe(a);
+    cache.store("c", { cacheable: true, variant: "", file: c });
+    expect(cache.size).toBe(2);
+    expect(cache.lookup("a", { cacheable: true, mtimeMs: 1000, variant: "" })).toBe(a);
+    expect(cache.lookup("b", { cacheable: true, mtimeMs: 1000, variant: "" })).toBeUndefined();
+  });
+
+  it("evicts the plain-oldest entry when no hit refreshes recency (#109)", () => {
+    const cache = createViewerCache(2);
+    const a = file({ relPath: "a" });
+    const b = file({ relPath: "b" });
+    const c = file({ relPath: "c" });
+    cache.store("a", { cacheable: true, variant: "", file: a });
+    cache.store("b", { cacheable: true, variant: "", file: b });
+    // No lookup of a: it stays the oldest, so the FIFO eviction drops it.
+    cache.store("c", { cacheable: true, variant: "", file: c });
+    expect(cache.size).toBe(2);
+    expect(cache.lookup("a", { cacheable: true, mtimeMs: 1000, variant: "" })).toBeUndefined();
+    expect(cache.lookup("b", { cacheable: true, mtimeMs: 1000, variant: "" })).toBe(b);
+  });
+
+  it("does not retain a file without an mtime (error cards)", () => {
+    const cache = createViewerCache(2);
+    const error: ViewerFile = { kind: "error", relPath: "gone.ts", lines: [], message: "ENOENT" };
+    cache.store("gone.ts", { cacheable: true, variant: "", file: error });
+    expect(cache.size).toBe(0);
+    expect(cache.lookup("gone.ts", { cacheable: true, mtimeMs: 1000, variant: "" })).toBeUndefined();
+  });
+
+  it("drops a native render above IMAGE_NATIVE_CACHE_MAX_CHARS but retains one under it (D7)", () => {
+    const cache = createViewerCache(2);
+    const over = file({
+      relPath: "big.png",
+      kind: "image",
+      imageTier: "native",
+      imageLines: ["x".repeat(IMAGE_NATIVE_CACHE_MAX_CHARS + 1)],
+    });
+    cache.store("big.png", { cacheable: true, variant: "native:iterm2:2x2", file: over });
+    expect(cache.size).toBe(0);
+
+    const under = file({
+      relPath: "small.png",
+      kind: "image",
+      imageTier: "native",
+      imageLines: ["y".repeat(IMAGE_NATIVE_CACHE_MAX_CHARS - 1)],
+    });
+    cache.store("small.png", { cacheable: true, variant: "native:iterm2:2x2", file: under });
+    expect(cache.size).toBe(1);
+    expect(
+      cache.lookup("small.png", { cacheable: true, mtimeMs: 1000, variant: "native:iterm2:2x2" }),
+    ).toBe(under);
+  });
+
+  it("lookup misses on a stale mtime, a variant change, and an absent path, and hits within ±1 ms", () => {
+    const cache = createViewerCache(2);
+    const f = file({ relPath: "a.ts" });
+    cache.store("a.ts", { cacheable: true, variant: "v1", file: f });
+
+    // Genuine hit with the stored mtime; hits at the exact ±1 ms boundary and
+    // inside it.
+    expect(cache.lookup("a.ts", { cacheable: true, mtimeMs: 1000, variant: "v1" })).toBe(f);
+    expect(cache.lookup("a.ts", { cacheable: true, mtimeMs: 1001, variant: "v1" })).toBe(f);
+    expect(cache.lookup("a.ts", { cacheable: true, mtimeMs: 999.5, variant: "v1" })).toBe(f);
+    // Stale mtime: more than 1 ms away.
+    expect(cache.lookup("a.ts", { cacheable: true, mtimeMs: 1002, variant: "v1" })).toBeUndefined();
+    expect(cache.lookup("a.ts", { cacheable: true, mtimeMs: 998, variant: "v1" })).toBeUndefined();
+    // Variant change is a miss even at the same mtime.
+    expect(cache.lookup("a.ts", { cacheable: true, mtimeMs: 1000, variant: "v2" })).toBeUndefined();
+    // Absent path misses at any mtime.
+    expect(cache.lookup("nope.ts", { cacheable: true, mtimeMs: 1000, variant: "v1" })).toBeUndefined();
+    // drop removes the entry (stat-failure path in loadFileCached).
+    cache.drop("a.ts");
+    expect(cache.size).toBe(0);
+    expect(cache.lookup("a.ts", { cacheable: true, mtimeMs: 1000, variant: "v1" })).toBeUndefined();
+  });
+});
+
+describe("makeTreeTruncationWarner (Issue #108)", () => {
+  const exactMessage = `file tree truncated at ${MAX_FS_ENTRIES} entries \u2014 some files are not listed`;
+
+  it("stays silent for false and warns once with the exact message on the first true", () => {
+    const notify = vi.fn();
+    const noteTruncation = makeTreeTruncationWarner(notify);
+    noteTruncation(false);
+    noteTruncation(false);
+    expect(notify).not.toHaveBeenCalled();
+    noteTruncation(true);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith(exactMessage);
+  });
+
+  it("is silent for a second true, per instance", () => {
+    const notify = vi.fn();
+    const noteTruncation = makeTreeTruncationWarner(notify);
+    noteTruncation(true);
+    noteTruncation(true);
+    noteTruncation(true);
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("latches per instance, not globally", () => {
+    const notifyA = vi.fn();
+    const notifyB = vi.fn();
+    const a = makeTreeTruncationWarner(notifyA);
+    const b = makeTreeTruncationWarner(notifyB);
+    a(true);
+    // b is a fresh instance: a's latch must not silence it.
+    b(true);
+    expect(notifyA).toHaveBeenCalledTimes(1);
+    expect(notifyB).toHaveBeenCalledTimes(1);
   });
 });
