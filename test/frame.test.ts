@@ -15,11 +15,15 @@ import {
   bodyRows,
   buildFooterRow,
   buildTitleRow,
+  cycleFocus,
   filesArea,
   FOCUS_HINTS,
   getFooterHint,
+  initialFocus,
   isImageLine,
   joinLeftRight,
+  layoutPanes,
+  layoutRows,
   leftColumnWidth,
   MODE_HINTS,
   overlayHeight,
@@ -29,9 +33,10 @@ import {
   truncateAndWidth,
   useLeftColumn,
   viewerArea,
+  visiblePanes,
 } from "../frame";
 import { makeNavigatorTheme } from "../theme";
-import type { GitState } from "../types";
+import { NAVIGATOR_LAYOUTS, type Focus, type GitState, type NavigatorLayout } from "../types";
 
 const identityTheme = makeNavigatorTheme({
   fg: (_c: string, t: string) => t,
@@ -113,11 +118,78 @@ describe("splitRows", () => {
 });
 
 describe("pane areas", () => {
-  it("filesArea(36) is 12 and viewerArea(36) is 24, both floored at 2", () => {
-    expect(filesArea(36)).toBe(12); // max(2, splitRows(bodyRows(30)).filesH - 1)
+  it("filesArea(36, default) is 12 and viewerArea(36) is 24, both floored at 2", () => {
+    expect(filesArea(36, "files-git-viewer")).toBe(12); // max(2, splitRows(bodyRows(30)).filesH - 1)
     expect(viewerArea(36)).toBe(24); // max(2, bodyRows(30) - 1)
-    expect(filesArea(36)).toBeGreaterThanOrEqual(2);
+    expect(filesArea(36, "files-git-viewer")).toBeGreaterThanOrEqual(2);
     expect(viewerArea(36)).toBeGreaterThanOrEqual(2);
+  });
+
+  // Issue #119: the area follows the layout's files height; the floor keeps a
+  // git-viewer session (filesH 0) safe if alignFilesCursor ever fires.
+  it("filesArea follows the layout: full height in files-viewer, floor 2 in git-viewer (Issue #119)", () => {
+    expect(filesArea(36, "files-viewer")).toBe(24); // max(2, bodyRows(30) - 1)
+    expect(filesArea(36, "git-viewer")).toBe(2); // max(2, 0 - 1)
+    expect(filesArea(24, "files-viewer")).toBe(bodyRows(overlayHeight(24)) - 1);
+    expect(filesArea(24, "git-viewer")).toBe(2);
+  });
+});
+
+// Issue #119 (D2): the layout model is pure frame.ts derivations; the
+// component only calls them.
+describe("layout derivations (Issue #119)", () => {
+  it("NAVIGATOR_LAYOUTS is the closed union in canonical order", () => {
+    expect(NAVIGATOR_LAYOUTS).toEqual(["files-git-viewer", "files-viewer", "git-viewer"]);
+  });
+
+  it("layoutPanes reports pane presence per layout", () => {
+    expect(layoutPanes("files-git-viewer")).toEqual({ files: true, git: true });
+    expect(layoutPanes("files-viewer")).toEqual({ files: true, git: false });
+    expect(layoutPanes("git-viewer")).toEqual({ files: false, git: true });
+  });
+
+  it("layoutRows delegates the default layout to splitRows and hands single panes the full body", () => {
+    expect(layoutRows(25, "files-git-viewer")).toEqual(splitRows(25));
+    expect(layoutRows(25, "files-git-viewer")).toEqual({ filesH: 13, gitH: 11 });
+    expect(layoutRows(25, "files-viewer")).toEqual({ filesH: 25, gitH: 0 });
+    expect(layoutRows(25, "git-viewer")).toEqual({ filesH: 0, gitH: 25 });
+    // Minimum body rows: no arithmetic underflows.
+    expect(layoutRows(bodyRows(0), "files-viewer")).toEqual({ filesH: 4, gitH: 0 });
+    expect(layoutRows(bodyRows(0), "git-viewer")).toEqual({ filesH: 0, gitH: 4 });
+    expect(layoutRows(8, "files-git-viewer")).toEqual(splitRows(8)); // splitRows clamps
+  });
+
+  it("visiblePanes orders the focusable panes with the viewer last", () => {
+    expect(visiblePanes("files-git-viewer")).toEqual(["files", "git", "viewer"]);
+    expect(visiblePanes("files-viewer")).toEqual(["files", "viewer"]);
+    expect(visiblePanes("git-viewer")).toEqual(["git", "viewer"]);
+  });
+
+  it("initialFocus is the pane the layout opens with", () => {
+    expect(initialFocus("files-git-viewer")).toBe("files");
+    expect(initialFocus("files-viewer")).toBe("files");
+    expect(initialFocus("git-viewer")).toBe("git");
+  });
+
+  it("cycleFocus wraps forward within the visible panes", () => {
+    expect(cycleFocus("files", 1, "files-git-viewer")).toBe("git");
+    expect(cycleFocus("git", 1, "files-git-viewer")).toBe("viewer");
+    expect(cycleFocus("viewer", 1, "files-git-viewer")).toBe("files");
+    expect(cycleFocus("files", 1, "files-viewer")).toBe("viewer");
+    expect(cycleFocus("viewer", 1, "files-viewer")).toBe("files");
+    expect(cycleFocus("git", 1, "git-viewer")).toBe("viewer");
+    expect(cycleFocus("viewer", 1, "git-viewer")).toBe("git");
+  });
+
+  it("cycleFocus reverses with Shift+Tab and recovers an invisible focus", () => {
+    expect(cycleFocus("viewer", -1, "files-git-viewer")).toBe("git");
+    expect(cycleFocus("files", -1, "files-git-viewer")).toBe("viewer");
+    expect(cycleFocus("viewer", -1, "files-viewer")).toBe("files");
+    expect(cycleFocus("git", -1, "git-viewer")).toBe("viewer");
+    // A focus the layout does not render (e.g. carried over from another
+    // layout) lands on the first visible pane instead of crashing.
+    expect(cycleFocus("git" as Focus, 1, "files-viewer")).toBe("files");
+    expect(cycleFocus("files" as Focus, -1, "git-viewer")).toBe("git");
   });
 });
 
@@ -261,5 +333,21 @@ describe("buildFooterRow", () => {
     // the untruncated hint.
     expect(row).toContain("dim:files  accent:git  dim:viewer");
     expect(visibleWidth(row)).toBeLessThanOrEqual(98);
+  });
+
+  // Issue #119: the pane-label list follows the layout, not the hide state.
+  it("drops the panes a layout lacks from the footer labels (Issue #119)", () => {
+    const labels = (layout: NavigatorLayout | undefined, focus: Focus): string =>
+      buildFooterRow(120, { theme: toneTheme, mode: "normal", focus, notice: null, ...(layout ? { layout } : {}) });
+    const all = labels(undefined, "files"); // omitted layout = default three panes
+    expect(all).toContain("accent:files  dim:git  dim:viewer");
+    const filesViewer = labels("files-viewer", "files");
+    expect(filesViewer).toContain("accent:files  dim:viewer");
+    expect(filesViewer).not.toContain("git");
+    expect(visibleWidth(filesViewer)).toBeLessThanOrEqual(120);
+    const gitViewer = labels("git-viewer", "git");
+    expect(gitViewer).toContain("accent:git  dim:viewer");
+    expect(gitViewer).not.toContain("files");
+    expect(visibleWidth(gitViewer)).toBeLessThanOrEqual(120);
   });
 });

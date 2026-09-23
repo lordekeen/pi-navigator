@@ -11,6 +11,16 @@
 export type Focus = "files" | "git" | "viewer";
 export type InputMode = "normal" | "filter" | "search" | "help";
 
+/**
+ * The closed overlay-layout union (Issue #119, D1). Single source for the
+ * layout type, the settings `layout.default` options, and router validation:
+ * `files-git-viewer` is today's split (files pane + git panel + viewer);
+ * `files-viewer` / `git-viewer` give the surviving left-column pane the full
+ * body height with no separator row.
+ */
+export const NAVIGATOR_LAYOUTS = ["files-git-viewer", "files-viewer", "git-viewer"] as const;
+export type NavigatorLayout = (typeof NAVIGATOR_LAYOUTS)[number];
+
 // ── Tree ──
 
 /** Raw git status code for a path ("M", "A", "D", "??", ...). */

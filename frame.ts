@@ -18,7 +18,7 @@ import {
   LEFT_COLUMN_RATIO,
 } from "./constants";
 import type { NavigatorTheme } from "./theme";
-import type { Focus, GitState, InputMode } from "./types";
+import type { Focus, GitState, InputMode, NavigatorLayout } from "./types";
 import { hardTruncate } from "./viewer";
 
 /**
@@ -61,12 +61,13 @@ export function leftColumnWidth(innerW: number): number {
   return Math.min(LEFT_COLUMN_MAX, Math.max(LEFT_COLUMN_MIN, Math.floor(innerW * LEFT_COLUMN_RATIO)));
 }
 
-/** Files-pane scroll area height for the current terminal size. */
-export function filesArea(termRows: number): number {
+/** Files-pane scroll area height for the current terminal size and layout
+ *  (Issue #119, D5): the explicit layout parameter keeps a missed call site
+ *  from silently computing the default layout's split. */
+export function filesArea(termRows: number, layout: NavigatorLayout): number {
   const overlayH = overlayHeight(termRows);
   const body = bodyRows(overlayH);
-  const split = splitRows(body);
-  return Math.max(2, split.filesH - 1);
+  return Math.max(2, layoutRows(body, layout).filesH - 1);
 }
 
 /** Viewer-pane content area height for the current terminal size. */
@@ -83,6 +84,71 @@ export function splitRows(body: number): { filesH: number; gitH: number } {
     gitH = Math.max(2, body - filesH - 1);
   }
   return { filesH, gitH };
+}
+
+/**
+ * Layout model (Issue #119, D2): which left-column panes a layout renders.
+ * Render/builder code branches on `layoutPanes(layout)`, never on a zero
+ * height — a zero height is a geometry fact, not the pane-presence source.
+ */
+export interface LayoutPanes {
+  readonly files: boolean;
+  readonly git: boolean;
+}
+
+export function layoutPanes(layout: NavigatorLayout): LayoutPanes {
+  switch (layout) {
+    case "files-git-viewer":
+      return { files: true, git: true };
+    case "files-viewer":
+      return { files: true, git: false };
+    case "git-viewer":
+      return { files: false, git: true };
+  }
+}
+
+/**
+ * Left-column group heights for a body of `body` rows (Issue #119, D3). The
+ * default layout delegates to `splitRows` (filesH + gitH + 1 separator =
+ * body); a single-pane layout hands the surviving group the full body — its
+ * header + body − 1 area rows, exactly the viewer pane's height.
+ */
+export function layoutRows(body: number, layout: NavigatorLayout): { filesH: number; gitH: number } {
+  if (layout === "files-viewer") return { filesH: body, gitH: 0 };
+  if (layout === "git-viewer") return { filesH: 0, gitH: body };
+  return splitRows(body);
+}
+
+/**
+ * Focusable panes for a layout, in Tab order (Issue #119, D8). The viewer is
+ * always last; the left-column panes appear in their visual order.
+ */
+export function visiblePanes(layout: NavigatorLayout): readonly Focus[] {
+  switch (layout) {
+    case "files-git-viewer":
+      return ["files", "git", "viewer"];
+    case "files-viewer":
+      return ["files", "viewer"];
+    case "git-viewer":
+      return ["git", "viewer"];
+  }
+}
+
+/** The pane a layout opens focused on (Issue #119, D8). */
+export function initialFocus(layout: NavigatorLayout): Focus {
+  return layout === "git-viewer" ? "git" : "files";
+}
+
+/**
+ * Cycle focus within the layout's visible panes (Issue #119, D8): `1` for
+ * Tab, `-1` for Shift+Tab, wrapping at both ends. A focus that the layout
+ * does not render falls back to the first visible pane.
+ */
+export function cycleFocus(focus: Focus, direction: 1 | -1, layout: NavigatorLayout): Focus {
+  const panes = visiblePanes(layout);
+  const index = panes.indexOf(focus);
+  if (index < 0) return panes[0] ?? "files";
+  return panes[(index + direction + panes.length) % panes.length] ?? "files";
 }
 
 export function padTo(content: string, width: number): string {
@@ -191,6 +257,9 @@ export interface FooterView {
   mode: InputMode;
   focus: Focus;
   notice: string | null;
+  /** The overlay's layout; omitted means the default three-pane split
+   *  (Issue #119) — the pane labels drop the panes the layout lacks. */
+  layout?: NavigatorLayout;
 }
 
 /**
@@ -206,11 +275,9 @@ export function buildFooterRow(innerW: number, view: FooterView): string {
   if (view.notice) {
     right = " " + T.warning(view.notice) + " ";
   } else {
-    const panes: Array<[Focus, string]> = [
-      ["files", "files"],
-      ["git", "git"],
-      ["viewer", "viewer"],
-    ];
+    const panes: Array<[Focus, string]> = visiblePanes(view.layout ?? "files-git-viewer").map(
+      (pane) => [pane, pane] as [Focus, string],
+    );
     right =
       " " +
       panes.map(([pane, label]) => (view.focus === pane ? T.accent(T.bold(label)) : T.dim(label))).join("  ") +

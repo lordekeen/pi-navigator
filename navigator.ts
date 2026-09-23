@@ -737,7 +737,7 @@ export class NavigatorOverlay implements Focusable {
 
   private handleFilesInput(data: string): void {
     const rows = this.filesRows();
-    const area = filesArea(this.getTerminalRows());
+    const area = filesArea(this.getTerminalRows(), "files-git-viewer");
     const current = rows[this.filesCursor];
 
     if (matchesKey(data, Key.up) || data === "k") {
@@ -1330,7 +1330,7 @@ export class NavigatorOverlay implements Focusable {
   }
 
   private ensureFilesCursorVisible(): void {
-    this.ensureFilesCursorVisibleFor(this.filesRows().length, filesArea(this.getTerminalRows()));
+    this.ensureFilesCursorVisibleFor(this.filesRows().length, filesArea(this.getTerminalRows(), "files-git-viewer"));
   }
 
   private ensureGitCursorVisibleFor(rows: GitRow[], navRows: GitRow[], area: number): void {
