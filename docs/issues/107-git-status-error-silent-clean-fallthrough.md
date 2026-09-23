@@ -51,5 +51,11 @@ are still valid — and set `error` when the status read fails (`"error"` or
   could not be read".
 
 Tests mock a failing `status` invocation and assert availability + error + intact
-branch/history, plus both view-model renderings. `padTo` hard-truncates, so the
-longer label stays width-safe at every pane width.
+branch/history, plus both view-model renderings.
+
+**Correction (Issue #113):** the claim originally made here — "`padTo`
+hard-truncates, so the longer label stays width-safe at every pane width" — was
+wrong. `buildGitRow`'s group branch ignored the `leftW` it was handed, so the
+57-cell error label overflowed the 44-cell pane at *every* terminal size and
+`joinLeftRight` then clipped the cell mid-word, hiding `(press r to retry)`. The
+label is now sized before styling; see [#113](113-git-group-row-ignores-leftw.md).

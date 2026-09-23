@@ -9,8 +9,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
 | **Pending / Open** | 1 | 1 | 1 | **3** |
-| **Resolved** | 18 | 35 | 56 | **109** |
-| **Total** | **19** | **36** | **57** | **112** |
+| **Resolved** | 18 | 36 | 58 | **112** |
+| **Total** | **19** | **37** | **59** | **115** |
 
 ---
 
@@ -28,6 +28,9 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | ID | Title | Type | Severity | Resolution Summary | Status |
 | :--- | :--- | :--- | :--- | :--- | :---: |
+| [#113](113-git-group-row-ignores-leftw.md) | Git Group Rows Ignore `leftW`, Clipping the Status-Error Hint | Bug / UI Consistency | Low | `buildGitRow`'s group branch ignored the `leftW` it was handed, so #107's 57-cell error label overflowed the 44-cell pane at every terminal size and `joinLeftRight` clipped it mid-word — `(press r to retry)` never rendered. The label is now cut to the pane *before* styling (own `…`, per the #010 convention); short labels render byte-identically. +3 cases. | **Resolved** |
+| [#114](114-untested-cache-warn-wiring.md) | #109/#112/#108 Fixes Are Pinned Only at Helper Level; the Wiring Is Untested | Technical Debt / Test Coverage | Medium | The cache and walk-warning policies lived inline in closures no test could drive, so deleting the recency touch, the `cacheable` gate, or the warning left the suite green. Both are now exported units — `createViewerCache` (lookup/store/drop: cacheable gate, ±1 ms mtime, variant, LRU recency, capacity eviction, over-cap carve-out) and `makeTreeTruncationWarner` (one-shot latch) — with `loadFileCached` and the three walk sites delegating. +9 cases, each verified to fail when its fix is reverted. | **Resolved** |
+| [#115](115-test-count-drift-and-index-bookkeeping.md) | Test-Count Drift Reintroduced After #110; #079 Dropped From the Category List | Documentation | Low | The 639 count was stale two commits after #110 (+4 #111, +4 #112 → 647), and the batch index edit replaced `#079`'s category marker with `#110`'s (four other issues had no marker at all). The hand-maintained case count is retired in favour of the suite count, `docs/issues/README.md`'s abandoned duplicate table is reduced to a pointer, and the markers are now complete. New `test/docs.test.ts` guards the docs, the overview arithmetic and the markers. +5 cases. | **Resolved** |
 | [#112](112-native-image-blank-after-i-roundtrip.md) | `i` Roundtrip Leaves a Native Image Blank (Reused Kitty Image Id Skips Re-transmission) | Bug / Rendering | Medium | The `i` toggle re-emitted a native image's stored kitty rows and `viewerCache` served them again on reopen, so pi-tui's `prepareKittyScreen` re-placed the same image id without re-transmitting (`a=p`) — nothing drawn once the terminal had dropped the data. Kitty native renders are now never cached (`isCacheableRender`) and un-carding re-renders with a fresh id; chafa keeps the reload-free flip. +4 cases. Verified live on the reporter's kitty-protocol terminal (2026-09-22). | **Resolved** |
 | [#111](111-icon-glyphs-brand-logos-and-v3-tofu.md) | Icon Glyphs Show Product Logos (Apple for Images, Ansible for Unmapped Files) and Four Slots Render as Tofu | Bug / UI Consistency | Low | Audited all 35 glyphs against Nerd Fonts v3.5.1 `glyphnames.json`: images `\uf302` (`linux-apple`) → `fa-file_image`, generic `\ue723` (`dev-ansible`) → `fa-file_o`, js `\ue74c` (`dev-grunt`) → `dev-javascript`, vue `\ue731` (`dev-appwrite`) → `dev-vuejs`; cs/svg/lock/license moved off four v2 MDI codepoints whose ranges v3 deleted (tofu) to `dev-csharp`/`seti-svg`/`fa-lock`/`fa-balance_scale`; yml, scss/sass, less and toml got their own glyphs. Comments now carry registry names, and `ICON_GLYPHS` + a test guard the deleted ranges. +4 cases. | **Resolved** |
 | [#110](110-help-keybinding-description-native-image-drift.md) | Keybinding Help Description and Documentation Drift Following Native Image Rendering | Documentation | Low | `help.ts` `i` description drops the stale `(chafa)` suffix; README/AGENTS test counts updated to the observed 19 suites / 639 cases. | **Resolved** |
@@ -143,6 +146,12 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 ## 📂 Issues by Category
 
 ### Bug Fixes & UI Consistency
+- [#113: Git Group Rows Ignore `leftW`, Clipping the Status-Error Hint](113-git-group-row-ignores-leftw.md) *(resolved)*
+- [#110: Keybinding Help Description and Documentation Drift Following Native Image Rendering](110-help-keybinding-description-native-image-drift.md) *(resolved)*
+- [#069: Native Terminal Image Rendering (kitty / iTerm2 via pi-tui)](069-native-image-rendering.md) *(open — live QA pending)*
+- [#068: Settings Menu Standards Parity (host theme roles, mouse forwarding, host framing)](068-settings-menu-standards-parity.md) *(resolved)*
+- [#062: Settings Menu Opened as a Centered Overlay Instead of Docking Above the Message Input](062-settings-menu-overlay-placement.md) *(resolved)*
+- [#061: Slash-Command Settings Menu and Help (`/navigator settings` / `/navigator help`)](061-navigator-settings-command.md) *(resolved)*
 - [#102: Kitty Decode Probe Query Always Emits PNG (`f=100`) Despite MIME-Keyed Cache](102-kitty-probe-hardcoded-png-mime-decoupling.md) *(resolved)*
 - [#103: Inconsistent Card vs. Text Fallthrough in `viewer_view.ts` for Chafa Images with No Lines](103-viewer-view-empty-chafa-image-text-fallthrough.md) *(resolved)*
 - [#106: Binary File Changes Ignored in `readCommitDiff` Files-Changed Count](106-git-numstat-binary-files-changed-count.md) *(resolved)*
@@ -226,7 +235,9 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#055: `isMarkdownPath` Excludes Common Markdown Extensions (`.mdx`, `.mkd`, `.mdown`)](055-markdown-extensions-whitelist.md) *(resolved)*
 
 ### Technical Debt & Code Robustness
-- [#110: Keybinding Help Description and Documentation Drift Following Native Image Rendering](110-help-keybinding-description-native-image-drift.md) *(resolved)*
+- [#114: #109/#112/#108 Fixes Are Pinned Only at Helper Level; the Wiring Is Untested](114-untested-cache-warn-wiring.md) *(resolved)*
+- [#115: Test-Count Drift Reintroduced After #110; #079 Dropped From the Category List](115-test-count-drift-and-index-bookkeeping.md) *(resolved)*
+- [#079: Shallow `readonly` on `NavigatorSettings` Leaves Nested Section Properties Mutable](079-settings-shallow-readonly-nested-interfaces.md) *(resolved)*
 - [#083: `sliceStyled` Only Handles CSI Sequences, Ignoring OSC Hyperlink Sequences](083-viewer-slicestyled-ignores-osc-sequences.md) *(resolved)*
 - [#086: `deepFreezeDefaults` Performs Shallow Two-Level Freeze Instead of Recursive Deep Freeze](086-settings-deepfreezedefaults-shallow-freeze.md) *(resolved)*
 - [#087: `NavigatorConfigField` Interface Declares Unused and Dead Properties](087-settings-config-field-unused-properties.md) *(resolved)*
@@ -271,3 +282,6 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
    - Check all items in the issue's Acceptance Criteria checklist.
    - Update the issue file status to `Resolved`.
    - Move the entry from **Pending Issues** to **Resolved Issues** in this index and update the overview metrics.
+   - Run `npm test`: `test/docs.test.ts` guards this file's overview arithmetic and
+     category markers against the per-issue `Status`/`Severity` lines (Issue #115).
+     A category marker must appear for every issue, exactly once.

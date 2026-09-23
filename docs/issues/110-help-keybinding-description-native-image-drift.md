@@ -39,3 +39,11 @@
 - `README.md` / `AGENTS.md`: counts updated to the observed final suite —
   **19 suites / 639 cases** (they read 595). Verified against a fresh `npm test`
   run after every code change in this batch.
+
+**Post-resolution drift (Issue #115):** the 639 count was correct when written and
+wrong two commits later — #111 (+4 cases) and #112 (+4 cases) took the suite to
+647 while `README.md` / `AGENTS.md` kept 639, violating this issue's first
+acceptance criterion. The hand-maintained count has now drifted three times
+(595 → 612 → 639 → 647), so it was retired rather than corrected again: the docs
+state the suite count only, and `test/docs.test.ts` guards it. See
+[#115](115-test-count-drift-and-index-bookkeeping.md).
