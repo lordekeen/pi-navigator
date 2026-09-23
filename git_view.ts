@@ -184,7 +184,16 @@ export function buildGitRow(row: GitRow, selected: boolean, leftW: number, view:
           : row.tone === "dim"
             ? T.dim
             : T.muted;
-    line = " " + tone(row.label);
+    // Issue #113: cut the plain label to the pane *before* styling — one
+    // cell for the leading space, the rest for the label. Truncating styled
+    // text afterwards would wrap the ellipsis in tone's reset (Issue #010);
+    // cutting plain text first keeps the ellipsis inside the styled span.
+    const room = Math.max(1, leftW - 1);
+    let label = row.label;
+    if (visibleWidth(label) > room) {
+      label = hardTruncate(label, Math.max(1, room - 1)) + "\u2026";
+    }
+    line = " " + tone(label);
   } else if (row.kind === "file") {
     const arrow = selected ? T.accent(T.bold("\u25b6 ")) : "  ";
     const nameStyle = selected ? T.text : row.staged ? T.success : T.warning;

@@ -223,6 +223,37 @@ describe("render width safety", () => {
     expect(joinedP).not.toContain("Clean");
   });
 
+  it("shows the git status error group row width-safe with a visible ellipsis (Issue #113)", () => {
+    // The 57-cell error label used to overflow the left pane until padTo
+    // clipped it mid-word with no ellipsis, hiding "(press r to retry)". The
+    // group row must now carry a visible ellipsis at every suite size.
+    const sizes: Array<[width: number, rows: number]> = [
+      [120, 36],
+      [100, 28],
+      [80, 24],
+      [74, 24], // narrowest left-column width the suite renders
+    ];
+    for (const [width, rows] of sizes) {
+      const harness = makeHarness(rows);
+      harness.overlay.setGitState({
+        available: true,
+        branch: "main",
+        detached: false,
+        ahead: 0,
+        behind: 0,
+        unstaged: [],
+        staged: [],
+        history: [],
+        error: "git status failed \u2014 changes not listed (press r to retry)",
+        refreshedAt: 0,
+      });
+      const lines = expectWidthSafe(harness.overlay, width);
+      // The git header shows the dim error text too, but only the group row
+      // carries the fix's ellipsis; pre-fix both are clipped with none.
+      expect(lines.find((l) => l.includes("git status failed") && l.includes("\u2026")), `width ${width}`).toBeTruthy();
+    }
+  });
+
   it("stays width-safe with an expanded commit family (Issue #030)", () => {
     const harness = makeHarness(30);
     const { overlay } = harness;

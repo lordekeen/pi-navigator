@@ -216,6 +216,31 @@ describe("buildGitRow", () => {
     const deep = buildGitRow({ kind: "commit-child", commit: commit("deep", ["x"]), depth: 3 }, true, 30, rowView());
     expect(visibleWidth(deep)).toBe(30);
   });
+
+  it("truncates a long group label to the pane with a visible ellipsis (Issue #113)", () => {
+    const errorRow: GitRow = {
+      kind: "group",
+      label: "git status failed \u2014 changes not listed (press r to retry)",
+      tone: "warning",
+    };
+    for (const leftW of [44, 20, 10, 4, 1]) {
+      const out = buildGitRow(errorRow, false, leftW, rowView());
+      expect(visibleWidth(out), `width ${leftW}`).toBeLessThanOrEqual(leftW);
+    }
+    // At widths with room for the cut label the row must end in the fix's
+    // ellipsis, not padTo's ragged mid-word cut. Below leftW 3 the pane only
+    // fits the leading space, so the ellipsis lands outside the pane.
+    for (const leftW of [44, 20, 10, 4]) {
+      expect(buildGitRow(errorRow, false, leftW, rowView()), `ellipsis at width ${leftW}`).toContain("\u2026");
+    }
+  });
+
+  it("leaves a group label that fits the pane untouched, with no ellipsis (Issue #113)", () => {
+    const cleanRow: GitRow = { kind: "group", label: "Clean \u2014 nothing staged or unstaged", tone: "dim" };
+    const out = buildGitRow(cleanRow, false, 44, rowView());
+    expect(out).toBe(" Clean \u2014 nothing staged or unstaged".padEnd(44));
+    expect(out).not.toContain("\u2026");
+  });
 });
 
 describe("commitMarker", () => {
