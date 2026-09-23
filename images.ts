@@ -90,10 +90,11 @@ function bounded(text: string): string {
 }
 
 /**
- * Shared abort reason for both render seams (Issue #117). `viewer.ts` treats it
- * as a supersession signal: a native render aborted by a newer load must NOT
- * fall through to the chafa seam, because that seam's `nextAbortSlot()` would
- * abort the newer load's in-flight render (silently degrading it to chafa).
+ * Shared abort reason for both render seams. `viewer.ts` treats it as a
+ * supersession signal: an aborted native render must NOT fall through to the
+ * chafa seam (Issue #117), and with per-load abort ownership (Issue #117
+ * follow-up) a superseded load's renders abort without touching any newer
+ * load's controller.
  */
 export const IMAGE_ABORT_REASON = "render aborted";
 
@@ -686,6 +687,11 @@ export async function runChafaRender(
     IMAGE_RENDER_TIMEOUT_MAX_MS,
   );
   const execFn = ctx.exec ?? nodeExecFile;
+  // Pre-spawn abort check, mirroring runNativeRender's entry check (Issue #117
+  // follow-up): a superseded load must not fork a chafa child at all.
+  if (ctx.signal?.aborted) {
+    return { ok: false, reason: IMAGE_ABORT_REASON };
+  }
   let stdout: string;
   try {
     const result = await execFn(

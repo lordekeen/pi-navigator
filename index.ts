@@ -151,35 +151,36 @@ export function makeTuiKittyDecodeProbe(
  * `setImageSupport` that lands between the capture and the seam call make the
  * seam disagree with the loader that chose it (e.g. a native-bound load
  * answering "native rendering is not available" and silently degrading to
- * chafa through viewer.ts's fallback). `nextAbortSlot` keeps the shared abort
- * lifecycle unchanged: one controller per load, a newer load aborts the
- * previous render, cleanup aborts the newest.
+ * chafa through viewer.ts's fallback).
+ *
+ * The seams own no controller: they forward the OWNING load's signal (Issue
+ * #117 follow-up), so a render can only be aborted by its own load being
+ * superseded or disposed — never by another load's fallback.
  */
 export function makeImageSeams(opts: {
   /** The ONE snapshot this load renders under (Issue #116). */
   support: ImageSupport;
   probeDecode: () => Promise<KittyProbeVerdict>;
-  /** Abort the in-flight render and return the new slot owner. */
-  nextAbortSlot: () => AbortController;
+  /** The owning load's abort signal (Issue #117 follow-up). */
+  signal: AbortSignal;
 }): { renderNativeImage: ImageRenderer; renderImage: ImageRenderer } {
-  /** Injected render seam (viewer.ts ImageRenderer contract): owns the
-   * abort lifecycle (one controller per load; aborted on dispose and on
-   * a newer load) and the chafa availability check. The result carries
-   * the requested geometry back so the viewer stores imageCols/imageRows. */
+  /** Injected render seam (viewer.ts ImageRenderer contract): the chafa
+   * availability check plus the owning load's signal, so a superseded load's
+   * child never outlives the view. The result carries the requested geometry
+   * back so the viewer stores imageCols/imageRows. */
   const renderImage: ImageRenderer = async (absPath, req) => {
     const support = opts.support;
     if (support.chafa.state !== "ok") return { ok: false, reason: "chafa is not available" };
-    const controller = opts.nextAbortSlot();
     const out = await runChafaRender(absPath, req, {
       binary: support.chafa.binary,
       config: support.config,
-      signal: controller.signal,
+      signal: opts.signal,
     });
     return out.ok ? { ok: true, lines: out.lines, cols: req.cols, rows: req.rows } : out;
   };
 
-  /** Injected native render seam (same ImageRenderer contract and abort
-   * lifecycle as renderImage): gates on the snapshot's effective tier — a
+  /** Injected native render seam (same ImageRenderer contract and load-bound
+   * signal as renderImage): gates on the snapshot's effective tier — a
    * strict-native session with no capability rejects cleanly so the loader
    * can degrade per file under auto. runNativeRender never throws; every
    * failure is a bounded {ok:false}. */
@@ -188,10 +189,9 @@ export function makeImageSeams(opts: {
     if (support.tier !== "native" || support.nativeProtocol === null) {
       return { ok: false, reason: "native rendering is not available" };
     }
-    const controller = opts.nextAbortSlot();
     return runNativeRender(absPath, req, {
       protocol: support.nativeProtocol,
-      signal: controller.signal,
+      signal: opts.signal,
       probeDecode: opts.probeDecode,
     });
   };
@@ -431,17 +431,19 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
       // immediately and imageSupport is upgraded when resolution lands.
       let imageSupport: ImageSupport = makeDeferredImageSupport(loaded.settings.images.mode);
       let supportResolving = false;
-      let imageAbort: AbortController | null = null;
+      let currentImageLoad: AbortController | null = null;
 
       /**
-       * Shared abort slot (unchanged lifecycle, Issue #116 fix 1): each seam
-       * call clears the previous in-flight render's controller before
-       * starting its own; cleanup() aborts the newest one on close.
+       * Per-load abort ownership (Issue #117 follow-up): every viewer load
+       * owns one controller, and starting a load aborts the previous load's
+       * render — the ONLY place one load aborts another load's work. The seams
+       * receive their own load's signal, so a superseded load can never abort
+       * a newer load's render (the #117 cascade).
        */
-      const nextAbortSlot = (): AbortController => {
-        imageAbort?.abort();
+      const beginImageLoad = (): AbortController => {
+        currentImageLoad?.abort();
         const controller = new AbortController();
-        imageAbort = controller;
+        currentImageLoad = controller;
         return controller;
       };
 
@@ -451,8 +453,8 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
           clearTimeout(pollTimer);
           pollTimer = null;
         }
-        imageAbort?.abort();
-        imageAbort = null;
+        currentImageLoad?.abort();
+        currentImageLoad = null;
         overlay.dispose();
       };
 
@@ -493,6 +495,11 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
         `${g.cols}x${g.rows}:${s.config.binaryPath ?? ""}:${s.config.colors}:${s.config.symbolsSet}:${s.config.dither}:${s.config.timeoutMs}`;
 
       const loadFileCached = async (relPath: string, opts?: LoadFileOptions): Promise<ViewerFile> => {
+        // Issue #117 follow-up: every load owns one controller and supersedes
+        // the previous load's render — including a cache hit, a text file, or
+        // a failed stat, so a stale chafa child or native render never
+        // outlives the view that requested it.
+        const loadAbort = beginImageLoad();
         const absPath = join(cwd, relPath);
         let mtimeMs: number;
         try {
@@ -536,7 +543,7 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
           const seams = makeImageSeams({
             support: s,
             probeDecode: kittyProbe,
-            nextAbortSlot,
+            signal: loadAbort.signal,
           });
           file = await loadFile(absPath, relPath, {
             image,
@@ -558,6 +565,9 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
       // theme-free. Commits are immutable, so no cache for v1 — a bounded
       // `git show` per open is cheap.
       const loadCommit = async (shortHash: string): Promise<ViewerFile> => {
+        // A commit diff is also a viewer load: opening one supersedes any
+        // in-flight image render (Issue #117 follow-up).
+        beginImageLoad();
         const diff = await readCommitDiff(cwd, shortHash);
         return {
           kind: "diff",

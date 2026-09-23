@@ -643,8 +643,9 @@ describe("loadFile", () => {
         },
         image: { cols: 40, rows: 10 },
       });
-      // A superseded load must not start a chafa render: the chafa seam calls
-      // nextAbortSlot(), which by then belongs to the newer load (#117).
+      // A superseded load must not start a chafa render: its native attempt
+      // was aborted (load superseded), so the fallback would be pointless work
+      // against an already-aborted load signal (#117).
       expect(chafaCalled).toBe(false);
       expect(file.kind).toBe("image");
       expect(file.imageTier).toBe("metadata");

@@ -209,9 +209,10 @@ emits pi-tui-shaped image lines.**
 - `viewer_view.ts` — chafa rows branch (`padTo(hardTruncate(line, width), width)`
   per row), header badge (`chafa`, `i card`/`i render`), `imageCardHints`.
 - `index.ts` — `renderImage` seam wrapping `runChafaRender`; abort controller
-  per render; variant key (`chafa` geometry+knobs) in the bounded viewer cache
+  per **load** (Issue #117 follow-up), forwarded into both seams; variant key
+  (`chafa` geometry+knobs) in the bounded viewer cache
   (`MAX_VIEWER_CACHE_ENTRIES = 16`); deferred support resolution upgraded via
-  `setImageSupport`; `cleanup` aborts in-flight renders.
+  `setImageSupport`; `cleanup` aborts the current load's render.
 - `settings.ts` — `images.mode: "off" | "chafa"`, `PI_NAV_IMAGES` truth table
   (`1|true|yes|on|chafa` → chafa), field registry, settings-menu rows.
 - `types.ts` — `ViewerFile.imageTier: "metadata" | "chafa" | "native"` already
@@ -452,9 +453,12 @@ fails cleanly (oversized, undecodable dimensions):
 
 - Variant key becomes `native:<protocol>:<cols>x<rows>` (chafa key unchanged).
   Tier is part of the key, so mode/geometry changes are cache misses.
-- Abort: the existing `AbortController` is still created per render and passed
-  into `runNativeRender` (checked at entry; the read is small and fast). No
-  child process means no kill path.
+- Abort: **Amendment (Issue #117 follow-up)** — one `AbortController` per
+  *load* (`beginImageLoad` in `index.ts`); the seams forward their own load's
+  signal into `runNativeRender` (checked at entry and after the conversion
+  await; the read is small and fast) and `runChafaRender` (checked before
+  spawn). A new load aborts the previous load's render, and no load can abort
+  a newer one. No child process on the native path means no kill path.
 - Cache retention: native `ViewerFile`s are cached only when
   `lines.join("").length <= IMAGE_NATIVE_CACHE_MAX_CHARS` (D7); over-cap renders
   are displayed and dropped on the next open (re-render is cheap).

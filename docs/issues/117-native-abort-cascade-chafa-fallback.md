@@ -132,10 +132,10 @@ of the load that superseded it; its stale metadata card is discarded by
 navigator's `loadSeq` guard. The post-read/post-conversion abort check (now
 `images.ts:1118`) is kept: it only skips work for a superseded load.
 
-Candidate fix 1 (this) was taken. Candidate 2 (per-load abort ownership) and
-candidate 3 (dropping the abort check) were not: the ownership model is unchanged,
-and #116's "abort ownership is per load" acceptance item stays deferred there —
-only its user-visible consequence is closed.
+Candidate fix 1 (this) was taken first. Candidate 2 (per-load abort ownership)
+followed in v0.10.10 — see the follow-up below — which also closes #116's
+"abort ownership is per load" acceptance item. Candidate 3 (dropping the abort
+check) was not taken.
 
 Tests (+2, each verified to fail with the fix disabled):
 
@@ -150,3 +150,23 @@ leftover, kept alive only by its own tests) is removed; `nativelyRenderable` dro
 its unused protocol parameter; the stale mime-gate comment is corrected.
 
 Gates: `npm run typecheck` clean; 20 suites / 670 cases green. version 0.10.9.
+
+## Follow-up (v0.10.10) — per-load abort ownership
+
+Candidate 2 landed: `index.ts` now gives each load its own controller
+(`beginImageLoad` aborts the previous load when a new one starts, and `cleanup`
+aborts the current one), and `makeImageSeams` forwards that load's `AbortSignal`
+into both seams instead of owning a shared abort slot. A render can therefore
+only be aborted by its own load being superseded or disposed — the cross-load
+abort is impossible by construction, not merely unreachable behind the viewer
+guard. `runChafaRender` also gained a pre-spawn abort check so a superseded load
+forks nothing, and `loadCommit` rotates too, so opening a commit diff cancels an
+in-flight image render.
+
+Tests: the deterministic two-load test now also asserts defense in depth —
+invoking the superseded load's chafa seam directly returns `render aborted`
+against its own signal and leaves the newer load's native render intact; a new
+seam test pins signal forwarding and the pre-aborted short-circuit in both seams.
+Both were verified to fail with signal forwarding disabled.
+
+Gates: `npm run typecheck` clean; 20 suites / 670 cases green. version 0.10.10.

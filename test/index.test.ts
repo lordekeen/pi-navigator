@@ -502,7 +502,7 @@ describe("makeImageSeams (Issue #116 fix 1)", () => {
     const seams = makeImageSeams({
       support: snapshot({ tier: "chafa", nativeProtocol: null }),
       probeDecode: neverProbe,
-      nextAbortSlot: () => new AbortController(),
+      signal: new AbortController().signal,
     });
     await expect(seams.renderNativeImage("/work/x.png", { cols: 10, rows: 5 })).resolves.toEqual({
       ok: false,
@@ -516,7 +516,7 @@ describe("makeImageSeams (Issue #116 fix 1)", () => {
     const seams = makeImageSeams({
       support: snapshot({ mode: "native", chafa: { state: "deferred" } }),
       probeDecode: neverProbe,
-      nextAbortSlot: () => new AbortController(),
+      signal: new AbortController().signal,
     });
     await expect(seams.renderImage("/work/x.png", { cols: 10, rows: 5 })).resolves.toEqual({
       ok: false,
@@ -524,27 +524,29 @@ describe("makeImageSeams (Issue #116 fix 1)", () => {
     });
   });
 
-  it("takes a fresh abort slot per render", async () => {
-    const slots: AbortController[] = [];
+  it("binds both seams to the owning load's signal; an aborted load refuses without work (Issue #117 follow-up)", async () => {
+    const controller = new AbortController();
     const seams = makeImageSeams({
       support: snapshot(),
       probeDecode: neverProbe,
-      nextAbortSlot: () => {
-        const controller = new AbortController();
-        slots.push(controller);
-        return controller;
-      },
+      signal: controller.signal,
     });
-    // A missing path fails after the slot is taken, so the seam's slot
-    // ownership is observable without a terminal or a real image. (Aborting
-    // the previous controller is nextAbortSlot's own job in index.ts, not the
-    // seam's, so it is deliberately not asserted through a fake slot.)
-    await seams.renderNativeImage("/work/missing.png", { cols: 10, rows: 5 });
-    expect(slots).toHaveLength(1);
 
-    await seams.renderNativeImage("/work/missing.png", { cols: 10, rows: 5 });
-    expect(slots).toHaveLength(2);
-    expect(slots[1]).not.toBe(slots[0]);
+    // A live load forwards its signal: the native seam reaches the bounded
+    // read and fails on the missing path.
+    await expect(
+      seams.renderNativeImage("/work/missing.png", { cols: 10, rows: 5 }),
+    ).resolves.toEqual({ ok: false, reason: "could not read the image file" });
+
+    // A superseded load (its own signal aborted) short-circuits in BOTH seams
+    // without reading a file or forking a chafa child.
+    controller.abort();
+    await expect(
+      seams.renderNativeImage("/work/missing.png", { cols: 10, rows: 5 }),
+    ).resolves.toEqual({ ok: false, reason: "render aborted" });
+    await expect(
+      seams.renderImage("/work/missing.png", { cols: 10, rows: 5 }),
+    ).resolves.toEqual({ ok: false, reason: "render aborted" });
   });
 
   it("a superseded load's abort never reaches the chafa seam, so the newest load stays native (Issue #117)", async () => {
@@ -555,14 +557,10 @@ describe("makeImageSeams (Issue #116 fix 1)", () => {
       writeFileSync(png, Buffer.from(KITTY_PROBE_SAMPLE, "base64"));
       setCapabilities({ ...saved, images: "kitty" });
 
-      // Shared abort slot, mirroring index.ts: a newer seam call aborts the
-      // previous controller.
-      let slot: AbortController | null = null;
-      const nextAbortSlot = (): AbortController => {
-        slot?.abort();
-        slot = new AbortController();
-        return slot;
-      };
+      // Per-load abort ownership, mirroring index.ts beginImageLoad: each load
+      // owns one controller, and load B's start aborts load A's.
+      const controllerA = new AbortController();
+      const controllerB = new AbortController();
 
       let markAEntered!: () => void;
       let markBEntered!: () => void;
@@ -587,7 +585,7 @@ describe("makeImageSeams (Issue #116 fix 1)", () => {
           markAEntered();
           return gateA;
         },
-        nextAbortSlot,
+        signal: controllerA.signal,
       });
       const seamsB = makeImageSeams({
         support: snapshot(),
@@ -595,18 +593,19 @@ describe("makeImageSeams (Issue #116 fix 1)", () => {
           markBEntered();
           return gateB;
         },
-        nextAbortSlot,
+        signal: controllerB.signal,
       });
       const req = { cols: 20, rows: 10 };
 
-      // Load A parks on its probe with slot A installed; load B starts next
-      // and aborts A's controller at its own seam entry.
+      // Load A parks on its probe with its own controller; load B's start
+      // (beginImageLoad) aborts A, exactly like index.ts.
       const loadA = loadFile(png, "a.png", {
         image: req,
         renderNativeImage: seamsA.renderNativeImage,
         renderImage: seamsA.renderImage,
       });
       await aEntered;
+      controllerA.abort();
       const loadB = loadFile(png, "b.png", {
         image: req,
         renderNativeImage: seamsB.renderNativeImage,
@@ -618,6 +617,14 @@ describe("makeImageSeams (Issue #116 fix 1)", () => {
       const a = await loadA;
       expect(a.imageTier).toBe("metadata");
       expect(a.imageError).toBe("render aborted");
+
+      // Defense in depth: even if the superseded load's chafa fallback ran
+      // (the pre-#117 viewer did), it can only observe its own aborted signal —
+      // load B's controller is untouched.
+      await expect(seamsA.renderImage(png, req)).resolves.toEqual({
+        ok: false,
+        reason: "render aborted",
+      });
 
       releaseB("no-reply");
       const b = await loadB;

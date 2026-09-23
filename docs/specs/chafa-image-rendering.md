@@ -602,6 +602,8 @@ const loadFileCached = async (relPath: string, opts?: LoadFileOptions): Promise<
 - A new `AbortController` per image load; aborted on overlay close/dispose and
   on a newer load for the same overlay (`loadSeq` already discards stale
   results; the signal prevents the child process from outliving the overlay).
+  **Issue #117 follow-up:** implemented as per-load ownership — the seam
+  forwards the owning load's signal and never aborts another load's render.
 - The 3 s open-file mtime poll is unchanged; `diskChanged` handling for images
   stays as today (the card/branch does not render the warning row; no change).
 - `commit:` paths and markdown loading are untouched.

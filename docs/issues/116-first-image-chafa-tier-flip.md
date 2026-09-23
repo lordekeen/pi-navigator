@@ -189,7 +189,7 @@ evidence of a first-load mechanism.
 - [x] A clean native failure that falls through to chafa **keeps its reason**, surfaced in the header or card hint. *(v0.10.7 deliberately reversed this: the header suffix was removed as header-error pollution, so the reason now surfaces on the metadata card only — see the Resolution §2.)*
 - [x] `setImageSupport` arms the upgrade reflow when an image load is *in flight* (`viewTargetRelPath` is an image), not only when `viewFile` is set.
 - [x] A reflow never fires while a load is in flight (`viewLoading`).
-- [ ] Abort ownership is per load: one load cannot abort another's render. — **deferred, see below**; became a live defect in v0.10.8 → [#117](117-native-abort-cascade-chafa-fallback.md), whose user-visible consequence was fixed in v0.10.9 without changing the ownership model
+- [x] Abort ownership is per load: one load cannot abort another's render. — became a live defect in v0.10.8 → [#117](117-native-abort-cascade-chafa-fallback.md), whose user-visible consequence was fixed in v0.10.9 and whose ownership model was implemented in v0.10.10 (`beginImageLoad` + seam signal forwarding).
 - [x] An error verdict from the kitty decode probe does not permanently degrade every image of that MIME for the whole process.
 - [x] The first image of a session renders at the same tier as later ones, verified live.
 
@@ -243,4 +243,7 @@ so it is left until the probe question is settled.
   abort the newest load's native render. Reproduced deterministically, filed as a pending bug,
   and **fixed in v0.10.9**: a native `render aborted` result is treated as a supersession
   signal and no longer falls through to the chafa seam (`IMAGE_ABORT_REASON`, `viewer.ts`), so
-  a superseded load can never call `nextAbortSlot()` again.
+  a superseded load can never call `nextAbortSlot()` again. **v0.10.10** then implemented the
+  ownership model itself: per-load controllers (`beginImageLoad`) with the load's signal
+  forwarded into both seams, plus a chafa pre-spawn abort check — closing this deferred
+  acceptance item.
