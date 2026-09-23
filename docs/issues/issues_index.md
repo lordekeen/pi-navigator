@@ -8,8 +8,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
-| **Pending / Open** | 1 | 1 | 2 | **4** |
-| **Resolved** | 18 | 39 | 59 | **116** |
+| **Pending / Open** | 1 | 1 | 1 | **3** |
+| **Resolved** | 18 | 39 | 60 | **117** |
 | **Total** | **19** | **40** | **61** | **120** |
 
 ---
@@ -29,6 +29,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | ID | Title | Type | Severity | Resolution Summary | Status |
 | :--- | :--- | :--- | :--- | :--- | :---: |
+| [#120](120-commit-message-in-diff-view.md) | Commit Message Body Is Not Viewable Anywhere | Enhancement / UX | Low | `readCommitDiff` fetches `%B` in the same parallel batch as body + numstat and returns a plain `{ subject, body }` (CR-normalized, trailing blanks trimmed, byte- and line-capped like the diff — a huge message degrades to the existing truncation notice). New pure `styleCommitMessage` (subject bold, body text — no new theme tokens) prepends the block above the styled diff with one blank separator, `git show`-style; a message-only commit still shows its message. +6 cases. version 0.12.1. | **Resolved** |
 | [#119](119-overlay-layout-modes.md) | Overlay Has a Single Layout; No Files-Only or Git-Only Modes | Feature | Medium | Three overlay layouts — `files-git-viewer` (default), `files-viewer`, `git-viewer` — selected at open time via `/navigator all\|files\|git` (one-open, never persists), the `layout.default` setting (registry-driven, menu-editable), and the `PI_NAV_LAYOUT` env override (env wins, invalid warns once). Pure derivations in frame.ts (`layoutPanes`/`layoutRows`/`visiblePanes`/`initialFocus`/`cycleFocus`); Tab cycles visible panes; single-pane layouts fill the body with no separator; the default layout renders byte-identically (regression-pinned). +34 cases across frame/render/navigator/settings/settings_menu/help/index. version 0.12.0. | **Resolved** |
 | [#118](118-settings-menu-chafa-capability-note.md) | Settings Menu Offers `chafa` Mode With No Indication That pi-chafa Is Required | Enhancement / UX | Low | Pure `navigatorFieldNotes({ piChafaPresent })` + `buildSettingItems(..., notes?)` append a capability note to the `images.mode` row; `runSettings` detects presence via `detectPiChafa` while the menu module stays pi-free. Annotate, not hide — pre-configuring before install keeps working. +2 tests. version 0.11.0. | **Resolved** |
 | [#117](117-native-abort-cascade-chafa-fallback.md) | Superseded Load's Chafa Fallback Aborts the Newest Native Image Render | Bug / Image Tier | Medium | `viewer.ts` no longer falls through to the chafa seam when the native render returned `render aborted` — a supersession signal, not a render failure — so a superseded load cannot call `nextAbortSlot()` and abort the newer load's render. `IMAGE_ABORT_REASON` is the shared constant. +2 tests (viewer no-fallback; deterministic two-load cascade with real seams/render), each verified to fail with the fix disabled. Dead `KITTY_PROBE_SAMPLES` table removed; `nativelyRenderable` param cleanup. version 0.10.9; per-load abort ownership followed in v0.10.10. | **Resolved** |
@@ -233,6 +234,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#054: Redundant `getRenderedMarkdownLines` Invocation in `buildRightRows`](054-redundant-rendered-markdown-line-call.md) *(resolved)*
 
 ### User Experience & Keyboard Navigation
+- [#120: Commit Message Body Is Not Viewable Anywhere](120-commit-message-in-diff-view.md) *(resolved)*
 - [#119: Overlay Has a Single Layout; No Files-Only or Git-Only Modes](119-overlay-layout-modes.md)
 - [#105: Multi-Character Pasting and Non-BMP Unicode Ignored in Search and Filter Modes](105-search-filter-multi-char-paste-surrogate-pairs.md) *(resolved)*
 - [#101: Native Decode Probe (`a=q`) to Detect Undecodable Payloads and Fall Back](101-native-decode-probe-query.md) *(resolved)*
