@@ -404,11 +404,13 @@ describe("imageCardHints", () => {
       "terminal.showImages is false - image rendering disabled",
     ]);
 
-    // Supported format under a capable strict-native session: no hint.
+    // Supported formats under a capable strict-native session: no hint.
     expect(imageCardHints(png, native, geometry)).toEqual([]);
-    // A non-PNG on kitty and an unsupported format on iTerm2 get format hints.
-    expect(imageCardHints({ ...png, relPath: "pic.jpg" }, native, geometry)).toEqual([
-      "kitty rendering needs PNG - chafa or auto can render this format",
+    expect(imageCardHints({ ...png, relPath: "pic.jpg" }, native, geometry)).toEqual([]);
+    expect(imageCardHints({ ...png, relPath: "pic.webp" }, native, geometry)).toEqual([]);
+    // An unsupported format on kitty (e.g. GIF) and on iTerm2 get format hints.
+    expect(imageCardHints({ ...png, relPath: "pic.gif" }, native, geometry)).toEqual([
+      "kitty rendering needs PNG, JPEG, or WebP - chafa or auto can render this format",
     ]);
     expect(
       imageCardHints({ ...png, relPath: "pic.bmp" }, nativeSupport({ nativeProtocol: "iterm2" }), geometry),

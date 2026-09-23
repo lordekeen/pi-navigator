@@ -23,6 +23,7 @@ import {
   consumeKittyProbeReply,
   createKittyProbeState,
   detectPiChafa,
+  KITTY_PROBE_SAMPLE,
   KITTY_PROBE_SAMPLES,
   loadPiChafaConfig,
   makeDeferredImageSupport,
@@ -1121,37 +1122,36 @@ describe("resolveNativeProtocol", () => {
   });
 });
 
-describe("kitty decode probe helpers (Issue #101)", () => {
-  it("buildKittyProbeQuery emits the query action with the matching 1x1 sample (Issue #102)", () => {
-    const q = buildKittyProbeQuery(31, "image/png");
-    expect(q).toBe(`\x1b_Ga=q,t=d,f=100,i=31;${KITTY_PROBE_SAMPLES["image/png"]}\x1b\\`);
+describe("kitty protocol probe helpers (Issue #101, #116)", () => {
+  it("buildKittyProbeQuery always sends the PNG sample under f=100 (Issue #116)", () => {
+    const q = buildKittyProbeQuery(31);
+    expect(q).toBe(`\x1b_Ga=q,t=d,f=100,i=31;${KITTY_PROBE_SAMPLE}\x1b\\`);
+    // The PNG sample is the ONLY valid payload for f=100 — JPEG/WebP samples
+    // would be rejected by kitty's a=q decoder, which interprets f=100 literally
+    // as PNG (Issue #116 root cause).
+    expect(q).toContain(KITTY_PROBE_SAMPLES["image/png"]);
+    expect(q).not.toContain(KITTY_PROBE_SAMPLES["image/jpeg"]);
+    expect(q).not.toContain(KITTY_PROBE_SAMPLES["image/webp"]);
   });
 
-  it("probes JPEG/WebP with their own samples, never the PNG stand-in (Issue #102)", () => {
-    const jpeg = buildKittyProbeQuery(7, "image/jpeg");
-    expect(jpeg?.startsWith("\x1b_Ga=q,t=d,f=100,i=7;")).toBe(true);
-    expect(jpeg).toContain(KITTY_PROBE_SAMPLES["image/jpeg"]);
-    expect(jpeg).not.toContain(KITTY_PROBE_SAMPLES["image/png"]);
-    expect(jpeg?.endsWith("\x1b\\")).toBe(true);
-    const webp = buildKittyProbeQuery(8, "image/webp");
-    expect(webp).toContain(KITTY_PROBE_SAMPLES["image/webp"]);
-    expect(webp).not.toContain(KITTY_PROBE_SAMPLES["image/png"]);
+  it("KITTY_PROBE_SAMPLE is the same as the PNG entry in KITTY_PROBE_SAMPLES", () => {
+    expect(KITTY_PROBE_SAMPLE).toBe(KITTY_PROBE_SAMPLES["image/png"]);
   });
 
-  it("returns null for mimes that have no probe sample (Issue #102)", () => {
-    expect(buildKittyProbeQuery(1, "image/gif")).toBeNull();
-    expect(buildKittyProbeQuery(1, "image/tiff")).toBeNull();
-    expect(buildKittyProbeQuery(1, "image/avif")).toBeNull();
+  it("the PNG probe sample decodes as 1x1 via pi-tui getImageDimensions", () => {
+    const dims = getImageDimensions(KITTY_PROBE_SAMPLE, "image/png");
+    expect(dims).not.toBeNull();
+    expect(dims?.widthPx).toBe(1);
+    expect(dims?.heightPx).toBe(1);
   });
 
-  it("every probe sample decodes as a 1x1 image of its own mime only (Issue #102)", () => {
+  it("every retained KITTY_PROBE_SAMPLES entry decodes as 1x1 for its own mime only", () => {
     for (const [mime, sample] of Object.entries(KITTY_PROBE_SAMPLES)) {
       const dims = getImageDimensions(sample, mime);
       expect(dims).not.toBeNull();
       expect(dims?.widthPx).toBe(1);
       expect(dims?.heightPx).toBe(1);
-      // Strongest validity check: a sample must not decode as another mime,
-      // or the probe could still smuggle a PNG verdict into a JPEG/WebP key.
+      // Cross-format validity: a sample must not decode under another mime.
       for (const other of Object.keys(KITTY_PROBE_SAMPLES)) {
         if (other !== mime) expect(getImageDimensions(sample, other)).toBeNull();
       }
@@ -1777,6 +1777,24 @@ describe("runNativeRender", () => {
     expect(readBytes).toHaveBeenCalledWith("/tmp/pixel.webp");
   });
 
+  it("kitty renders JPEG and WebP when protocol probe succeeds (Issue #116)", async () => {
+    withProtocol("kitty");
+    const probeDecode = vi.fn(async () => "ok" as const);
+    for (const [ext, b64] of [["jpg", JPEG_1X1_BASE64], ["webp", WEBP_1X1_BASE64]] as const) {
+      const readBytes = readBytesOf(b64);
+      const result = await runNativeRender(`/tmp/pixel.${ext}`, geometry, {
+        protocol: "kitty",
+        readBytes,
+        probeDecode,
+      });
+      expect(result.ok).toBe(true);
+      expect(readBytes).toHaveBeenCalledWith(`/tmp/pixel.${ext}`);
+    }
+    // Protocol probe takes no mime argument — it probes protocol support with PNG
+    expect(probeDecode).toHaveBeenCalledTimes(2);
+    expect(probeDecode).toHaveBeenCalledWith();
+  });
+
   it("iterm2: fillers are empty and the last line is moveUp + File= with inline=1 and width=", async () => {
     withProtocol("iterm2");
     const readBytes = readBytesOf(PNG_1X1_BASE64);
@@ -1821,7 +1839,7 @@ describe("runNativeRender", () => {
     });
     expect(result).toEqual({
       ok: false,
-      reason: "terminal cannot decode this image format",
+      reason: "terminal does not support kitty graphics",
     });
     expect(readBytes).not.toHaveBeenCalled();
   });

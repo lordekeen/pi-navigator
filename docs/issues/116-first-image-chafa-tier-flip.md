@@ -1,6 +1,6 @@
 # Issue #116: First Image of a Session Renders as Chafa, Later Ones Render Natively
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Bug / Image Tier
 - **Severity**: Medium
 - **Components**: [`index.ts`](file:///home/jhonny/Sources/pi-navigator/index.ts) (render seams, abort lifecycle), [`navigator.ts`](file:///home/jhonny/Sources/pi-navigator/navigator.ts) (support reflow), [`viewer.ts`](file:///home/jhonny/Sources/pi-navigator/viewer.ts#L370-L374) (seam precedence)
@@ -183,8 +183,8 @@ evidence of a first-load mechanism.
 - [x] `setImageSupport` arms the upgrade reflow when an image load is *in flight* (`viewTargetRelPath` is an image), not only when `viewFile` is set.
 - [x] A reflow never fires while a load is in flight (`viewLoading`).
 - [ ] Abort ownership is per load: one load cannot abort another's render. — **deferred, see below**
-- [ ] An error verdict from the kitty decode probe does not permanently degrade every image of that MIME for the whole process (probe semantics pending the reply-text finding).
-- [ ] The first image of a session renders at the same tier as later ones, verified live.
+- [x] An error verdict from the kitty decode probe does not permanently degrade every image of that MIME for the whole process.
+- [x] The first image of a session renders at the same tier as later ones, verified live.
 
 ## Implemented (v0.10.5) — the collateral defects
 
@@ -216,3 +216,22 @@ Deliberately **not** done: per-load abort ownership. The debugger established th
 abort path is unreachable in production; only chafa children are abortable
 mid-flight, and those belong to superseded loads. It has no observable effect today,
 so it is left until the probe question is settled.
+
+## Resolution (v0.10.6) — Kitty protocol probe & JPEG/WebP decode fix
+
+1. **Protocol-level Kitty probe with valid PNG sample**: The Kitty decode probe
+   (`buildKittyProbeQuery`) now always transmits a valid 1×1 PNG sample under
+   `f=100`, verifying terminal protocol support rather than per-MIME decoding.
+   Because `f=100` strictly designates PNG format in the Kitty graphics protocol,
+   transmitting JPEG/WebP samples tagged `f=100` in `a=q` queries caused Kitty's
+   PNG decoder to reject them with an explicit error (`Failed to decode PNG image`),
+   which falsely degraded native JPEG/WebP rendering to Chafa in auto mode or
+   produced decode error cards in native mode. Real Kitty terminals support
+   auto-detection during image transmission (`a=T`), so probing protocol support
+   with PNG accurately gates Kitty rendering without format-mismatch errors.
+2. **Per-invocation probe cache**: In `index.ts`, `makeTuiKittyDecodeProbe` cache is
+   now scoped per overlay invocation rather than a module-level process-wide latch,
+   so a transient error verdict does not permanently degrade the entire process.
+3. **Card hint alignment**: Updated `nativelyRenderable` and `imageCardHints` in
+   `viewer_view.ts` to recognize `image/jpeg` and `image/webp` alongside `image/png`
+   under Kitty protocol, matching `runNativeRender`'s MIME gate and Issue #071.

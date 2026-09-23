@@ -845,39 +845,59 @@ export function resolveNativeProtocol(deps?: {
 // ── native render (spec §5.3, D3, D5, D7) ──
 
 /** One native render's context: protocol plus abort/read seams. */
-// ── Kitty decode probe (Issue #101, #102) ────────────────────────────────
+// ── Kitty decode probe (Issue #101, #102, #116) ──────────────────────────
 // The kitty graphics protocol's query action (`a=q`) makes a terminal attempt
 // to load the payload and reply, per the spec: with an id present, "the
 // terminal emulator will reply after trying to load the image, saying whether
-// loading was successful or not". The probe transmits a real 1x1 sample of
-// the format being rendered — pi-tui's encodeKitty tags every payload `f=100`,
-// so a PNG stand-in cannot vouch for JPEG/WebP decodability (Issue #102).
-// Verdicts are memoized per mime in index.ts.
+// loading was successful or not".
+//
+// Issue #116 root cause: `f=100` means PNG in the kitty protocol spec. During
+// `a=T` (transmit), kitty auto-detects the actual image format regardless of
+// the `f=` tag, so JPEG/WebP payloads tagged `f=100` render fine. But during
+// `a=q` (query), kitty decodes *strictly per the `f=` tag* — sending a JPEG
+// payload tagged `f=100` makes kitty attempt PNG decoding, fail, and return an
+// error reply. That error was permanently memoized per MIME, degrading every
+// JPEG/WebP for the rest of the process.
+//
+// Fix: the probe always sends a PNG sample (valid under `f=100`). The question
+// it answers is "does this terminal support kitty graphics?" — not "can it
+// decode this specific format?" Since pi-tui's `encodeKitty` uses `f=100` for
+// all formats and kitty auto-detects at `a=T` time, per-format probing was
+// both unnecessary and actively harmful.
+//
+// The verdict is cached per overlay invocation (not per process) so an error
+// from a glitched reply does not permanently degrade the session.
 
 export type KittyProbeVerdict = "ok" | "error" | "no-reply";
 
 /**
- * 1x1 sample payloads for the kitty `a=q` decode probe, keyed by MIME
- * (Issue #102). Each decodes as 1x1 for its own mime via pi-tui
- * getImageDimensions, and as null for the other two.
+ * 1x1 PNG sample for the kitty `a=q` protocol probe (Issue #116). A single
+ * PNG is sufficient because `f=100` means PNG in the kitty spec and kitty
+ * auto-detects the actual format during `a=T` transmission.
+ *
+ * The per-MIME JPEG/WebP samples from Issue #102 are retained for backward
+ * compatibility in tests but are no longer used by the probe — they caused
+ * `a=q` to fail because kitty decoded them as PNG per the `f=100` tag.
  */
+export const KITTY_PROBE_SAMPLE: string =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+
+/** @deprecated Retained for test backward compatibility; use KITTY_PROBE_SAMPLE. */
 export const KITTY_PROBE_SAMPLES: Record<string, string> = {
-  "image/png":
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+  "image/png": KITTY_PROBE_SAMPLE,
   "image/jpeg":
     "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==",
   "image/webp": "UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAwA0JaQAA3AA/vuUAAA=",
 };
 
 /**
- * Build the kitty graphics query escape for the 1x1 probe of `mime`
- * (a=q, t=d, f=100). Returns null for mimes without a sample — the caller
- * must not transmit a stand-in format (Issue #102).
+ * Build the kitty graphics query escape for the protocol probe
+ * (a=q, t=d, f=100). Always transmits the PNG sample — `f=100` means PNG in
+ * the kitty spec and the probe tests protocol support, not per-format
+ * decodability (Issue #116).
  */
-export function buildKittyProbeQuery(id: number, mime: string): string | null {
-  const sample = KITTY_PROBE_SAMPLES[mime];
-  if (sample === undefined) return null;
-  return `\x1b_Ga=q,t=d,f=100,i=${id};${sample}\x1b\\`;
+export function buildKittyProbeQuery(id: number): string {
+  return `\x1b_Ga=q,t=d,f=100,i=${id};${KITTY_PROBE_SAMPLE}\x1b\\`;
 }
 
 /**
@@ -947,13 +967,15 @@ export interface NativeRenderCtx {
   /** Optional environment dictionary (test seam; default process.env). */
   env?: Record<string, string | undefined>;
   /**
-   * One-shot kitty decode probe (Issue #101): when present, a kitty render is
-   * gated on its verdict — an explicit "error" means the terminal cannot
-   * decode the payload (degrade to chafa/card); "ok" and "no-reply" keep
-   * the render (no-reply is conservative: terminals that do not answer
-   * queries must not be regressed).
+   * One-shot kitty protocol probe (Issue #101, #116): when present, a kitty
+   * render is gated on its verdict — an explicit "error" means the terminal
+   * does not support kitty graphics (degrade to chafa/card); "ok" and
+   * "no-reply" keep the render (no-reply is conservative: terminals that do
+   * not answer queries must not be regressed). The probe is per-protocol, not
+   * per-MIME — it always sends a PNG sample since `f=100` means PNG in the
+   * kitty spec and kitty auto-detects format at `a=T` time.
    */
-  probeDecode?: (mime: string) => Promise<KittyProbeVerdict>;
+  probeDecode?: () => Promise<KittyProbeVerdict>;
 }
 
 /**
@@ -1039,19 +1061,21 @@ export async function runNativeRender(
     return { ok: false, reason: bounded("kitty requires PNG, JPEG, or WebP") };
   }
 
-  // b2) Kitty decode probe (Issue #101): an explicit terminal error means the
-  // payload cannot be decoded — degrade to chafa/card instead of emitting a
-  // sequence the terminal ignores. "ok" and "no-reply" proceed (no-reply is
-  // conservative: terminals that do not answer queries keep declared behavior).
+  // b2) Kitty protocol probe (Issue #101, #116): an explicit terminal error
+  // means the terminal does not support kitty graphics — degrade to chafa/card
+  // instead of emitting a sequence the terminal ignores. "ok" and "no-reply"
+  // proceed (no-reply is conservative: terminals that do not answer queries
+  // keep declared behavior). The probe is per-protocol (always PNG under
+  // f=100), not per-MIME — kitty auto-detects format at a=T time.
   if (ctx.protocol === "kitty" && ctx.probeDecode !== undefined) {
     let verdict: KittyProbeVerdict;
     try {
-      verdict = await ctx.probeDecode(mime);
+      verdict = await ctx.probeDecode();
     } catch {
       verdict = "no-reply";
     }
     if (verdict === "error") {
-      return { ok: false, reason: bounded("terminal cannot decode this image format") };
+      return { ok: false, reason: bounded("terminal does not support kitty graphics") };
     }
   }
 

@@ -373,7 +373,10 @@ function imageErrorLabel(support: ImageSupport): string {
 function nativelyRenderable(relPath: string, protocol: NativeProtocol): boolean {
   const mime = NATIVE_IMAGE_MIME[extOf(relPath)];
   if (mime === undefined) return false;
-  return protocol !== "kitty" || mime === "image/png";
+  if (protocol === "kitty") {
+    return mime === "image/png" || mime === "image/jpeg" || mime === "image/webp";
+  }
+  return true;
 }
 
 /**
@@ -398,7 +401,7 @@ export function imageCardHints(
     }
     if (!nativelyRenderable(file.relPath, support.nativeProtocol)) {
       return support.nativeProtocol === "kitty"
-        ? ["kitty rendering needs PNG - chafa or auto can render this format"]
+        ? ["kitty rendering needs PNG, JPEG, or WebP - chafa or auto can render this format"]
         : ["this image format cannot be rendered natively - use chafa or auto"];
     }
     return [];

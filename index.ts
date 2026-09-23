@@ -81,72 +81,63 @@ type TuiLike = {
 };
 
 /**
- * Kitty decode probe (Issue #101, #102): one `a=q` query per mime, per
- * process, answered by the terminal's own input stream. The query transmits a
- * real 1x1 sample of that mime (all tagged `f=100`, matching pi-tui's own
- * encodeKitty) so a PNG probe cannot vouch for JPEG/WebP decodability. The
- * verdict is conservative — only an explicit error reply degrades native
- * rendering; "ok" confirms it; "no-reply" (timeout, or a mime with no probe
- * sample, or a terminal that does not answer queries, e.g. some partial kitty
+ * Kitty protocol probe (Issue #101, #116): one `a=q` query per overlay
+ * invocation, answered by the terminal's own input stream. The query transmits
+ * a 1×1 PNG sample tagged `f=100` — the only format that matches the kitty
+ * spec for this tag. The verdict is conservative: only an explicit error reply
+ * degrades native rendering; "ok" confirms it; "no-reply" (timeout, or a
+ * terminal that does not answer queries, e.g. some partial kitty
  * implementations) keeps declared behavior so Konsole-style terminals cannot
- * regress. Memoized at module level: opening the navigator again reuses the
- * session's probe result.
+ * regress.
+ *
+ * Issue #116 fix: the cache is per overlay invocation (not per process), so an
+ * error from a glitched reply or a stale pi session does not permanently
+ * degrade every image for the rest of the process.
  */
 const KITTY_PROBE_TIMEOUT_MS = 250;
-const kittyProbeCache = new Map<string, Promise<KittyProbeVerdict>>();
 
 export function makeTuiKittyDecodeProbe(
   tui: TuiLike,
-  opts?: { timeoutMs?: number; cache?: Map<string, Promise<KittyProbeVerdict>> },
-): (mime: string) => Promise<KittyProbeVerdict> {
+  opts?: { timeoutMs?: number; cache?: { result?: Promise<KittyProbeVerdict> } },
+): () => Promise<KittyProbeVerdict> {
   const timeoutMs = opts?.timeoutMs ?? KITTY_PROBE_TIMEOUT_MS;
-  // Injectable cache is a test seam only: production default stays the
-  // module-level cache, so behavior is unchanged (Issue #102 timeout test).
-  const cache = opts?.cache ?? kittyProbeCache;
-  return (mime) => {
-    let probe = cache.get(mime);
-    if (probe === undefined) {
-      probe = new Promise<KittyProbeVerdict>((resolve) => {
-        const id = Math.floor(Math.random() * 0xffffffff) + 1;
-        const query = buildKittyProbeQuery(id, mime);
-        if (query === null) {
-          // No probe sample for this mime (unreachable in production — the
-          // runNativeRender kitty mime gate only ever asks for png/jpeg/webp,
-          // which all have samples). Conservative "no-reply": keep declared
-          // behavior and transmit nothing (Issue #102).
-          resolve("no-reply");
-          return;
+  // Injectable cache is a test seam only: production creates a fresh object
+  // per overlay invocation so error verdicts do not persist across sessions.
+  const cache: { result?: Promise<KittyProbeVerdict> } = opts?.cache ?? {};
+  return () => {
+    if (cache.result !== undefined) return cache.result;
+    const probe = new Promise<KittyProbeVerdict>((resolve) => {
+      const id = Math.floor(Math.random() * 0xffffffff) + 1;
+      const query = buildKittyProbeQuery(id);
+      const state: KittyProbeState = createKittyProbeState();
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let unsubscribe: (() => void) | undefined;
+      const settle = (verdict: KittyProbeVerdict): void => {
+        if (settled) return;
+        settled = true;
+        if (timer !== undefined) clearTimeout(timer);
+        unsubscribe?.();
+        resolve(verdict);
+      };
+      timer = setTimeout(() => settle("no-reply"), timeoutMs);
+      unsubscribe = tui.addInputListener((data) => {
+        if (settled) return undefined;
+        const verdict = consumeKittyProbeReply(state, data, id);
+        if (verdict === "ok" || verdict === "error") {
+          settle(verdict);
+          // Consume the completing chunk: it is the reply to our own query,
+          // nothing for the key decoder. Partial chunks are left alone.
+          return { consume: true };
         }
-        const state: KittyProbeState = createKittyProbeState();
-        let settled = false;
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        let unsubscribe: (() => void) | undefined;
-        const settle = (verdict: KittyProbeVerdict): void => {
-          if (settled) return;
-          settled = true;
-          if (timer !== undefined) clearTimeout(timer);
-          unsubscribe?.();
-          resolve(verdict);
-        };
-        timer = setTimeout(() => settle("no-reply"), timeoutMs);
-        unsubscribe = tui.addInputListener((data) => {
-          if (settled) return undefined;
-          const verdict = consumeKittyProbeReply(state, data, id);
-          if (verdict === "ok" || verdict === "error") {
-            settle(verdict);
-            // Consume the completing chunk: it is the reply to our own query,
-            // nothing for the key decoder. Partial chunks are left alone.
-            return { consume: true };
-          }
-          return undefined;
-        });
-        // Write through the TUI's terminal so the query is ordered with
-        // renders; the reply arrives on the same input stream the listener
-        // watches — the same pattern as pi-tui's own terminal queries.
-        tui.terminal.write(query);
+        return undefined;
       });
-      cache.set(mime, probe);
-    }
+      // Write through the TUI's terminal so the query is ordered with
+      // renders; the reply arrives on the same input stream the listener
+      // watches — the same pattern as pi-tui's own terminal queries.
+      tui.terminal.write(query);
+    });
+    cache.result = probe;
     return probe;
   };
 }
@@ -167,7 +158,7 @@ export function makeTuiKittyDecodeProbe(
 export function makeImageSeams(opts: {
   /** The ONE snapshot this load renders under (Issue #116). */
   support: ImageSupport;
-  probeDecode: (mime: string) => Promise<KittyProbeVerdict>;
+  probeDecode: () => Promise<KittyProbeVerdict>;
   /** Abort the in-flight render and return the new slot owner. */
   nextAbortSlot: () => AbortController;
 }): { renderNativeImage: ImageRenderer; renderImage: ImageRenderer } {
@@ -399,8 +390,9 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
       // deliberately not consulted.
       const theme = makeNavigatorTheme(piTheme);
 
-      // Kitty decode probe (Issue #101): one a=q query per mime per process,
-      // gating native renders on the terminal's own decode reply.
+      // Kitty protocol probe (Issue #101, #116): one a=q query per overlay
+      // invocation, gating native renders on the terminal's own reply. Cache
+      // is per invocation (not per process) so error verdicts expire.
       const kittyProbe = makeTuiKittyDecodeProbe(tui);
 
       let root: FileNode | null = null;

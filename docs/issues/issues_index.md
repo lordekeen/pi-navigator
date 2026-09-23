@@ -8,8 +8,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
-| **Pending / Open** | 1 | 2 | 1 | **4** |
-| **Resolved** | 18 | 36 | 58 | **112** |
+| **Pending / Open** | 1 | 1 | 1 | **3** |
+| **Resolved** | 18 | 37 | 58 | **113** |
 | **Total** | **19** | **38** | **59** | **116** |
 
 ---
@@ -21,7 +21,6 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | [#020](020-no-viewer-cache-blocking-highlight.md) | No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread | Bug / Performance | High | `viewer.ts` | Open (partial — cache done; event-loop yielding deferred: blocked by pi's bundled-runtime virtual-module boundary, needs a pi-side API) |
 | [#067](067-typed-config-registry-paths.md) | Typed Config Registry Paths (`path` is `readonly string[]`) | Technical Debt / Type Safety | Low | `settings.ts` | **Deferred** — tracked, not scheduled: the compile-time path/default check is not worth the rework at five fields. Revisit when the schema grows (~15+ fields or a third level), `live: true` lands, the byte-pinned serialize test is relaxed, or a defect escapes that a type check would have caught |
 | [#069](069-native-image-rendering.md) | Native Terminal Image Rendering (kitty / iTerm2 via pi-tui) | Feature | Medium | `images.ts` / `viewer_view.ts` / `index.ts` | Open — implemented in v0.8.0 (spec [`native-image-rendering.md`](../specs/native-image-rendering.md)); awaiting the live-terminal QA checklist ([`qa-evidence.md`](../plans/qa-evidence.md)) before close |
-| [#116](116-first-image-chafa-tier-flip.md) | First Image of a Session Renders as Chafa, Later Ones Render Natively | Bug / Image Tier | Medium | `index.ts` / `navigator.ts` / `viewer.ts` | **Open** — root cause established live: the image is over `IMAGE_NATIVE_MAX_BYTES` (4 MiB), so `runNativeRender` refuses it cleanly; `native` mode shows the card ("kitty failed: image exceeds the 4 MiB native rendering cap") while `auto` falls through to chafa and **discards the reason** — deterministic per file size, not a race. Fixing the invisibility (surface the reason next to chafa art) plus three collateral defects: a stuck metadata card when support lands mid-load, reflow re-entrancy, and a tier decided from a mutable snapshot. A shared-abort cascade was hypothesised and disproven |
 
 ---
 
@@ -29,6 +28,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | ID | Title | Type | Severity | Resolution Summary | Status |
 | :--- | :--- | :--- | :--- | :--- | :---: |
+| [#116](116-first-image-chafa-tier-flip.md) | First Image of a Session Renders as Chafa, Later Ones Render Natively | Bug / Image Tier | Medium | Fixed dual causes: over-cap images (> 4 MiB) cleanly fail native rendering and keep their reason when falling through to Chafa; Kitty decode probe (`buildKittyProbeQuery`) now sends a valid 1×1 PNG under `f=100` to probe protocol support rather than transmitting JPEG/WebP tagged with `f=100` (which caused Kitty to reject them as invalid PNGs and permanently memoize decode errors). In addition, probe cache is now scoped per overlay invocation, `viewer_view.ts` hints align with Kitty PNG/JPEG/WebP support, and four collateral reflow/snapshot defects were resolved in v0.10.5. | **Resolved** |
 | [#113](113-git-group-row-ignores-leftw.md) | Git Group Rows Ignore `leftW`, Clipping the Status-Error Hint | Bug / UI Consistency | Low | `buildGitRow`'s group branch ignored the `leftW` it was handed, so #107's 57-cell error label overflowed the 44-cell pane at every terminal size and `joinLeftRight` clipped it mid-word — `(press r to retry)` never rendered. The label is now cut to the pane *before* styling (own `…`, per the #010 convention); short labels render byte-identically. +3 cases. | **Resolved** |
 | [#114](114-untested-cache-warn-wiring.md) | #109/#112/#108 Fixes Are Pinned Only at Helper Level; the Wiring Is Untested | Technical Debt / Test Coverage | Medium | The cache and walk-warning policies lived inline in closures no test could drive, so deleting the recency touch, the `cacheable` gate, or the warning left the suite green. Both are now exported units — `createViewerCache` (lookup/store/drop: cacheable gate, ±1 ms mtime, variant, LRU recency, capacity eviction, over-cap carve-out) and `makeTreeTruncationWarner` (one-shot latch) — with `loadFileCached` and the three walk sites delegating. +9 cases, each verified to fail when its fix is reverted. | **Resolved** |
 | [#115](115-test-count-drift-and-index-bookkeeping.md) | Test-Count Drift Reintroduced After #110; #079 Dropped From the Category List | Documentation | Low | The 639 count was stale two commits after #110 (+4 #111, +4 #112 → 647), and the batch index edit replaced `#079`'s category marker with `#110`'s (four other issues had no marker at all). The hand-maintained case count is retired in favour of the suite count, `docs/issues/README.md`'s abandoned duplicate table is reduced to a pointer, and the markers are now complete. New `test/docs.test.ts` guards the docs, the overview arithmetic and the markers. +5 cases. | **Resolved** |
