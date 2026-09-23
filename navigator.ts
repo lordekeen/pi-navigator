@@ -37,11 +37,14 @@ import {
   bodyRows,
   buildFooterRow,
   buildTitleRow,
+  cycleFocus,
   filesArea,
+  initialFocus,
+  layoutPanes,
+  layoutRows,
   leftColumnWidth,
   overlayHeight,
   padTo,
-  splitRows,
   useLeftColumn,
   viewerArea,
 } from "./frame";
@@ -54,7 +57,17 @@ import {
 import { makeDeferredImageSupport, resolveChafaGeometry, type ImageSupport } from "./images";
 import { expandAncestors, findNode, moveCursor, pageJump } from "./tree";
 import type { NavigatorTheme } from "./theme";
-import type { FileNode, FilesRow, Focus, GitRow, GitState, InputMode, SearchMatch, ViewerFile } from "./types";
+import type {
+  FileNode,
+  FilesRow,
+  Focus,
+  GitRow,
+  GitState,
+  InputMode,
+  NavigatorLayout,
+  SearchMatch,
+  ViewerFile,
+} from "./types";
 import {
   computeRows,
   extOf,
@@ -119,6 +132,9 @@ export interface NavigatorOptions {
   initialWrap?: boolean;
   /** Start with Markdown files rendered (Issue #061; settings). Defaults to false. */
   initialRenderMarkdown?: boolean;
+  /** The layout the overlay opens with (Issue #119; settings or subcommand).
+   *  Defaults to "files-git-viewer". Fixed for the overlay's lifetime. */
+  initialLayout?: NavigatorLayout;
 }
 
 /**
@@ -182,7 +198,11 @@ export class NavigatorOverlay implements Focusable {
   private focus: Focus = "files";
   private mode: InputMode = "normal";
   private showHidden = false;
-  private showTree = true;
+  /** Whether the left column renders at all; toggled by `t` in every layout
+   *  (Issue #119, D7 — "tree" was no longer what it controls). */
+  private showLeftColumn = true;
+  /** The layout chosen at open time; fixed for the overlay's lifetime (#119). */
+  private layout: NavigatorLayout;
 
   private filesCursor = 0;
   private filesScroll = 0;
@@ -287,6 +307,10 @@ export class NavigatorOverlay implements Focusable {
     this.showHidden = options.initialShowHidden ?? false;
     this.viewWrap = options.initialWrap ?? false;
     this.viewRenderMarkdown = options.initialRenderMarkdown ?? false;
+    // Layout-landed initial state (Issue #119, D6/D8): the layout fixes the
+    // pane set, the initial focus, and the render geometry for this overlay.
+    this.layout = options.initialLayout ?? "files-git-viewer";
+    this.focus = initialFocus(this.layout);
   }
 
   // ── Public API ──
@@ -681,9 +705,8 @@ export class NavigatorOverlay implements Focusable {
     // Global keys first.
     const isShiftTab = matchesKey(data, Key.shift("tab"));
     if (isShiftTab || matchesKey(data, Key.tab)) {
-      const order: Focus[] = ["files", "git", "viewer"];
-      const index = order.indexOf(this.focus);
-      this.focus = order[(index + (isShiftTab ? order.length - 1 : 1)) % order.length] ?? "files";
+      // Tab/Shift+Tab cycle only the layout's visible panes (Issue #119, D8).
+      this.focus = cycleFocus(this.focus, isShiftTab ? -1 : 1, this.layout);
       this.touch();
       return;
     }
@@ -715,7 +738,7 @@ export class NavigatorOverlay implements Focusable {
       return;
     }
     if (data === "t") {
-      this.showTree = !this.showTree;
+      this.showLeftColumn = !this.showLeftColumn;
       this.touch();
       return;
     }
@@ -737,7 +760,7 @@ export class NavigatorOverlay implements Focusable {
 
   private handleFilesInput(data: string): void {
     const rows = this.filesRows();
-    const area = filesArea(this.getTerminalRows(), "files-git-viewer");
+    const area = filesArea(this.getTerminalRows(), this.layout);
     const current = rows[this.filesCursor];
 
     if (matchesKey(data, Key.up) || data === "k") {
@@ -1207,12 +1230,16 @@ export class NavigatorOverlay implements Focusable {
       return lines;
     }
     const body = bodyRows(overlayH);
-    const withLeft = useLeftColumn(innerW, body, this.showTree);
+    const withLeft = useLeftColumn(innerW, body, this.showLeftColumn);
     const leftW = withLeft ? leftColumnWidth(innerW) : 0;
     const rightW = withLeft ? innerW - leftW - 1 : innerW;
-    const { filesH } = splitRows(body);
+    const { filesH, gitH } = layoutRows(body, this.layout);
+    // The horizontal separator between the files pane and the git panel only
+    // exists in the default layout (Issue #119): in a single-pane layout the
+    // surviving group owns the full body and no separator row is drawn.
+    const showSeparator = this.layout === "files-git-viewer";
 
-    const leftRows = withLeft ? this.buildLeftRows(leftW, filesH, body) : null;
+    const leftRows = withLeft ? this.buildLeftRows(leftW, { filesH, gitH }) : null;
     const rightRows = this.buildRightRows(rightW, body);
     this.maybeScheduleResizeReflow();
 
@@ -1230,7 +1257,7 @@ export class NavigatorOverlay implements Focusable {
         lines.push(T.frame("\u2502") + rightRows[i] + T.frame("\u2502"));
         continue;
       }
-      if (i === filesH) {
+      if (showSeparator && i === filesH) {
         lines.push(
           T.frame("\u251c") + T.frame("\u2500".repeat(leftW)) + T.frame("\u2524") + rightRows[i] + T.frame("\u2502"),
         );
@@ -1249,7 +1276,13 @@ export class NavigatorOverlay implements Focusable {
             filterQuery: this.filterQuery,
             matchCount: this.filesRows().length,
           })
-        : buildFooterRow(innerW, { theme: T, mode: this.mode, focus: this.focus, notice: this.notice });
+        : buildFooterRow(innerW, {
+            theme: T,
+            mode: this.mode,
+            focus: this.focus,
+            notice: this.notice,
+            layout: this.layout,
+          });
     lines.push(T.frame("\u2502") + footerRow + T.frame("\u2502"));
     lines.push(T.frame("\u2514" + "\u2500".repeat(innerW) + "\u2518"));
 
@@ -1268,56 +1301,73 @@ export class NavigatorOverlay implements Focusable {
 
   // ── Left column ──
 
-  private buildLeftRows(leftW: number, filesH: number, body: number): string[] {
+  /**
+   * Left-column rows for the current layout (Issue #119): per `layoutPanes`,
+   * the files group (header + filesH − 1 rows), the git group (header +
+   * gitH − 1 rows), and in the default layout the one placeholder row the
+   * separator in render() occupies. Group heights arrive from `layoutRows`,
+   * so a single-pane layout fills the full body and the row accounting
+   * (filesH + placeholder + gitH = body) holds without a separate body
+   * parameter.
+   */
+  private buildLeftRows(leftW: number, heights: { filesH: number; gitH: number }): string[] {
     const rows: string[] = [];
-    const filesRowModel = this.filesRows();
-    const filesAreaRows = Math.max(1, filesH - 1);
-    this.ensureFilesCursorVisibleFor(filesRowModel.length, filesAreaRows);
+    const panes = layoutPanes(this.layout);
 
-    const filesCtx = {
-      theme: this.T,
-      enableIcons: this.enableIcons,
-      filterQuery: this.filterQuery,
-      openRelPath: this.viewTargetRelPath ?? this.viewFile?.relPath ?? null,
-      filesCursor: this.filesCursor,
-      focus: this.focus,
-    };
-    rows.push(buildFilesHeader(leftW, filesRowModel.length, filesCtx));
-    for (let i = 0; i < filesAreaRows; i++) {
-      const index = this.filesScroll + i;
-      const row = filesRowModel[index];
-      rows.push(row ? buildFileRow(row, index === this.filesCursor, leftW, filesCtx) : padTo("", leftW));
+    if (panes.files) {
+      const filesRowModel = this.filesRows();
+      const filesAreaRows = Math.max(1, heights.filesH - 1);
+      this.ensureFilesCursorVisibleFor(filesRowModel.length, filesAreaRows);
+
+      const filesCtx = {
+        theme: this.T,
+        enableIcons: this.enableIcons,
+        filterQuery: this.filterQuery,
+        openRelPath: this.viewTargetRelPath ?? this.viewFile?.relPath ?? null,
+        filesCursor: this.filesCursor,
+        focus: this.focus,
+      };
+      rows.push(buildFilesHeader(leftW, filesRowModel.length, filesCtx));
+      for (let i = 0; i < filesAreaRows; i++) {
+        const index = this.filesScroll + i;
+        const row = filesRowModel[index];
+        rows.push(row ? buildFileRow(row, index === this.filesCursor, leftW, filesCtx) : padTo("", leftW));
+      }
     }
 
-    // Placeholder so git rows start at index filesH + 1; the horizontal
-    // separator row is drawn by render() and must not consume a data row.
-    rows.push(padTo("", leftW));
+    if (panes.git) {
+      // Placeholder so git rows start at index filesH + 1 (default layout
+      // only); the horizontal separator row is drawn by render() and must not
+      // consume a data row. A single-pane layout has no separator and no
+      // placeholder.
+      if (this.layout === "files-git-viewer") rows.push(padTo("", leftW));
 
-    const gitRowModel = this.gitRows();
-    const navRows = this.gitNavRows();
-    const gitArea = Math.max(1, body - filesH - 1 - 1);
-    this.ensureGitCursorVisibleFor(gitRowModel, navRows, gitArea);
+      const gitRowModel = this.gitRows();
+      const navRows = this.gitNavRows();
+      const gitArea = Math.max(1, heights.gitH - 1);
+      this.ensureGitCursorVisibleFor(gitRowModel, navRows, gitArea);
 
-    rows.push(buildGitHeader(leftW, { theme: this.T, focus: this.focus, git: this.git, treeSource: this.treeSource }));
-    // A dim … in the last slot when git rows continue below the window, unless
-    // that slot holds the selection (plan section 3.6 item 4).
-    const lastIndex = this.gitScroll + gitArea - 1;
-    const selectedRow = navRows[this.gitCursor];
-    const selectedIndex = selectedRow ? gitRowModel.indexOf(selectedRow) : -1;
-    const markerIndex = gitRowModel.length > lastIndex + 1 && selectedIndex !== lastIndex ? lastIndex : -1;
-    const gitCtx = { theme: this.T, expanded: this.gitExpanded };
-    for (let i = 0; i < gitArea; i++) {
-      const index = this.gitScroll + i;
-      if (index === markerIndex) {
-        rows.push(padTo(" " + this.T.dim("\u2026"), leftW));
-        continue;
+      rows.push(buildGitHeader(leftW, { theme: this.T, focus: this.focus, git: this.git, treeSource: this.treeSource }));
+      // A dim … in the last slot when git rows continue below the window, unless
+      // that slot holds the selection (plan section 3.6 item 4).
+      const lastIndex = this.gitScroll + gitArea - 1;
+      const selectedRow = navRows[this.gitCursor];
+      const selectedIndex = selectedRow ? gitRowModel.indexOf(selectedRow) : -1;
+      const markerIndex = gitRowModel.length > lastIndex + 1 && selectedIndex !== lastIndex ? lastIndex : -1;
+      const gitCtx = { theme: this.T, expanded: this.gitExpanded };
+      for (let i = 0; i < gitArea; i++) {
+        const index = this.gitScroll + i;
+        if (index === markerIndex) {
+          rows.push(padTo(" " + this.T.dim("\u2026"), leftW));
+          continue;
+        }
+        const row = gitRowModel[index];
+        if (!row) {
+          rows.push(padTo("", leftW));
+          continue;
+        }
+        rows.push(buildGitRow(row, index === selectedIndex, leftW, gitCtx));
       }
-      const row = gitRowModel[index];
-      if (!row) {
-        rows.push(padTo("", leftW));
-        continue;
-      }
-      rows.push(buildGitRow(row, index === selectedIndex, leftW, gitCtx));
     }
 
     return rows;
@@ -1330,7 +1380,7 @@ export class NavigatorOverlay implements Focusable {
   }
 
   private ensureFilesCursorVisible(): void {
-    this.ensureFilesCursorVisibleFor(this.filesRows().length, filesArea(this.getTerminalRows(), "files-git-viewer"));
+    this.ensureFilesCursorVisibleFor(this.filesRows().length, filesArea(this.getTerminalRows(), this.layout));
   }
 
   private ensureGitCursorVisibleFor(rows: GitRow[], navRows: GitRow[], area: number): void {

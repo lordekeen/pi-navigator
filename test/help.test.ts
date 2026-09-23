@@ -172,7 +172,7 @@ describe("single-source derivations (Issue #063 finding 5)", () => {
   it("HELP_ROWS is the keybinding table projected to [keys, description], in the original order", () => {
     expect(HELP_ROWS).toEqual(NAVIGATOR_KEYBINDINGS.map((row) => [row.keys, row.description]));
     expect(HELP_ROWS).toHaveLength(19);
-    expect(HELP_ROWS[0]).toEqual(["Tab / Shift+Tab", "cycle pane focus (files, git, viewer)"]);
+    expect(HELP_ROWS[0]).toEqual(["Tab / Shift+Tab", "cycle pane focus (visible panes)"]);
     expect(HELP_ROWS[HELP_ROWS.length - 1]).toEqual(["q Esc", "close (Esc clears filter or search first)"]);
   });
 

@@ -12,7 +12,7 @@ import { IMAGE_RESIZE_DEBOUNCE_MS } from "../constants";
 import { DEFAULT_PI_CHAFA_SUBSET, resolveChafaGeometry, type ImageSupport } from "../images";
 import { makeNavigatorTheme } from "../theme";
 import { buildTree, entriesFromPaths, findNode } from "../tree";
-import type { GitState, ViewerFile } from "../types";
+import { NAVIGATOR_LAYOUTS, type GitState, type NavigatorLayout, type ViewerFile } from "../types";
 import type { LoadFileOptions } from "../viewer";
 import { imageCardHints } from "../viewer_view";
 
@@ -118,6 +118,7 @@ function makeHarness(
   customTheme?: (color: string, text: string) => string,
   loadCommit?: (shortHash: string) => Promise<ViewerFile>,
   imageSupport?: ImageSupport,
+  initialLayout?: NavigatorLayout,
 ): Harness {
   const opened: string[] = [];
   const loads: Array<{ relPath: string; opts?: LoadFileOptions }> = [];
@@ -159,6 +160,7 @@ function makeHarness(
       state.refreshed += 1;
     },
     ...(imageSupport !== undefined ? { imageSupport } : {}),
+    ...(initialLayout !== undefined ? { initialLayout } : {}),
   };
 
   const overlay = new NavigatorOverlay(options);
@@ -209,6 +211,101 @@ describe("focus cycling", () => {
 
     overlay.handleInput(KEYS.shiftTab);
     expect(overlay.render(120).join("\n")).toContain("viewer");
+  });
+});
+
+// ── Layout modes (Issue #119) ──
+
+/** Tone-tagging theme: every fg call prefixes the channel, so the footer's
+ *  accent-colored pane label reveals the focused pane under assertions. */
+const toneTheme = (color: string, text: string): string => `${color}:${text}`;
+
+describe("layout modes (Issue #119)", () => {
+  it("opens focused on the pane the layout starts with", () => {
+    expect(makeHarness(36, undefined, toneTheme).overlay.render(120).join("\n")).toContain("accent:files");
+    expect(
+      makeHarness(36, undefined, toneTheme, undefined, undefined, "files-viewer").overlay.render(120).join("\n"),
+    ).toContain("accent:files");
+    expect(
+      makeHarness(36, undefined, toneTheme, undefined, undefined, "git-viewer").overlay.render(120).join("\n"),
+    ).toContain("accent:git");
+  });
+
+  it("keeps the default layout's full files -> git -> viewer cycle", () => {
+    const { overlay } = makeHarness(36, undefined, toneTheme);
+    overlay.handleInput(KEYS.tab);
+    expect(overlay.render(120).join("\n")).toContain("accent:git");
+    overlay.handleInput(KEYS.tab);
+    expect(overlay.render(120).join("\n")).toContain("accent:viewer");
+    overlay.handleInput(KEYS.tab);
+    expect(overlay.render(120).join("\n")).toContain("accent:files");
+    overlay.handleInput(KEYS.shiftTab);
+    expect(overlay.render(120).join("\n")).toContain("accent:viewer");
+  });
+
+  it("cycles files <-> viewer in files-viewer, never visiting git", () => {
+    const { overlay } = makeHarness(36, undefined, toneTheme, undefined, undefined, "files-viewer");
+    overlay.handleInput(KEYS.tab);
+    expect(overlay.render(120).join("\n")).toContain("accent:viewer");
+    overlay.handleInput(KEYS.tab);
+    const wrapped = overlay.render(120).join("\n");
+    expect(wrapped).toContain("accent:files"); // viewer wraps back to files
+    expect(wrapped).not.toContain("accent:git");
+    overlay.handleInput(KEYS.shiftTab);
+    expect(overlay.render(120).join("\n")).toContain("accent:viewer");
+  });
+
+  it("cycles git <-> viewer in git-viewer, never visiting files", () => {
+    const { overlay } = makeHarness(36, undefined, toneTheme, undefined, undefined, "git-viewer");
+    overlay.handleInput(KEYS.tab);
+    expect(overlay.render(120).join("\n")).toContain("accent:viewer");
+    overlay.handleInput(KEYS.tab);
+    const wrapped = overlay.render(120).join("\n");
+    expect(wrapped).toContain("accent:git");
+    expect(wrapped).not.toContain("accent:files");
+    overlay.handleInput(KEYS.shiftTab);
+    expect(overlay.render(120).join("\n")).toContain("accent:viewer");
+  });
+
+  it("makes the files filter unreachable in git-viewer while the viewer search still works", () => {
+    const { overlay } = makeHarness(36, undefined, toneTheme, undefined, undefined, "git-viewer");
+    overlay.handleInput("/"); // git focus: / is neither a git key nor global
+    const afterSlash = overlay.render(120).join("\n");
+    expect(afterSlash).not.toContain("type to filter");
+    // The viewer's search is still reachable from viewer focus.
+    overlay.handleInput(KEYS.tab);
+    overlay.handleInput("/");
+    expect(overlay.render(120).join("\n")).toContain("type to search");
+  });
+
+  it("toggles the left column with t in every layout", () => {
+    for (const layout of NAVIGATOR_LAYOUTS) {
+      const harness = makeHarness(36, undefined, undefined, undefined, undefined, layout);
+      withTree(harness, ["src/a.ts"]);
+      withGit(harness);
+      const panes = layout === "git-viewer" ? ["GIT"] : layout === "files-viewer" ? ["FILES"] : ["FILES", "GIT"];
+      const open = harness.overlay.render(120).join("\n");
+      for (const pane of panes) expect(open, `${layout}: ${pane}`).toContain(pane);
+
+      harness.overlay.handleInput("t");
+      const hidden = harness.overlay.render(120).join("\n");
+      expect(hidden, layout).not.toContain("FILES");
+      expect(hidden, layout).not.toContain("GIT");
+
+      harness.overlay.handleInput("t");
+      const restored = harness.overlay.render(120).join("\n");
+      for (const pane of panes) expect(restored, `${layout}: ${pane}`).toContain(pane);
+    }
+  });
+
+  it("handles git-pane Enter on a changed file in git-viewer without a files pane", () => {
+    const harness = makeHarness(36, undefined, toneTheme, undefined, undefined, "git-viewer");
+    withTree(harness, ["src/pkg/changed.ts"]);
+    withGit(harness);
+    harness.overlay.handleInput(KEYS.enter); // open the changed file
+    const joined = harness.overlay.render(120).join("\n");
+    expect(joined).toContain("accent:viewer"); // focus moved to the viewer
+    expect(joined).toContain("src/pkg/changed.ts");
   });
 });
 

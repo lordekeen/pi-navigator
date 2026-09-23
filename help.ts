@@ -48,8 +48,8 @@ export interface HelpKeyRow {
 }
 
 export const NAVIGATOR_KEYBINDINGS: readonly HelpKeyRow[] = [
-  { id: "cycle-focus", keys: "Tab / Shift+Tab", description: "cycle pane focus (files, git, viewer)" },
-  { id: "toggle-tree", keys: "t", description: "toggle the file tree" },
+  { id: "cycle-focus", keys: "Tab / Shift+Tab", description: "cycle pane focus (visible panes)" },
+  { id: "toggle-tree", keys: "t", description: "hide or show the left column" },
   { id: "move", keys: "j k / arrows", description: "move the cursor or scroll" },
   { id: "jump", keys: "g G", description: "jump to top or bottom" },
   { id: "half-page", keys: "Ctrl+d Ctrl+u", description: "half page" },

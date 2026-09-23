@@ -32,6 +32,8 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => ({
 
 import { mapExtensionToIcon } from "../icons";
 import { MIN_OVERLAY_HEIGHT, MIN_OVERLAY_WIDTH } from "../constants";
+import { leftColumnWidth } from "../frame";
+import type { NavigatorLayout } from "../types";
 import type { NavigatorSettings } from "../settings";
 import { openSettingsMenu, type SettingsMenuDeps, type SettingsMenuTheme, type SettingsMenuUi } from "../settings_menu";
 import { DEFAULT_PI_CHAFA_SUBSET, type ImageSupport } from "../images";
@@ -52,7 +54,7 @@ interface Harness {
   rows: number;
 }
 
-function makeHarness(rows: number, enableIcons = false): Harness {
+function makeHarness(rows: number, enableIcons = false, initialLayout?: NavigatorLayout): Harness {
   const theme = makeNavigatorTheme({
     fg: (_color: string, text: string) => text,
     bg: (_color: string, text: string) => text,
@@ -68,6 +70,7 @@ function makeHarness(rows: number, enableIcons = false): Harness {
     requestRender: () => undefined,
     onClose: () => undefined,
     enableIcons,
+    ...(initialLayout !== undefined ? { initialLayout } : {}),
     loadFile: async (relPath: string): Promise<ViewerFile> => ({
       kind: "text",
       relPath,
@@ -311,9 +314,8 @@ describe("render width safety", () => {
     for (let i = 0; i < lines.length; i++) {
       expect(lines[i], `line ${i} has bright-ellipsis artifact`).not.toMatch(/\x1b\[0m\.\.\./);
     }
-    // The longest description ("cycle pane focus (files, git, viewer)") is 37
-    // cols; at width 50 the description column is 28, so it must truncate and
-    // show the ellipsis indicator.
+    // The longest description ("open file / commit diff, or toggle a directory
+    // / commit family", 63 cols) forces truncation at this width.
     expect(lines.some((l) => l.includes("\u2026"))).toBe(true);
     expectWidthSafe(overlay, 50);
   });
@@ -592,6 +594,126 @@ describe("render width safety", () => {
     const nameInFile = plainFile.indexOf("Button.tsx");
     expect(glyphInFile, "file glyph must precede the name").toBeLessThan(nameInFile);
     expect(glyphInFile, "file glyph (depth 2) must sit after the 4-space indent").toBeGreaterThanOrEqual(7);
+  });
+});
+
+describe("layout modes (Issue #119)", () => {
+  const strip = (s: string): string => s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
+
+  /** The left-column cell of every body row (identity theme: plain text). */
+  function leftCells(lines: string[], width: number): string[] {
+    const leftW = leftColumnWidth(width - 2);
+    return lines.slice(3, lines.length - 2).map((line) => strip(line).slice(1, 1 + leftW));
+  }
+
+  /** Whether the default layout's horizontal left-column separator is drawn. */
+  function hasLeftSeparator(lines: string[], width: number): boolean {
+    const needle = "\u251c" + "\u2500".repeat(leftColumnWidth(width - 2)) + "\u2524";
+    return lines.some((line) => strip(line).includes(needle));
+  }
+
+  const manyPaths = Array.from({ length: 30 }, (_, i) => `file${i}.ts`); // flat: all visible at depth 0
+  const manyCommits = Array.from({ length: 30 }, (_, i) => ({
+    shortHash: `h${String(i).padStart(6, "0")}`,
+    dateRel: "2h ago",
+    subject: `commit subject ${i}`,
+  }));
+
+  it("keeps the default layout byte-identical: both panes, separator, three footer labels", () => {
+    // Regression guard for "byte-identical when initialLayout is omitted":
+    // every pre-existing render test runs against the default layout; this
+    // pins the structural markers the new layoutPanes branching could drop.
+    const harness = makeHarness(36);
+    const lines = expectWidthSafe(harness.overlay, 120);
+    const joined = lines.join("\n");
+    expect(joined).toContain("FILES");
+    expect(joined).toContain("GIT");
+    expect(hasLeftSeparator(lines, 120)).toBe(true);
+    const footer = lines[lines.length - 2] ?? "";
+    expect(footer).toContain("files");
+    expect(footer).toContain("git");
+    expect(footer).toContain("viewer");
+  });
+
+  it("files-viewer renders the files pane at full body height with no git group or separator", () => {
+    const harness = makeHarness(36, false, "files-viewer");
+    harness.overlay.setTree(buildTree("/work/repo", entriesFromPaths(manyPaths), new Map()), "git");
+    const lines = expectWidthSafe(harness.overlay, 120);
+    const cells = leftCells(lines, 120);
+    expect(cells).toHaveLength(25); // body rows
+    expect(cells[0] ?? "").toContain("FILES");
+    expect(lines.join("\n")).not.toContain("GIT");
+    // Full height: header + body − 1 content rows, all populated by the tree.
+    expect(cells.slice(1).every((cell) => cell.trim() !== "")).toBe(true);
+    expect(hasLeftSeparator(lines, 120)).toBe(false);
+    for (const width of [100, 80, 74, 60]) expectWidthSafe(harness.overlay, width);
+  });
+
+  it("git-viewer renders the git panel at full body height with no files group or separator", () => {
+    const harness = makeHarness(36, false, "git-viewer");
+    harness.overlay.setGitState({
+      available: true,
+      branch: "main",
+      detached: false,
+      ahead: 0,
+      behind: 0,
+      unstaged: [],
+      staged: [],
+      history: manyCommits,
+      refreshedAt: 0,
+    });
+    const lines = expectWidthSafe(harness.overlay, 120);
+    const cells = leftCells(lines, 120);
+    expect(cells).toHaveLength(25);
+    expect(cells[0] ?? "").toContain("GIT");
+    expect(lines.join("\n")).not.toContain("FILES");
+    expect(cells.slice(1).every((cell) => cell.trim() !== "")).toBe(true);
+    expect(hasLeftSeparator(lines, 120)).toBe(false);
+    for (const width of [100, 80, 74, 60]) expectWidthSafe(harness.overlay, width);
+  });
+
+  it("git-viewer outside a repository renders the unavailable state at full height", () => {
+    const harness = makeHarness(36, false, "git-viewer");
+    harness.overlay.setGitState({
+      available: false,
+      branch: null,
+      detached: false,
+      ahead: 0,
+      behind: 0,
+      unstaged: [],
+      staged: [],
+      history: [],
+      refreshedAt: 0,
+    });
+    const lines = expectWidthSafe(harness.overlay, 120);
+    const joined = lines.join("\n");
+    expect(joined).toContain("GIT");
+    expect(joined).toContain("git unavailable");
+    expect(joined).not.toContain("FILES");
+    expect(hasLeftSeparator(lines, 120)).toBe(false);
+    expectWidthSafe(harness.overlay, 80);
+    expectWidthSafe(harness.overlay, 60);
+  });
+
+  it("t hides the left column in every layout and the viewer takes the full width", () => {
+    for (const layout of ["files-git-viewer", "files-viewer", "git-viewer"] as const) {
+      const harness = makeHarness(36, false, layout);
+      expect(harness.overlay.render(120).join("\n")).toMatch(/FILES|GIT/);
+      harness.overlay.handleInput("t");
+      const hidden = expectWidthSafe(harness.overlay, 120);
+      expect(hidden.join("\n")).not.toContain("FILES");
+      expect(hidden.join("\n")).not.toContain("GIT");
+      // Viewer keeps the whole frame: the inner width minus the borders.
+      const bodyLine = hidden[3] ?? "";
+      expect(strip(bodyLine).startsWith("\u2502")).toBe(true);
+      harness.overlay.handleInput("t");
+      expect(harness.overlay.render(120).join("\n")).toMatch(/FILES|GIT/);
+      // Width-safe while hidden at the narrow suite size too.
+      harness.overlay.handleInput("t");
+      expectWidthSafe(harness.overlay, 60);
+      harness.overlay.handleInput("t");
+      expectWidthSafe(harness.overlay, 60);
+    }
   });
 });
 
