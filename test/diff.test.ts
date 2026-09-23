@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { styleDiffLines } from "../diff";
+import { styleCommitMessage, styleDiffLines } from "../diff";
 import type { NavigatorTheme } from "../theme";
 
 /** Every NavigatorTheme token, each wrapping its input in its own tag. */
@@ -148,5 +148,31 @@ describe("styleDiffLines structure", () => {
     ];
     styleDiffLines(input, T);
     expect([...used].sort()).toEqual(["accent", "error", "muted", "success", "text"].sort());
+  });
+});
+
+// ── styleCommitMessage (Issue #120) ──
+
+describe("styleCommitMessage", () => {
+  it("bolds the subject and renders body lines as text", () => {
+    const { T, used } = makeTaggingTheme();
+    const out = styleCommitMessage({ subject: "the subject", body: ["", "body line"] }, T);
+    expect(out).toEqual(["<bold>the subject</bold>", "<text></text>", "<text>body line</text>"]);
+    expect([...used].sort()).toEqual(["bold", "text"].sort());
+  });
+
+  it("returns [] for an empty message and skips an empty subject with a body", () => {
+    const { T } = makeTaggingTheme();
+    expect(styleCommitMessage({ subject: "", body: [] }, T)).toEqual([]);
+    expect(styleCommitMessage({ subject: "", body: ["orphan body"] }, T)).toEqual([
+      "<text>orphan body</text>",
+    ]);
+  });
+
+  it("preserves body content byte-for-byte after stripping tags", () => {
+    const { T } = makeTaggingTheme();
+    const body = ["leading blank next", "", "  indented  spaces  ", "+-looks like a diff"];
+    const out = styleCommitMessage({ subject: "s", body }, T);
+    expect(out.map(stripTagging)).toEqual(["s", ...body]);
   });
 });

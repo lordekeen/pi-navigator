@@ -571,5 +571,52 @@ describe("git integration on a scratch repository", () => {
     expect(diff.lines).toEqual([]);
     expect(diff.filesChanged).toBe(0);
     expect(diff.notice).toContain("cannot read commit");
+    // Issue #120: the degraded result carries an empty message too.
+    expect(diff.message).toEqual({ subject: "", body: [] });
+  });
+
+  // ── Commit message above the diff (Issue #120) ──
+
+  it("returns the subject as message.subject and an empty body for a single-line message (#120)", async () => {
+    await writeFile(join(repo, "a.txt"), "x\n");
+    await commit(repo, "just a subject");
+    const state = await readGitState(repo);
+    const diff = await readCommitDiff(repo, state.history[0]!.shortHash);
+    expect(diff.message.subject).toBe("just a subject");
+    expect(diff.message.body).toEqual([]);
+  });
+
+  it("splits a multi-paragraph message into subject and body, trimming trailing blanks (#120)", async () => {
+    await writeFile(join(repo, "a.txt"), "x\n");
+    // git commit -m joins repeated -m paragraphs with a blank line — the
+    // classic subject + body shape, without depending on editor quoting.
+    await git(repo, ["commit", "-q", "--allow-empty", "-m", "the subject line", "-m", "first body paragraph", "-m", "second body paragraph"]);
+    const state = await readGitState(repo);
+    const diff = await readCommitDiff(repo, state.history[0]!.shortHash);
+    expect(diff.message.subject).toBe("the subject line");
+    expect(diff.message.body).toEqual(["", "first body paragraph", "", "second body paragraph"]);
+  });
+
+  it("reports a failed message read as empty, not a crash (#120)", async () => {
+    await writeFile(join(repo, "a.txt"), "x\n");
+    await commit(repo, "fine");
+    const spy = vi.spyOn(gitRunner, "execFile").mockImplementation((...args: any[]) => {
+      const gitArgs = args[1] as string[];
+      if (gitArgs && gitArgs.includes("--pretty=format:%B")) {
+        const cb = args[args.length - 1];
+        cb(new Error("msg read failed"), "", "");
+        return {} as any;
+      }
+      return childProcess.execFile(args[0], args[1], args[2], args[3]);
+    });
+    try {
+      const state = await readGitState(repo);
+      const diff = await readCommitDiff(repo, state.history[0]!.shortHash);
+      expect(diff.message).toEqual({ subject: "", body: [] });
+      // The diff itself is untouched.
+      expect(diff.filesChanged).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

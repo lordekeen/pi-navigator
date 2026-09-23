@@ -55,7 +55,7 @@ import type { NavigatorLayout } from "./types";
 import { makeDeferredImageSupport, resolveImageSupport, runChafaRender, runNativeRender, buildKittyProbeQuery, consumeKittyProbeReply, createKittyProbeState, detectPiChafa, type ImageSupport, type KittyProbeState, type KittyProbeVerdict, type NativeProtocol } from "./images";
 import { loadNavigatorSettings, writeNavigatorSettings } from "./settings";
 import { navigatorFieldNotes, openSettingsMenu } from "./settings_menu";
-import { styleDiffLines } from "./diff";
+import { styleCommitMessage, styleDiffLines } from "./diff";
 import { NavigatorOverlay } from "./navigator";
 import { makeNavigatorTheme } from "./theme";
 import {
@@ -586,13 +586,22 @@ async function runNavigator(
         // in-flight image render (Issue #117 follow-up).
         beginImageLoad();
         const diff = await readCommitDiff(cwd, shortHash);
+        // Issue #120: the commit message rides above the diff, `git show`
+        // style — subject bold, body plain, one blank separator line when a
+        // diff body follows. styleCommitMessage lives in diff.ts so the
+        // styling joins styleDiffLines under the same theme-free split.
+        const messageLines = styleCommitMessage(diff.message, theme);
+        const lines =
+          messageLines.length > 0 && diff.lines.length > 0
+            ? [...messageLines, "", ...styleDiffLines(diff.lines, theme)]
+            : [...messageLines, ...styleDiffLines(diff.lines, theme)];
         return {
           kind: "diff",
           relPath: `commit:${diff.shortHash}`,
           commitHash: diff.shortHash,
           parents: diff.parents,
           lineCount: diff.lines.length,
-          lines: styleDiffLines(diff.lines, theme),
+          lines,
           notice: diff.notice,
         };
       };

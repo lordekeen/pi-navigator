@@ -474,8 +474,9 @@ describe("render width safety", () => {
       underline: (text: string) => text,
       inverse: (text: string) => text,
     } as never);
-    // Diff ViewerFile with styled +/-, a hunk header, and a very long added
-    // line that must truncate without leaking a bright ellipsis.
+    // Diff ViewerFile with styled +/-, a hunk header, a very long added
+    // line that must truncate without leaking a bright ellipsis, and — Issue
+    // #120 — the commit message (bold subject + body) riding above it.
     const styledDiff: ViewerFile = {
       kind: "diff",
       relPath: "commit:a1b2c3d",
@@ -483,6 +484,9 @@ describe("render width safety", () => {
       parents: ["e4f5a6b"],
       lineCount: 8,
       lines: [
+        "a1b2c3d the bold commit subject line that is also long enough to need truncation in narrow panes",
+        "a body line explaining why the change was made, long enough to wrap or truncate cleanly",
+        "",
         "diff --git a/src/main.ts b/src/main.ts",
         "index 0000000..1111111 100644",
         "--- a/src/main.ts",
@@ -517,6 +521,9 @@ describe("render width safety", () => {
     const joined = lines.join("\n");
     expect(joined).toContain("commit a1b2c3d");
     expect(joined).toContain("\u00b7 1 file");
+    // Issue #120: the message block renders above the diff — subject and
+    // body present, and a message line starting with a diff-like prefix
+    // would still be styled text, not a diff row (see diff.test.ts).
     // The notice row renders (T.dim summary, no bright-ellipsis artifact).
     expect(joined).toContain("+4 \u22122");
 

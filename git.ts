@@ -16,6 +16,7 @@
 import * as childProcess from "node:child_process";
 
 import { GIT_HISTORY_COUNT, GIT_TIMEOUT_MS, MAX_HIGHLIGHT_BYTES, MAX_HIGHLIGHT_LINES } from "./constants";
+import type { CommitMessage } from "./diff";
 import type { GitChangedFile, GitCommit, GitState } from "./types";
 
 export const gitRunner = {
@@ -324,6 +325,13 @@ export interface CommitDiff {
   deletions: number;
   /** Human summary, e.g. "commit abc1234 · 1 file · +2 −0". */
   notice: string;
+  /**
+   * The commit's full message, split for display (Issue #120): `subject` is
+   * the first line, `body` the lines after it (trailing blanks trimmed).
+   * Plain text — the caller styles it via styleCommitMessage so this module
+   * stays theme-free.
+   */
+  message: CommitMessage;
 }
 
 /**
@@ -355,6 +363,7 @@ export async function readCommitDiff(cwd: string, shortHash: string): Promise<Co
       insertions: 0,
       deletions: 0,
       notice: `cannot read commit ${shortHash}`,
+      message: { subject: "", body: [] },
     };
   }
   const fullHash = resolved.stdout.trim();
@@ -365,12 +374,31 @@ export async function readCommitDiff(cwd: string, shortHash: string): Promise<Co
       ? parentsRes.stdout.trim().split(/\s+/).filter((p) => p.length > 0)
       : [];
 
-  // Parallel: body + stat line. Both use --first-parent so a merge commit's
-  // own delta is shown rather than an empty combined diff.
-  const [bodyRes, statRes] = await Promise.all([
+  // Parallel: message + body + stat line. Both show calls use --first-parent
+  // so a merge commit's own delta is shown rather than an empty combined
+  // diff; the message read is format-only (no patch) so it is merge-safe too.
+  const [msgRes, bodyRes, statRes] = await Promise.all([
+    runGit(cwd, ["show", "-s", "--pretty=format:%B", "--no-color", fullHash]),
     runGit(cwd, ["show", "--no-color", "--no-renames", "--first-parent", "--pretty=format:", fullHash]),
     runGit(cwd, ["show", "--numstat", "--format=", "--no-renames", "--first-parent", fullHash]),
   ]);
+
+  // The full commit message (Issue #120): CR-normalize, split on newlines,
+  // trim trailing blank lines. Bounded below with the diff body so a huge
+  // message degrades exactly like a huge diff (truncation notice).
+  let msgText = msgRes.status === "ok" ? msgRes.stdout : "";
+  msgText = msgText.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  let messageTruncated = false;
+  if (Buffer.byteLength(msgText, "utf8") > MAX_HIGHLIGHT_BYTES) {
+    const bytes = Buffer.from(msgText, "utf8");
+    let end = MAX_HIGHLIGHT_BYTES;
+    while (end > 0 && (bytes[end] ?? 0) >= 0x80 && (bytes[end] ?? 0) < 0xc0) end -= 1;
+    msgText = bytes.subarray(0, end).toString("utf8");
+    messageTruncated = true;
+  }
+  const msgLines = msgText.split("\n");
+  while (msgLines.length > 0 && msgLines[msgLines.length - 1] === "") msgLines.pop();
+  const commitMessage: CommitMessage = { subject: msgLines.shift() ?? "", body: msgLines };
 
   let filesChanged = 0;
   let insertions = 0;
@@ -418,10 +446,18 @@ export async function readCommitDiff(cwd: string, shortHash: string): Promise<Co
   }
   if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
 
+  // A message capped on BYTES or a body capped on LINES sets the flags
+  // above; extend the cap to the message LINE count too so the combined
+  // viewer array stays bounded by the same MAX_HIGHLIGHT_LINES budget.
+  if (commitMessage.body.length + 1 > MAX_HIGHLIGHT_LINES) {
+    commitMessage.body = commitMessage.body.slice(0, MAX_HIGHLIGHT_LINES - 1);
+    messageTruncated = true;
+  }
+
   const filesLabel =
     filesChanged === 1 ? "1 file" : filesChanged === 0 ? "no files" : `${filesChanged} files`;
-  let message = `commit ${shortHash} \u00b7 ${filesLabel} \u00b7 +${insertions} \u2212${deletions}`;
-  if (truncated) message += ` \u00b7 diff truncated (showing the head)`;
+  let notice = `commit ${shortHash} \u00b7 ${filesLabel} \u00b7 +${insertions} \u2212${deletions}`;
+  if (truncated || messageTruncated) notice += ` \u00b7 diff truncated (showing the head)`;
   return {
     shortHash,
     parents,
@@ -429,7 +465,8 @@ export async function readCommitDiff(cwd: string, shortHash: string): Promise<Co
     filesChanged,
     insertions,
     deletions,
-    notice: message,
+    notice,
+    message: commitMessage,
   };
 }
 

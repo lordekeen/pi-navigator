@@ -14,6 +14,31 @@
 import type { NavigatorTheme } from "./theme";
 
 /**
+ * A commit's message, split for display (Issue #120): the subject line and
+ * the body lines that follow it, plain and theme-free (git.ts owns parsing,
+ * this module owns styling).
+ */
+export interface CommitMessage {
+  /** First line of the commit message (may be empty for a blank message). */
+  subject: string;
+  /** Message lines after the subject, trailing blank lines trimmed. */
+  body: string[];
+}
+
+/**
+ * Style the commit message block shown above the diff (Issue #120):
+ * subject bold, body plain text. Returns the lines without a separator —
+ * the caller (index.ts) inserts the blank line between message and diff,
+ * `git show`-style, only when a diff body follows.
+ */
+export function styleCommitMessage(message: CommitMessage, T: NavigatorTheme): string[] {
+  const lines: string[] = [];
+  if (message.subject !== "") lines.push(T.bold(message.subject));
+  for (const line of message.body) lines.push(T.text(line));
+  return lines;
+}
+
+/**
  * Style one diff line by its leading characters:
  *
  * - `+++` / `---` file headers → muted
