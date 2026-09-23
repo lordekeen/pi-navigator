@@ -2137,23 +2137,59 @@ describe("native image rendering", () => {
     expect(harness.loads[0]?.opts?.image).toEqual({ cols: 53, rows: 24 });
   });
 
-  it("toggles between the native render and the card with i without reloading", async () => {
-    const harness = makeHarness(36, nativeLoader, undefined, undefined, nativeSupport());
+  it("hides a native render with i without reloading, then re-renders it with a fresh id (#112)", async () => {
+    // A fresh kitty id per render, mirroring allocateImageId().
+    let renders = 0;
+    const freshIdLoader = (relPath: string, opts?: LoadFileOptions): Promise<ViewerFile> => {
+      renders += 1;
+      if (!opts?.image) return Promise.resolve(metadataImage(relPath));
+      return Promise.resolve({
+        ...nativeImage(relPath, opts.image.cols, opts.image.rows),
+        imageLines: [`\x1b_Ga=T,f=100,q=2,C=1,c=20,r=3,i=${100 + renders};AAAA\x1b\\`, "", ""],
+      });
+    };
+    const harness = makeHarness(36, freshIdLoader, undefined, undefined, nativeSupport());
     withTree(harness, ["sample.png"]);
     harness.overlay.render(120);
     harness.overlay.handleInput(KEYS.enter);
     await Promise.resolve();
-    expect(harness.overlay.render(120).join("\n")).toContain(KITTY_ROW);
+    expect(harness.overlay.render(120).join("\n")).toContain("i=101");
 
+    // Hide: a pure state flip — the stored rows are only hidden, no reload.
     harness.overlay.handleInput("i");
     let joined = harness.overlay.render(120).join("\n");
-    expect(joined).not.toContain(KITTY_ROW);
+    expect(joined).not.toContain("i=101");
     expect(joined).toContain("i render");
+    expect(harness.loads).toHaveLength(1);
 
+    // Show again: re-rendered with a NEW id. Re-emitting i=101 would make
+    // pi-tui place the image without re-transmitting it, leaving the pane
+    // blank because the card frame dropped the placement.
     harness.overlay.handleInput("i");
+    await Promise.resolve();
     joined = harness.overlay.render(120).join("\n");
-    expect(joined).toContain(KITTY_ROW);
+    expect(joined).toContain("i=102");
+    expect(joined).not.toContain("i=101");
     expect(joined).toContain("kitty \u00b7 i card");
+    expect(harness.loads).toHaveLength(2);
+  });
+
+  it("leaves a chafa roundtrip reload-free (plain text rows re-emit safely)", async () => {
+    const harness = makeHarness(
+      36,
+      async (relPath, opts): Promise<ViewerFile> => chafaImage(relPath, opts?.image?.cols ?? 40, 40),
+      undefined,
+      undefined,
+      activeSupport(),
+    );
+    withTree(harness, ["sample.png"]);
+    harness.overlay.render(120);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+    harness.overlay.handleInput("i");
+    harness.overlay.handleInput("i");
+    const joined = harness.overlay.render(120).join("\n");
+    expect(joined).toContain("chafa-row-0");
     expect(harness.loads).toHaveLength(1);
   });
 

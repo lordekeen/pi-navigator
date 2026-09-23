@@ -237,6 +237,7 @@ accounting difference is exactly what the live QA gate must judge (§8, §16).
 | D5 | **Mime gate: kitty → PNG only; iTerm2 → png/jpeg/gif/webp; else fall to the next tier.** | pi-tui kitty sends `f=100`; no converter dependency allowed. |
 | D6 | **Revise the old D6 (chafa spec): mirror `preferNative` (+ `CHAFA_PREFER_NATIVE`).** `auto` honors it; explicit `native`/`chafa` ignore it. `formatOrder` stays ignored (dead placeholder). | Both surfaces should agree on automatic delivery; explicit mode wins over borrowed preference. |
 | D7 | **Byte cap `IMAGE_NATIVE_MAX_BYTES = 4 MiB` (new constant).** Over cap → card hint. Native entries larger than `IMAGE_NATIVE_CACHE_MAX_CHARS` are displayed but not retained in the viewer cache. | Bounded memory; base64 rows are large; `MAX_VIEWER_CACHE_ENTRIES` alone (16) is not a byte bound. |
+| D7b | **Amendment (Issue #112): kitty native renders are never cached.** A cached line carries a kitty image id, and re-emitting the same id makes pi-tui place the image without re-transmitting it — blank pane after the `i` roundtrip or a reopen. iTerm2 keeps D7. | Correctness over the D7 byte bound: a fresh id per visibility cycle is the only fix that needs no protocol code of our own. |
 | D8 | **No tmux/screen passthrough wrapper.** Follow the host capability report exactly; document the limitation. | pi-tui's own detector nulls images under tmux/screen; a forced `terminal.images` override deliberately bypasses that, and navigation-side second-guessing would contradict the host. |
 | D9 | **Row contract:** native lines are returned verbatim (sequence row, `""` filler rows; iTerm2 `moveUp + sequence` on the last row); no width function may touch a native row; the pane pins `viewScroll` to 0 for native images. | Width safety comes from pi-tui's cell sizing (`c=`/`r=`/`width=`), not from truncation; scrolling an anchored placement misplaces it. |
 | D10 | **`ImageSupport.active` is replaced by `tier: "native" \| "chafa" \| "none"` + `nativeProtocol`.** All call sites updated. | One explicit effective-tier field beats a boolean that meant "chafa". |
@@ -446,10 +447,23 @@ fails cleanly (oversized, undecodable dimensions):
 - Cache retention: native `ViewerFile`s are cached only when
   `lines.join("").length <= IMAGE_NATIVE_CACHE_MAX_CHARS` (D7); over-cap renders
   are displayed and dropped on the next open (re-render is cheap).
+- **Amendment (Issue #112):** a **kitty** native render is never cached, at any
+  size (`isCacheableRender` in `index.ts`). Its rows embed a kitty image id,
+  and pi-tui's alt-screen layer re-places a previously uploaded id *without*
+  re-transmitting the data when it sees the same line again
+  (`prepareKittyScreen` rewrites the row to a placement-only `a=p`). Re-serving
+  the line therefore draws nothing once the terminal has dropped the image —
+  which the `i` card roundtrip, a reopen and a support reflow all cause. Every
+  kitty open re-renders through pi-tui with a fresh id. iTerm2 renders inline
+  their whole payload and carry no id state, so they keep the D7 rule above.
 
 ### 7.5 Interaction
 
 - `i` unchanged: toggles rendered image ⇄ metadata card for the open file.
+  **Amendment (Issue #112):** un-carding a **native** render re-renders it
+  (fresh image id) instead of re-emitting the stored rows, for the reason in
+  §7.4; a chafa render keeps the cheap flag flip because its rows are plain
+  text that re-emit safely.
   For native, the image lines disappear from the component; the host renderer's
   diff deletes the kitty image by id (D11).
 - Scroll keys (`j/k/g/G/Ctrl+d/Ctrl+u`) are inert for a native image (D9);

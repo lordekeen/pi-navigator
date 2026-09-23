@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { KITTY_PROBE_SAMPLES } from "../images";
 import registerNavigatorExtension, {
+  isCacheableRender,
   makeTuiKittyDecodeProbe,
   makeWarningNotifier,
   navigatorCompletions,
@@ -323,5 +324,23 @@ describe("touchCacheEntry (Issue #109)", () => {
     touchCacheEntry(cache, "missing");
     expect([...cache.keys()]).toEqual(["a"]);
     expect(cache.get("a")).toBe(1);
+  });
+});
+
+describe("isCacheableRender (Issue #112)", () => {
+  it("never retains a kitty native render", () => {
+    // Re-serving one re-emits its kitty image id, and pi-tui then re-places
+    // that id without re-transmitting the data (placement-only `a=p`), so the
+    // pane stays blank after the `i` roundtrip or any reopen.
+    expect(isCacheableRender(true, "kitty")).toBe(false);
+  });
+
+  it("retains an iTerm2 native render (inline payload, no id state)", () => {
+    expect(isCacheableRender(true, "iterm2")).toBe(true);
+  });
+
+  it("retains every non-native render", () => {
+    expect(isCacheableRender(false, "kitty")).toBe(true);
+    expect(isCacheableRender(false, null)).toBe(true);
   });
 });

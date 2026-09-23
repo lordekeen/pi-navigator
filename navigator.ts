@@ -931,16 +931,25 @@ export class NavigatorOverlay implements Focusable {
       // render instead of toggling, so `i` is always the "image rendering"
       // verb.
       if (!file || file.kind !== "image") return;
-      if (
+      const rendered =
         (file.imageTier === "chafa" || file.imageTier === "native") &&
-        (file.imageLines?.length ?? 0) > 0
-      ) {
-        this.imageAsCard = !this.imageAsCard;
-      } else if (this.imageSupport.tier !== "none") {
+        (file.imageLines?.length ?? 0) > 0;
+      // Nothing to show and no tier to render with: `i` is inert.
+      if (!rendered && this.imageSupport.tier === "none") return;
+      if (rendered && !this.imageAsCard) {
+        // Hide: a pure state flip, the stored rows stay on the file.
+        this.imageAsCard = true;
+      } else if (rendered && file.imageTier === "chafa") {
+        // Chafa rows are plain text, so re-emitting them is always safe.
+        this.imageAsCard = false;
+      } else {
+        // Show again through a fresh render. A native render's rows are a
+        // kitty/iTerm2 placement carrying an image id that must not be
+        // reused: re-emitting the same id makes pi-tui re-place it without
+        // re-transmitting, so the pane stays blank (Issue #112). A metadata
+        // card under an available tier upgrades to a render the same way.
         this.imageAsCard = false;
         void this.openRelPath(file.relPath, true);
-        return;
-      } else {
         return;
       }
     } else if (matchesKey(data, Key.left) || data === "h") {

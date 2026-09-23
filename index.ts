@@ -50,7 +50,7 @@ import {
 } from "./git";
 import { ICONS_ENV } from "./icons";
 import { buildHelpLines, HELP_COMMANDS_TITLE, HELP_HEADER_PREFIX, HELP_HINT, HELP_ENTRY_TYPE, helpCommandColumnWidth, NAVIGATOR_CMD_PREFIX, NAVIGATOR_SUBCOMMANDS, type NavigatorHelpData } from "./help";
-import { makeDeferredImageSupport, resolveImageSupport, runChafaRender, runNativeRender, buildKittyProbeQuery, consumeKittyProbeReply, createKittyProbeState, type ImageSupport, type KittyProbeState, type KittyProbeVerdict } from "./images";
+import { makeDeferredImageSupport, resolveImageSupport, runChafaRender, runNativeRender, buildKittyProbeQuery, consumeKittyProbeReply, createKittyProbeState, type ImageSupport, type KittyProbeState, type KittyProbeVerdict, type NativeProtocol } from "./images";
 import { loadNavigatorSettings, writeNavigatorSettings } from "./settings";
 import { openSettingsMenu } from "./settings_menu";
 import { styleDiffLines } from "./diff";
@@ -214,6 +214,22 @@ export function touchCacheEntry<K, V>(cache: Map<K, V>, key: K): void {
   const value = cache.get(key) as V;
   cache.delete(key);
   cache.set(key, value);
+}
+
+/**
+ * Whether a render may be retained in the viewer cache (Issue #112). A kitty
+ * native render embeds its image id in the escape rows, and pi-tui's
+ * alt-screen layer re-places a previously uploaded id WITHOUT re-transmitting
+ * the data when it sees the same line again (`prepareKittyScreen` rewrites the
+ * line to a placement-only `a=p`). Re-serving such a line therefore draws
+ * nothing once the terminal has dropped the image — which the `i` card
+ * roundtrip, a reopen and a support reflow all cause — so kitty native renders
+ * are never retained: every open re-renders through pi-tui with a fresh id.
+ * iTerm2 renders inline their whole payload and carry no id state, so they
+ * stay cacheable (still bounded by `IMAGE_NATIVE_CACHE_MAX_CHARS`).
+ */
+export function isCacheableRender(useNative: boolean, protocol: NativeProtocol | null): boolean {
+  return !(useNative && protocol === "kitty");
 }
 
 async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionCommandContext): Promise<void> {
@@ -398,7 +414,8 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
             : chafaSeam && image
               ? imageVariant(image, s)
               : "";
-        const cached = viewerCache.get(relPath);
+        const cacheable = isCacheableRender(useNative, s.nativeProtocol);
+        const cached = cacheable ? viewerCache.get(relPath) : undefined;
         if (cached && Math.abs(cached.mtimeMs - mtimeMs) <= 1 && cached.variant === variant) {
           // Genuine hit: refresh recency so eviction is LRU, not FIFO (#109).
           touchCacheEntry(viewerCache, relPath);
@@ -418,10 +435,11 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
         // error cards have none and are cheap to rebuild. Native over-cap
         // renders (D7) display but are not retained: the 16-entry cache is not
         // a byte bound, so the base64 rows are dropped on the next open.
+        // Kitty native renders are excluded outright by `cacheable` (#112).
         const nativeOverCap =
           file.imageTier === "native" &&
           (file.imageLines ?? []).join("").length > IMAGE_NATIVE_CACHE_MAX_CHARS;
-        if (file.mtimeMs !== undefined && !nativeOverCap) {
+        if (file.mtimeMs !== undefined && cacheable && !nativeOverCap) {
           if (viewerCache.size >= MAX_VIEWER_CACHE_ENTRIES) {
             // LRU eviction (Issue #109): hits refresh recency via
             // touchCacheEntry, so the first key is the least recently used.
