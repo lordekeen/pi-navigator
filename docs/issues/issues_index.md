@@ -8,9 +8,9 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
-| **Pending / Open** | 1 | 1 | 1 | **3** |
+| **Pending / Open** | 1 | 2 | 1 | **4** |
 | **Resolved** | 18 | 38 | 59 | **115** |
-| **Total** | **19** | **39** | **60** | **118** |
+| **Total** | **19** | **40** | **60** | **119** |
 
 ---
 
@@ -21,6 +21,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | [#020](020-no-viewer-cache-blocking-highlight.md) | No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread | Bug / Performance | High | `viewer.ts` | Open (partial — cache done; event-loop yielding deferred: blocked by pi's bundled-runtime virtual-module boundary, needs a pi-side API) |
 | [#067](067-typed-config-registry-paths.md) | Typed Config Registry Paths (`path` is `readonly string[]`) | Technical Debt / Type Safety | Low | `settings.ts` | **Deferred** — tracked, not scheduled: the compile-time path/default check is not worth the rework at five fields. Revisit when the schema grows (~15+ fields or a third level), `live: true` lands, the byte-pinned serialize test is relaxed, or a defect escapes that a type check would have caught |
 | [#069](069-native-image-rendering.md) | Native Terminal Image Rendering (kitty / iTerm2 via pi-tui) | Feature | Medium | `images.ts` / `viewer_view.ts` / `index.ts` | Open — implemented in v0.8.0 (spec [`native-image-rendering.md`](../specs/native-image-rendering.md)); awaiting the live-terminal QA checklist ([`qa-evidence.md`](../plans/qa-evidence.md)) before close |
+| [#119](119-overlay-layout-modes.md) | Overlay Has a Single Layout; No Files-Only or Git-Only Modes | Feature | Medium | `types.ts` / `frame.ts` / `navigator.ts` / `settings.ts` / `help.ts` / `index.ts` | Open — spec [`overlay-layout-modes.md`](../specs/overlay-layout-modes.md) approved; awaiting implementation (commit slicing in spec §13) |
 
 ---
 
@@ -231,6 +232,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#054: Redundant `getRenderedMarkdownLines` Invocation in `buildRightRows`](054-redundant-rendered-markdown-line-call.md) *(resolved)*
 
 ### User Experience & Keyboard Navigation
+- [#119: Overlay Has a Single Layout; No Files-Only or Git-Only Modes](119-overlay-layout-modes.md)
 - [#105: Multi-Character Pasting and Non-BMP Unicode Ignored in Search and Filter Modes](105-search-filter-multi-char-paste-surrogate-pairs.md) *(resolved)*
 - [#101: Native Decode Probe (`a=q`) to Detect Undecodable Payloads and Fall Back](101-native-decode-probe-query.md) *(resolved)*
 - [#071: Kitty Native Image Mime Gate Restricts to PNG Only, Bypassing Native JPEG/WebP Support](071-kitty-native-image-gate-jpeg-webp.md) *(resolved)*
