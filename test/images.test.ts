@@ -1693,7 +1693,7 @@ describe("runNativeRender", () => {
   const GIF_1X1_BASE64 =
     "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
   const JPEG_1X1_BASE64 =
-    "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=";
+    "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==";
   const WEBP_1X1_BASE64 =
     "UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAD8D+JaQAA3AA/ua1AAA=";
   const geometry = { cols: 40, rows: 10 };
@@ -1775,17 +1775,67 @@ describe("runNativeRender", () => {
     expect(readBytes).toHaveBeenCalledWith("/tmp/pixel.webp");
   });
 
-  it("kitty rejects non-PNG formats (JPEG, WebP) before any read (D5)", async () => {
+  it("kitty renders non-PNG formats (JPEG, WebP, GIF) by converting to PNG", async () => {
     withProtocol("kitty");
-    for (const [ext, b64] of [["jpg", JPEG_1X1_BASE64], ["webp", WEBP_1X1_BASE64]] as const) {
+    for (const [ext, b64] of [
+      ["jpg", JPEG_1X1_BASE64],
+      ["webp", WEBP_1X1_BASE64],
+      ["gif", GIF_1X1_BASE64],
+    ] as const) {
       const readBytes = readBytesOf(b64);
       const result = await runNativeRender(`/tmp/pixel.${ext}`, geometry, {
         protocol: "kitty",
         readBytes,
       });
-      expect(result).toEqual({ ok: false, reason: "kitty requires PNG" });
-      expect(readBytes).not.toHaveBeenCalled();
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.lines[0]).toContain("a=T,f=100,q=2,C=1");
+      expect(result.rows).toBeGreaterThan(0);
+      expect(result.cols).toBeGreaterThan(0);
+      expect(readBytes).toHaveBeenCalledWith(`/tmp/pixel.${ext}`);
     }
+  });
+
+  it("kitty degrades cleanly when convertToPng fails or returns null", async () => {
+    withProtocol("kitty");
+    const readBytes = readBytesOf(JPEG_1X1_BASE64);
+    const nullResult = await runNativeRender("/tmp/pixel.jpg", geometry, {
+      protocol: "kitty",
+      readBytes,
+      convertToPng: async () => null,
+    });
+    expect(nullResult).toEqual({
+      ok: false,
+      reason: "could not convert image to PNG for Kitty rendering",
+    });
+
+    const throwResult = await runNativeRender("/tmp/pixel.jpg", geometry, {
+      protocol: "kitty",
+      readBytes,
+      convertToPng: async () => {
+        throw new Error("conversion error");
+      },
+    });
+    expect(throwResult).toEqual({
+      ok: false,
+      reason: "could not convert image to PNG for Kitty rendering",
+    });
+  });
+
+  it("kitty respects abort signal during conversion", async () => {
+    withProtocol("kitty");
+    const controller = new AbortController();
+    const readBytes = readBytesOf(JPEG_1X1_BASE64);
+    const result = await runNativeRender("/tmp/pixel.jpg", geometry, {
+      protocol: "kitty",
+      readBytes,
+      signal: controller.signal,
+      convertToPng: async () => {
+        controller.abort();
+        return { data: PNG_1X1_BASE64, mimeType: "image/png" };
+      },
+    });
+    expect(result).toEqual({ ok: false, reason: "render aborted" });
   });
 
   it("iterm2: fillers are empty and the last line is moveUp + File= with inline=1 and width=", async () => {
@@ -1809,17 +1859,6 @@ describe("runNativeRender", () => {
     expect(last).toContain("width=");
     expect(last).toContain(`width=${result.cols}`);
     expect(result.cols).toBeGreaterThan(0);
-  });
-
-  it("kitty rejects a GIF before any read (D5)", async () => {
-    withProtocol("kitty");
-    const readBytes = readBytesOf(GIF_1X1_BASE64);
-    const result = await runNativeRender("/tmp/pixel.gif", geometry, {
-      protocol: "kitty",
-      readBytes,
-    });
-    expect(result).toEqual({ ok: false, reason: "kitty requires PNG" });
-    expect(readBytes).not.toHaveBeenCalled();
   });
 
   it("runNativeRender degrades when the decode probe reports an error (Issue #101)", async () => {

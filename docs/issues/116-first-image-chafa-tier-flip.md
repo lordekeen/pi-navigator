@@ -217,11 +217,13 @@ abort path is unreachable in production; only chafa children are abortable
 mid-flight, and those belong to superseded loads. It has no observable effect today,
 so it is left until the probe question is settled.
 
-## Resolution (v0.10.6) — Kitty PNG gate & Clean Chafa rendering
+## Resolution (v0.10.8) — Kitty Non-PNG Conversion via convertToPng & Clean Chafa Fallback
 
-1. **Kitty graphics protocol requires PNG**: The Kitty terminal emulator directly decodes only PNG (`f=100`) and raw RGB pixel streams; it does not decode JPEG or WebP from direct inline transmissions (`a=T,f=100,q=2`). Attempting native Kitty transmission for JPEG/WebP causes Kitty's decoder to fail silently, leaving the viewer completely blank. Both `runNativeRender` (`images.ts`) and `nativelyRenderable` (`viewer_view.ts`) enforce the PNG requirement for Kitty:
-   - In `auto` mode, JPEG and WebP fall back cleanly to Chafa without attempting unrenderable native transmission (the viewer renders Chafa art instead of remaining blank).
-   - In `native` mode, JPEG and WebP display the metadata card with `"kitty rendering needs PNG - chafa or auto can render this format"`.
-   - PNG images under 4 MiB render natively in Kitty.
-2. **Reverted top-of-screen header error on Chafa renders**: Removed the `file.imageError` injection from the header of successfully rendered Chafa images in `viewer_view.ts` and `viewer.ts`. When an image falls back to Chafa (e.g. over 4 MiB PNG or non-PNG on Kitty), Chafa renders cleanly with standard `chafa · i card` badges. The failure reason message is reserved exclusively for metadata cards when there is no way to render the image.
-3. **Protocol-level Kitty probe**: The Kitty decode probe (`buildKittyProbeQuery`) transmits a valid 1×1 PNG sample under `f=100` and is cached per overlay invocation in `index.ts`, avoiding stale process-wide latches.
+1. **Kitty graphics protocol requires PNG (`f=100`), non-PNG converted via `convertToPng`**:
+   The Kitty terminal emulator decodes PNG under `f=100`; transmitting raw JPEG/WebP bytes tagged `f=100` makes Kitty's PNG decoder fail silently (under quiet mode `q=2`), leaving the viewer blank. Instead of gating Kitty to PNG-only files, `runNativeRender` (`images.ts`) converts non-PNG formats (JPEG, WebP, GIF) to PNG before transmission using `convertToPng` from `@earendil-works/pi-coding-agent` (mirroring the host `pi` Image component and `tool-execution.ts` implementation).
+   - In `native` and `auto` modes, JPEG, WebP, GIF, and PNG under 4 MiB render natively in Kitty with high resolution.
+   - If conversion fails (e.g. unsupported format or corrupt image), `runNativeRender` returns a clean failure (`"could not convert image to PNG for Kitty rendering"`), falling back to Chafa in `auto` mode or displaying the error card in `native` mode.
+2. **Clean Chafa rendering on fallback (no header error pollution)**:
+   When an image falls back to Chafa (e.g. over-cap 4 MiB images, SVG, or unconvertible files), Chafa renders cleanly with standard `chafa · i card` badges without attaching error suffixes (`imageError`) to the header. Diagnostic failure messages are reserved exclusively for metadata cards when an image cannot be rendered at all.
+3. **Protocol-level Kitty probe**:
+   The Kitty protocol probe (`buildKittyProbeQuery`) transmits a valid 1×1 PNG sample under `f=100` and is cached per overlay invocation in `index.ts`, verifying that the terminal supports Kitty graphics without failing due to format mismatch.

@@ -37,6 +37,8 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 
+import { convertToPng } from "@earendil-works/pi-coding-agent";
+
 import {
   CHAFA_MIN_VERSION,
   IMAGE_CELLS_MAX,
@@ -976,6 +978,16 @@ export interface NativeRenderCtx {
    * kitty spec and kitty auto-detects format at `a=T` time.
    */
   probeDecode?: () => Promise<KittyProbeVerdict>;
+  /**
+   * Optional image converter for non-PNG formats under Kitty (Issue #116).
+   * Kitty's graphics protocol requires PNG format (f=100); non-PNG formats
+   * (JPEG, WebP, GIF) are converted to PNG before transmission.
+   * Defaults to convertToPng from @earendil-works/pi-coding-agent.
+   */
+  convertToPng?: (
+    base64Data: string,
+    mimeType: string,
+  ) => Promise<{ data: string; mimeType: string } | null>;
 }
 
 /**
@@ -1052,16 +1064,13 @@ export async function runNativeRender(
       reason: bounded("native rendering does not support this image format"),
     };
   }
-  if (ctx.protocol === "kitty" && mime !== "image/png") {
-    return { ok: false, reason: bounded("kitty requires PNG") };
-  }
 
   // b2) Kitty protocol probe (Issue #101, #116): an explicit terminal error
   // means the terminal does not support kitty graphics — degrade to chafa/card
   // instead of emitting a sequence the terminal ignores. "ok" and "no-reply"
   // proceed (no-reply is conservative: terminals that do not answer queries
   // keep declared behavior). The probe is per-protocol (always PNG under
-  // f=100), not per-MIME — kitty auto-detects format at a=T time.
+  // f=100), not per-MIME — kitty graphics support is verified using a 1x1 PNG.
   if (ctx.protocol === "kitty" && ctx.probeDecode !== undefined) {
     let verdict: KittyProbeVerdict;
     try {
@@ -1086,13 +1095,34 @@ export async function runNativeRender(
   }
 
   // d) base64 → dimensions; validity is sniffed from the bytes.
-  const base64 = Buffer.from(bytes).toString("base64");
+  let base64 = Buffer.from(bytes).toString("base64");
   const dims = getImageDimensions(base64, mime);
   if (dims === null) {
     return { ok: false, reason: bounded("could not read image dimensions") };
   }
 
-  // e) Encode through pi-tui (D3); null means the capability vanished.
+  // e) For Kitty: protocol transmits f=100 (PNG). Non-PNG formats (JPEG, WebP, GIF)
+  // are converted to PNG for Kitty rendering (mirroring pi host Image component /
+  // tool-execution), avoiding Kitty PNG decode rejections while enabling native display.
+  if (ctx.protocol === "kitty" && mime !== "image/png") {
+    const convert = ctx.convertToPng ?? convertToPng;
+    let converted: { data: string; mimeType: string } | null;
+    try {
+      converted = await convert(base64, mime);
+    } catch {
+      converted = null;
+    }
+    if (!converted) {
+      return { ok: false, reason: bounded("could not convert image to PNG for Kitty rendering") };
+    }
+    base64 = converted.data;
+  }
+
+  if (ctx.signal?.aborted) {
+    return { ok: false, reason: bounded("render aborted") };
+  }
+
+  // f) Encode through pi-tui (D3); null means the capability vanished.
   const result = renderImage(base64, dims, {
     maxWidthCells: geometry.cols,
     maxHeightCells: geometry.rows,

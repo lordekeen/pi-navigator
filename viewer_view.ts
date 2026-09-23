@@ -351,10 +351,9 @@ function imageErrorLabel(support: ImageSupport): string {
 }
 
 /** True when runNativeRender's mime gate (D5) would accept this path. */
-function nativelyRenderable(relPath: string, protocol: NativeProtocol): boolean {
+function nativelyRenderable(relPath: string, _protocol: NativeProtocol): boolean {
   const mime = NATIVE_IMAGE_MIME[extOf(relPath)];
-  if (mime === undefined) return false;
-  return protocol !== "kitty" || mime === "image/png";
+  return mime !== undefined;
 }
 
 /**
@@ -378,9 +377,7 @@ export function imageCardHints(
       return ["this terminal does not support kitty/iTerm2 - use auto or chafa"];
     }
     if (!nativelyRenderable(file.relPath, support.nativeProtocol)) {
-      return support.nativeProtocol === "kitty"
-        ? ["kitty rendering needs PNG - chafa or auto can render this format"]
-        : ["this image format cannot be rendered natively - use chafa or auto"];
+      return ["this image format cannot be rendered natively - use chafa or auto"];
     }
     return [];
   }
