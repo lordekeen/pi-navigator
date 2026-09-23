@@ -8,9 +8,9 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
-| **Pending / Open** | 1 | 1 | 1 | **3** |
+| **Pending / Open** | 1 | 2 | 1 | **4** |
 | **Resolved** | 18 | 37 | 58 | **113** |
-| **Total** | **19** | **38** | **59** | **116** |
+| **Total** | **19** | **39** | **59** | **117** |
 
 ---
 
@@ -21,6 +21,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | [#020](020-no-viewer-cache-blocking-highlight.md) | No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread | Bug / Performance | High | `viewer.ts` | Open (partial — cache done; event-loop yielding deferred: blocked by pi's bundled-runtime virtual-module boundary, needs a pi-side API) |
 | [#067](067-typed-config-registry-paths.md) | Typed Config Registry Paths (`path` is `readonly string[]`) | Technical Debt / Type Safety | Low | `settings.ts` | **Deferred** — tracked, not scheduled: the compile-time path/default check is not worth the rework at five fields. Revisit when the schema grows (~15+ fields or a third level), `live: true` lands, the byte-pinned serialize test is relaxed, or a defect escapes that a type check would have caught |
 | [#069](069-native-image-rendering.md) | Native Terminal Image Rendering (kitty / iTerm2 via pi-tui) | Feature | Medium | `images.ts` / `viewer_view.ts` / `index.ts` | Open — implemented in v0.8.0 (spec [`native-image-rendering.md`](../specs/native-image-rendering.md)); awaiting the live-terminal QA checklist ([`qa-evidence.md`](../plans/qa-evidence.md)) before close |
+| [#117](117-native-abort-cascade-chafa-fallback.md) | Superseded Load's Chafa Fallback Aborts the Newest Native Image Render | Bug / Image Tier | Medium | `images.ts` / `viewer.ts` / `index.ts` | **Open** — filed 2026-09-23 from the #116 verification; deterministic two-load repro in the doc |
 
 ---
 
@@ -28,7 +29,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | ID | Title | Type | Severity | Resolution Summary | Status |
 | :--- | :--- | :--- | :--- | :--- | :---: |
-| [#116](116-first-image-chafa-tier-flip.md) | First Image of a Session Renders as Chafa, Later Ones Render Natively | Bug / Image Tier | Medium | Fixed dual causes: Kitty graphics protocol directly supports only PNG (transmitting JPEG/WebP left the viewer blank; gated to PNG so JPEG/WebP falls back cleanly to Chafa in auto mode and shows card in native mode); reverted top-of-screen header error suffix on successful Chafa renders so reasons only appear on metadata cards when images cannot be rendered. In addition, probe cache is scoped per overlay invocation, and collateral reflow/snapshot defects were resolved in v0.10.5. | **Resolved** |
+| [#116](116-first-image-chafa-tier-flip.md) | First Image of a Session Renders as Chafa, Later Ones Render Natively | Bug / Image Tier | Medium | v0.10.5 fixed the collateral defects (snapshot-bound seams, in-flight reflow arming, reflow re-arm); the decode probe is scoped per overlay invocation and v0.10.6 settled the root cause by always probing with a PNG sample. v0.10.8 renders JPEG/WebP/GIF on kitty by transcoding to PNG with the peer `pi-coding-agent`'s `convertToPng` (the v0.10.7 PNG-only gate was superseded within one release). Follow-up abort-cascade defect filed as [#117](117-native-abort-cascade-chafa-fallback.md). | **Resolved** |
 | [#113](113-git-group-row-ignores-leftw.md) | Git Group Rows Ignore `leftW`, Clipping the Status-Error Hint | Bug / UI Consistency | Low | `buildGitRow`'s group branch ignored the `leftW` it was handed, so #107's 57-cell error label overflowed the 44-cell pane at every terminal size and `joinLeftRight` clipped it mid-word — `(press r to retry)` never rendered. The label is now cut to the pane *before* styling (own `…`, per the #010 convention); short labels render byte-identically. +3 cases. | **Resolved** |
 | [#114](114-untested-cache-warn-wiring.md) | #109/#112/#108 Fixes Are Pinned Only at Helper Level; the Wiring Is Untested | Technical Debt / Test Coverage | Medium | The cache and walk-warning policies lived inline in closures no test could drive, so deleting the recency touch, the `cacheable` gate, or the warning left the suite green. Both are now exported units — `createViewerCache` (lookup/store/drop: cacheable gate, ±1 ms mtime, variant, LRU recency, capacity eviction, over-cap carve-out) and `makeTreeTruncationWarner` (one-shot latch) — with `loadFileCached` and the three walk sites delegating. +9 cases, each verified to fail when its fix is reverted. | **Resolved** |
 | [#115](115-test-count-drift-and-index-bookkeeping.md) | Test-Count Drift Reintroduced After #110; #079 Dropped From the Category List | Documentation | Low | The 639 count was stale two commits after #110 (+4 #111, +4 #112 → 647), and the batch index edit replaced `#079`'s category marker with `#110`'s (four other issues had no marker at all). The hand-maintained case count is retired in favour of the suite count, `docs/issues/README.md`'s abandoned duplicate table is reduced to a pointer, and the markers are now complete. New `test/docs.test.ts` guards the docs, the overview arithmetic and the markers. +5 cases. | **Resolved** |
@@ -147,7 +148,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 ## 📂 Issues by Category
 
 ### Bug Fixes & UI Consistency
-- [#116: First Image of a Session Renders as Chafa, Later Ones Render Natively](116-first-image-chafa-tier-flip.md)
+- [#117: Superseded Load's Chafa Fallback Aborts the Newest Native Image Render](117-native-abort-cascade-chafa-fallback.md) *(open)*
+- [#116: First Image of a Session Renders as Chafa, Later Ones Render Natively](116-first-image-chafa-tier-flip.md) *(resolved)*
 - [#113: Git Group Rows Ignore `leftW`, Clipping the Status-Error Hint](113-git-group-row-ignores-leftw.md) *(resolved)*
 - [#110: Keybinding Help Description and Documentation Drift Following Native Image Rendering](110-help-keybinding-description-native-image-drift.md) *(resolved)*
 - [#069: Native Terminal Image Rendering (kitty / iTerm2 via pi-tui)](069-native-image-rendering.md) *(open — live QA pending)*

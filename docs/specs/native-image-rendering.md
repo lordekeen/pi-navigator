@@ -2,6 +2,15 @@
 
 **Status:** Implemented (rev. 2 — v0.8.0); live-terminal QA pending per §14 step 7 (checklist in [`docs/plans/qa-evidence.md`](../plans/qa-evidence.md)). Rev. 1 was validated against pi-navigator v0.7.4, pi-tui 0.85.1, pi 0.86.1, pi-chafa v0.1.0, chafa 1.18.2, tmux 3.7c; rev. 2 records the implementation amendments (§7.2 width rule, §8.3 local predicate, §16.6).
 
+#### Amendment (rev. 3 — v0.10.8, Issue #116): kitty no longer degrades on non-PNG
+
+`runNativeRender` transcodes JPEG/WebP/GIF to PNG before transmission with
+`convertToPng`, re-exported by the peer `@earendil-works/pi-coding-agent` (the same
+converter pi's own `Image` component uses). D5's kitty PNG-only gate, the §2 rejection
+of conversion, and the `kitty requires PNG` cards/hints/tables in §5.3, §7.3, §9, §10,
+§12 and §15 are historical — superseded within one release of the v0.10.7 gate.
+Current behavior: [`#116` § Resolution](../issues/116-first-image-chafa-tier-flip.md).
+
 > **Rev. 1 findings baked in** (headless verification, 2026-09 field work):
 > 1. **pi-tui already ships the native layer.** `Image`, `renderImage`,
 >    `encodeKitty`, `encodeITerm2`, `getCapabilities`, `setCapabilityOverrides`,
@@ -98,9 +107,11 @@ The tier ladder becomes **native → chafa → metadata**, selected by a new
   reports `images: null` under tmux/screen. We inherit both facts (D8).
 - **Animated GIF playback.** Single frame, matching the chafa tier.
 - **Auto-enabling.** Default stays `off`; the opt-in philosophy is unchanged.
-- **Converting non-PNG formats for kitty.** pi-tui's kitty encoder sends
-  `f=100` (PNG) only; pi core converts with an internal `photon-node`
-  dependency we must not take. Non-PNG on kitty degrades (D5).
+- **~~Converting non-PNG formats for kitty.~~** **Amended (v0.10.8, Issue #116):**
+  conversion is in scope — `convertToPng` is re-exported by the peer
+  `@earendil-works/pi-coding-agent` (the same converter pi's own `Image` component
+  uses), so non-PNG on kitty transcodes instead of degrading. The rev. 1 reasoning
+  ("no *new* dependency") still holds: the converter arrives through the existing peer.
 - **Resizing/compressing oversized images.** Over the native byte cap → card
   with a hint; no image-processing dependency.
 - **Changing the LLM-visible surface.** No image content blocks are ever
@@ -234,7 +245,7 @@ accounting difference is exactly what the live QA gate must judge (§8, §16).
 | D2 | **Protocols: kitty and iTerm2 only.** Sixel deferred to upstream pi-tui. | pi-tui's closed union; sixel has no line model or placement primitives. |
 | D3 | **Reuse pi-tui; never emit protocol bytes ourselves.** `renderImage` + `allocateImageId` + our row layout mirroring `Image.render` exactly. chafa's native formats rejected. | Placement registry, renderer diff deletion, scroll crops, and alt-screen placement reuse depend on pi-tui-generated sequences. |
 | D4 | **Capability ladder mirrors pi-chafa:** `getCapabilities().images` → settings `terminal.images` (`"kitty"\|"iterm2"` only) → `PI_IMAGE_PROTOCOL` (`"kitty"\|"iterm2"`) → null; positive-only. | Survives a non-shared pi-tui instance; never re-enables a host-detected "no". |
-| D5 | **Mime gate: kitty → PNG only; iTerm2 → png/jpeg/gif/webp; else fall to the next tier.** | pi-tui kitty sends `f=100`; no converter dependency allowed. |
+| D5 | **Mime gate: kitty → every `NATIVE_IMAGE_MIME` format, non-PNG transcoded to PNG; iTerm2 → png/jpeg/gif/webp; else fall to the next tier.** *(Amended by Issue #116, v0.10.8.)* | pi-tui kitty sends `f=100`; the peer `pi-coding-agent` re-exports pi's own `convertToPng`, so no new dependency is taken. |
 | D6 | **Revise the old D6 (chafa spec): mirror `preferNative` (+ `CHAFA_PREFER_NATIVE`).** `auto` honors it; explicit `native`/`chafa` ignore it. `formatOrder` stays ignored (dead placeholder). | Both surfaces should agree on automatic delivery; explicit mode wins over borrowed preference. |
 | D7 | **Byte cap `IMAGE_NATIVE_MAX_BYTES = 4 MiB` (new constant).** Over cap → card hint. Native entries larger than `IMAGE_NATIVE_CACHE_MAX_CHARS` are displayed but not retained in the viewer cache. | Bounded memory; base64 rows are large; `MAX_VIEWER_CACHE_ENTRIES` alone (16) is not a byte bound. |
 | D7b | **Amendment (Issue #112): kitty native renders are never cached.** A cached line carries a kitty image id, and re-emitting the same id makes pi-tui place the image without re-transmitting it — blank pane after the `i` roundtrip or a reopen. iTerm2 keeps D7. | Correctness over the D7 byte bound: a fresh id per visibility cycle is the only fix that needs no protocol code of our own. |

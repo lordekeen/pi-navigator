@@ -169,8 +169,8 @@ settle them:
 
 ## Native terminal images (#069) — live QA checklist (spec §14 step 7)
 
-Automated evidence is green: `npm run typecheck` clean and `npm test` 558/558
-across 19 suites — including the native encoders (`runNativeRender` under
+Automated evidence is green: `npm run typecheck` clean and the full `npm test` suite
+green — including the native encoders (`runNativeRender` under
 `setCapabilities`), the loader fallback logic, view-model byte-identity, and
 width-safety with the kitty sequence at 120×36 / 100×28 / 80×24 / 60 / 50.
 What follows needs a real terminal and a human eye; record results below.
@@ -190,8 +190,8 @@ WezTerm, Warp), `images.mode: "native"` in `~/.pi/agent/pi-navigator.json`
 | 5 | `r` reload and the refresh poll | No flicker, no re-anchor; the sequence is not re-emitted while the file is unchanged | |
 | 6 | Resize the terminal while the image is open | One debounced re-render at the new geometry; no stacking/ghosting; no reflow loop | |
 | 7 | Scroll keys `j`/`k`/`g`/`G`/`Ctrl+d`/`Ctrl+u` | Inert on the native image | |
-| 8 | JPEG/GIF/WebP under kitty, `mode: native` | Card with the PNG hint; no corrupt output | |
-| 9 | Same files under `mode: auto` | chafa fallback when chafa + pi-chafa are installed, else the card | |
+| 8 | JPEG/GIF/WebP under kitty, `mode: native` | Real image (transcoded to PNG); no PNG hint, no corrupt output | |
+| 9 | Same files under `mode: auto` | Native as in 8; chafa only for formats the terminal cannot render | |
 | 10 | Non-capable terminal + `mode: native` | Card with the unsupported-terminal hint; nothing emitted | |
 | 11 | tmux (this machine's default): forced `terminal.images: "kitty"` + `mode: native` | Document actual behavior — expected: sequences forwarded only with tmux `allow-passthrough on` and a kitty-family outer terminal, otherwise a garbage-free no-op | |
 | 12 | iTerm2 spot check (macOS, if available) | Same as 1–7 with the `iterm2` badge | |

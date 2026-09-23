@@ -1,5 +1,13 @@
 # pi-navigator Code Review Report
 
+> **Historical document.** This is a point-in-time review from the v0.9.0 era; its
+> findings were filed as #070–#099 and are tracked in
+> [`docs/issues/issues_index.md`](issues/issues_index.md). File/line citations reflect
+> the tree at review time — do not read this as current state. In particular, Issue B's
+> "kitty gates to PNG-only" contract was superseded by #071, then by #116's v0.10.8
+> conversion path (kitty transcodes JPEG/WebP/GIF to PNG instead of falling back to
+> chafa).
+>
 > **Scope:** Full codebase review (~16.5k lines across 20 source + 19 test files), skipping `./docs/`.
 > **Focus areas:** Two user-reported image rendering issues, plus general code quality.
 
@@ -76,7 +84,11 @@ flowchart TD
 ### Issue B: JPG/JPEG Falls Back to Chafa in Auto Mode (Kitty)
 
 > [!IMPORTANT]
-> **This is expected behavior by design** — the code intentionally gates kitty to PNG-only.
+> **Superseded (v0.10.8, #116).** The code no longer gates kitty to PNG-only for
+> JPEG/WebP/GIF: `runNativeRender` transcodes non-PNG formats to PNG with the peer
+> `pi-coding-agent`'s `convertToPng` before transmission. The PNG-only gate described
+> below was introduced by #071's successor and removed within one release; the
+> section is kept for provenance.
 
 #### How It Works
 

@@ -138,16 +138,16 @@ to pick a tier:
 | Mode | Behavior |
 | :--- | :--- |
 | `off` (default) | Metadata card only. |
-| `native` | Real terminal graphics when the terminal speaks kitty or iTerm2 and the file is renderable (kitty: PNG/JPEG/WebP; iTerm2: PNG/JPEG/GIF/WebP); otherwise the card explains why. No chafa or pi-chafa needed. |
+| `native` | Real terminal graphics when the terminal speaks kitty or iTerm2 and the file is renderable (kitty: PNG, or JPEG/WebP/GIF transcoded to PNG; iTerm2: PNG/JPEG/GIF/WebP); otherwise the card explains why. No chafa or pi-chafa needed. |
 | `chafa` | chafa symbol art — requires **chafa ≥ 1.10** plus the **pi-chafa** extension — degrading to the card. |
-| `auto` | Native when capable, then chafa, then the card — decided per file (JPEG/WebP render natively on kitty; formats the terminal cannot render fall back to chafa when available). pi-chafa's `preferNative: false` (or `CHAFA_PREFER_NATIVE=0`) makes `auto` choose chafa. |
+| `auto` | Native when capable, then chafa, then the card — decided per file (JPEG/WebP/GIF render natively on kitty via PNG transcoding; formats the terminal cannot render fall back to chafa when available). pi-chafa's `preferNative: false` (or `CHAFA_PREFER_NATIVE=0`) makes `auto` choose chafa. |
 
 Native rendering reuses pi-tui's kitty/iTerm2 encoders (pi-navigator emits no
 protocol bytes of its own, except a one-shot kitty `a=q` decode query on the
-first native render of a session — the terminal's own OK/error reply decides
-whether native stays enabled for that time; `OK` keeps it, an explicit error
-degrades that file to chafa or the card, and an unanswered query keeps the
-current behavior) and reads at most 4 MiB per image. The
+first native render of each `/navigator` open — the terminal's own OK/error reply
+decides whether native stays enabled for that invocation; `OK` keeps it, an
+explicit error degrades images to chafa or the card, and an unanswered query
+keeps the current behavior) and reads at most 4 MiB per image. The
 image is bounded by the viewer pane and by pi's `terminal.imageWidthCells`
 preference. Fullscreen (`tuiMode: fullscreen`) supports kitty only — pi-tui
 disables iTerm2 images there. **tmux/screen** and terminals without image

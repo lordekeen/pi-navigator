@@ -57,6 +57,12 @@ was non-native.
   discarded by the `loadSeq` guard. `"render aborted"` is unreachable for the native
   seam in production (only a pre-aborted direct call, pinned by
   `test/images.test.ts`); only chafa is abortable mid-flight (`images.ts:697-699`).
+
+  > **Superseded in v0.10.8:** the PNG-conversion round added a second
+  > `signal.aborted` check after the read/conversion await (`images.ts:1122`), so the
+  > native abort path *is* reachable and a superseded load's chafa fallback can abort
+  > the current load's render. Filed as
+  > [#117](117-native-abort-cascade-chafa-fallback.md).
 - **`renderImage` returning null** — only when `caps.images` is falsy, and pi-tui's
   detection is synchronous and env-based.
 - **Image-id collisions** — real transmissions use `a=T,f=100,q=2` and elicit no replies.
@@ -179,10 +185,10 @@ evidence of a first-load mechanism.
 ## Acceptance Criteria
 
 - [x] The tier a load renders at is decided from one immutable snapshot, so a mid-load support change cannot make the seams disagree with the loader.
-- [x] A clean native failure that falls through to chafa **keeps its reason**, surfaced in the header or card hint.
+- [x] A clean native failure that falls through to chafa **keeps its reason**, surfaced in the header or card hint. *(v0.10.7 deliberately reversed this: the header suffix was removed as header-error pollution, so the reason now surfaces on the metadata card only — see the Resolution §2.)*
 - [x] `setImageSupport` arms the upgrade reflow when an image load is *in flight* (`viewTargetRelPath` is an image), not only when `viewFile` is set.
 - [x] A reflow never fires while a load is in flight (`viewLoading`).
-- [ ] Abort ownership is per load: one load cannot abort another's render. — **deferred, see below**
+- [ ] Abort ownership is per load: one load cannot abort another's render. — **deferred, see below**; became a live defect in v0.10.8 → [#117](117-native-abort-cascade-chafa-fallback.md)
 - [x] An error verdict from the kitty decode probe does not permanently degrade every image of that MIME for the whole process.
 - [x] The first image of a session renders at the same tier as later ones, verified live.
 
@@ -227,3 +233,10 @@ so it is left until the probe question is settled.
    When an image falls back to Chafa (e.g. over-cap 4 MiB images, SVG, or unconvertible files), Chafa renders cleanly with standard `chafa · i card` badges without attaching error suffixes (`imageError`) to the header. Diagnostic failure messages are reserved exclusively for metadata cards when an image cannot be rendered at all.
 3. **Protocol-level Kitty probe**:
    The Kitty protocol probe (`buildKittyProbeQuery`) transmits a valid 1×1 PNG sample under `f=100` and is cached per overlay invocation in `index.ts`, verifying that the terminal supports Kitty graphics without failing due to format mismatch.
+
+## Follow-up (2026-09-23)
+
+- [#117](117-native-abort-cascade-chafa-fallback.md) — verification of v0.10.8 found that the
+  deferred abort-ownership item above is no longer dormant: the new post-read/post-conversion
+  `signal.aborted` check (`images.ts:1122`) makes a superseded load's chafa fallback able to
+  abort the newest load's native render. Reproduced deterministically; filed as a pending bug.
