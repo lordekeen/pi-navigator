@@ -101,6 +101,14 @@ describe("parseNavigatorArgs (Issue #095)", () => {
     expect(parseNavigatorArgs("help extra")).toEqual({ kind: "help" });
   });
 
+  it("routes the layout subcommands to the layout kind with their layout (Issue #119)", () => {
+    expect(parseNavigatorArgs("all")).toEqual({ kind: "layout", layout: "files-git-viewer" });
+    expect(parseNavigatorArgs("files")).toEqual({ kind: "layout", layout: "files-viewer" });
+    expect(parseNavigatorArgs("git")).toEqual({ kind: "layout", layout: "git-viewer" });
+    expect(parseNavigatorArgs("git  ")).toEqual({ kind: "layout", layout: "git-viewer" });
+    expect(parseNavigatorArgs("files trailing tokens")).toEqual({ kind: "layout", layout: "files-viewer" });
+  });
+
   it("parses unknown subcommands and preserves raw token", () => {
     expect(parseNavigatorArgs("bogus")).toEqual({ kind: "unknown", raw: "bogus" });
     expect(parseNavigatorArgs("foo bar")).toEqual({ kind: "unknown", raw: "foo" });
@@ -112,8 +120,27 @@ describe("navigatorCompletions (Issue #095)", () => {
     const completions = navigatorCompletions("");
     expect(completions).not.toBeNull();
     const values = completions!.map((c) => c.value);
-    expect(values).toContain("settings");
-    expect(values).toContain("help");
+    // Issue #119: the three layout openers lead the table.
+    expect(values).toEqual(["all", "files", "git", "settings", "help"]);
+  });
+
+  it("exposes the layout openers' completion labels and descriptions", () => {
+    const completions = navigatorCompletions("");
+    expect(completions![0]).toEqual({
+      value: "all",
+      label: "Open files + git + viewer overlay",
+      description: "open overlay with files and git panes (default)",
+    });
+    expect(completions![1]).toEqual({
+      value: "files",
+      label: "Open files + viewer overlay",
+      description: "open overlay with files pane only",
+    });
+    expect(completions![2]).toEqual({
+      value: "git",
+      label: "Open git + viewer overlay",
+      description: "open overlay with git panel only",
+    });
   });
 
   it("filters completions by prefix", () => {
@@ -192,8 +219,49 @@ describe("extension lifecycle & routing (Issue #095)", () => {
     expect(renderedLines.some((l: string) => l.includes("pi-navigator"))).toBe(true);
     expect(renderedLines.some((l: string) => l.includes("/navigator settings"))).toBe(true);
     expect(renderedLines.some((l: string) => l.includes("/navigator help"))).toBe(true);
+    // Issue #119: the durable help lists all five subcommands.
+    expect(renderedLines.some((l: string) => l.includes("/navigator all"))).toBe(true);
+    expect(renderedLines.some((l: string) => l.includes("/navigator files"))).toBe(true);
+    expect(renderedLines.some((l: string) => l.includes("/navigator git"))).toBe(true);
+  });
+
+  it("passes a layout subcommand's layout through to runNavigator (Issue #119)", async () => {
+    const { pi, commands } = mockPi();
+    registerNavigatorExtension(pi);
+    const cmd = commands.get("navigator");
+    // runNavigator surfaces the layout through the overlay options it hands
+    // to ctx.ui.custom — capture the factory's options argument.
+    const customCalls: unknown[][] = [];
+    const { ctx } = mockCtxWithCustomCapture(customCalls);
+
+    await cmd.handler("files", ctx);
+    expect(ctx.ui.custom).toHaveBeenCalledTimes(1);
+    const options = customCalls[0]?.[1] as { overlay: boolean } | undefined;
+    expect(options?.overlay).toBe(true);
+
+    await cmd.handler("", ctx); // bare: still opens (settings default resolves inside)
+    expect(ctx.ui.custom).toHaveBeenCalledTimes(2);
   });
 });
+
+/** mockCtx variant that records every ctx.ui.custom call's arguments. */
+function mockCtxWithCustomCapture(calls: unknown[][]): { ctx: any; notifications: Array<{ msg: string; level: string }> } {
+  const notifications: Array<{ msg: string; level: string }> = [];
+  const ctx = {
+    hasUI: true,
+    cwd: "/test",
+    ui: {
+      notify: (msg: string, level: string) => notifications.push({ msg, level }),
+      custom: vi.fn((...args: unknown[]) => {
+        calls.push(args);
+        // The overlay factory returns its component object; the harness never
+        // renders it, so resolving null (close) immediately is fine.
+        return Promise.resolve(null);
+      }),
+    },
+  };
+  return { ctx: ctx as any, notifications };
+}
 describe("makeTuiKittyDecodeProbe (Issue #101, #116)", () => {
   type Listener = ((data: string) => { consume?: boolean; data?: string } | undefined) | undefined;
 

@@ -8,6 +8,8 @@
  * truncating width.
  */
 
+import type { NavigatorLayout } from "./types";
+
 export const HELP_ENTRY_TYPE = "navigator-help";
 
 export interface NavigatorHelpData {
@@ -22,10 +24,20 @@ export const NAVIGATOR_CMD_PREFIX = "/navigator ";
  * the argument completions, and the arg parser together so the three cannot
  * drift (Issue #063 finding 5). `cmd` is the full command string;
  * `completionLabel` is the completion popup label; `desc` is shared verbatim
- * by the help rows and the completions.
+ * by the help rows and the completions. Rows carrying a `layout` open that
+ * layout directly (Issue #119) — one-open selections that never write
+ * settings; bare /navigator resolves the layout.default setting instead.
  */
-export const NAVIGATOR_SUBCOMMANDS: readonly { cmd: string; desc: string; completionLabel: string }[] = [
-  { cmd: `${NAVIGATOR_CMD_PREFIX}settings`, desc: "configure images, icons, viewer, and tree behavior", completionLabel: "Open the settings menu" },
+export const NAVIGATOR_SUBCOMMANDS: readonly {
+  cmd: string;
+  desc: string;
+  completionLabel: string;
+  layout?: NavigatorLayout;
+}[] = [
+  { cmd: `${NAVIGATOR_CMD_PREFIX}all`, desc: "open overlay with files and git panes (default)", completionLabel: "Open files + git + viewer overlay", layout: "files-git-viewer" },
+  { cmd: `${NAVIGATOR_CMD_PREFIX}files`, desc: "open overlay with files pane only", completionLabel: "Open files + viewer overlay", layout: "files-viewer" },
+  { cmd: `${NAVIGATOR_CMD_PREFIX}git`, desc: "open overlay with git panel only", completionLabel: "Open git + viewer overlay", layout: "git-viewer" },
+  { cmd: `${NAVIGATOR_CMD_PREFIX}settings`, desc: "configure images, icons, viewer, tree, and layout behavior", completionLabel: "Open the settings menu" },
   { cmd: `${NAVIGATOR_CMD_PREFIX}help`, desc: "show this command list", completionLabel: "Show the command list" },
 ];
 

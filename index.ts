@@ -51,6 +51,7 @@ import {
 } from "./git";
 import { ICONS_ENV } from "./icons";
 import { buildHelpLines, HELP_COMMANDS_TITLE, HELP_HEADER_PREFIX, HELP_HINT, HELP_ENTRY_TYPE, helpCommandColumnWidth, NAVIGATOR_CMD_PREFIX, NAVIGATOR_SUBCOMMANDS, type NavigatorHelpData } from "./help";
+import type { NavigatorLayout } from "./types";
 import { makeDeferredImageSupport, resolveImageSupport, runChafaRender, runNativeRender, buildKittyProbeQuery, consumeKittyProbeReply, createKittyProbeState, detectPiChafa, type ImageSupport, type KittyProbeState, type KittyProbeVerdict, type NativeProtocol } from "./images";
 import { loadNavigatorSettings, writeNavigatorSettings } from "./settings";
 import { navigatorFieldNotes, openSettingsMenu } from "./settings_menu";
@@ -203,22 +204,29 @@ export function makeImageSeams(opts: {
 /**
  * Pure argument routing for /navigator (Issue #061): the first whitespace
  * token decides, trailing tokens are ignored, matching is case-sensitive
- * lowercase (a `Settings` token is unknown).
+ * lowercase (a `Settings` token is unknown). Layout subcommands (Issue #119)
+ * resolve through the shared table's `layout` field to `{ kind: "layout" }`.
  */
 export type ParsedNavigatorArgs =
   | { readonly kind: "overlay" }
   | { readonly kind: "settings" }
   | { readonly kind: "help" }
+  | { readonly kind: "layout"; readonly layout: NavigatorLayout }
   | { readonly kind: "unknown"; readonly raw: string };
 
 export function parseNavigatorArgs(args: string): ParsedNavigatorArgs {
   const token = args.trim().split(/\s+/).filter(Boolean)[0];
   if (token === undefined) return { kind: "overlay" };
-  // Subcommand tokens come from the shared help table (Issue #063 finding 5);
-  // the kind and the token are the same identifier by construction.
-  const known = NAVIGATOR_SUBCOMMANDS.some((sub) => sub.cmd.slice(NAVIGATOR_CMD_PREFIX.length) === token);
-  if (known) return { kind: token as "settings" | "help" };
-  return { kind: "unknown", raw: token };
+  // Subcommand tokens come from the shared help table (Issue #063 finding 5):
+  // a table lookup — never a cast — so an unknown token can never be
+  // re-labeled into a known kind. A row carrying a layout routes to the
+  // layout kind with that layout (Issue #119, D12); settings/help keep their
+  // own kinds; anything else is unknown.
+  const sub = NAVIGATOR_SUBCOMMANDS.find((candidate) => candidate.cmd.slice(NAVIGATOR_CMD_PREFIX.length) === token);
+  if (sub === undefined) return { kind: "unknown", raw: token };
+  if (sub.layout !== undefined) return { kind: "layout", layout: sub.layout };
+  if (sub.cmd.endsWith("settings")) return { kind: "settings" };
+  return { kind: "help" };
 }
 
 /**
@@ -375,7 +383,11 @@ export function createViewerCache(maxEntries: number): ViewerCache {
   };
 }
 
-async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionCommandContext): Promise<void> {
+async function runNavigator(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext | ExtensionCommandContext,
+  layoutOverride?: NavigatorLayout,
+): Promise<void> {
   if (!ctx.hasUI) {
     ctx.ui.notify("pi-navigator requires the interactive TUI", "warning");
     return;
@@ -638,6 +650,10 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
         initialShowHidden: loaded.settings.tree.showHidden,
         initialWrap: loaded.settings.viewer.wrap,
         initialRenderMarkdown: loaded.settings.viewer.markdown === "rendered",
+        // Issue #119: a layout subcommand opens its own layout for this one
+        // session; bare /navigator resolves the layout.default setting (env
+        // already applied inside loadNavigatorSettings).
+        initialLayout: layoutOverride ?? loaded.settings.layout.default,
       });
 
       // Fire-and-forget: the overlay opens immediately; a resolved snapshot
@@ -897,6 +913,9 @@ export default function (pi: ExtensionAPI): void {
       switch (parsed.kind) {
         case "overlay":
           await runNavigator(pi, ctx);
+          return;
+        case "layout":
+          await runNavigator(pi, ctx, parsed.layout);
           return;
         case "settings":
           await runSettings(pi, ctx);

@@ -50,15 +50,18 @@ describe("buildHelpLines", () => {
   it("produces the exact layout: header, commands title, aligned rows, blank, hint", () => {
     const cwd = "/work/repo";
     const lines = buildHelpLines({ cwd });
-    expect(lines).toHaveLength(7);
+    expect(lines).toHaveLength(10);
     expect(lines[0]).toBe(`pi-navigator \u2014 ${cwd}`);
     expect(lines[0]).toBe(`${HELP_HEADER_PREFIX}${cwd}`);
     expect(lines[1]).toBe(HELP_COMMANDS_TITLE);
     expect(lines[2]).toBe("/navigator".padEnd(helpCommandColumnWidth()) + "open the read-only project navigator overlay");
-    expect(lines[3]).toBe("/navigator settings".padEnd(helpCommandColumnWidth()) + "configure images, icons, viewer, and tree behavior");
-    expect(lines[4]).toBe("/navigator help".padEnd(helpCommandColumnWidth()) + "show this command list");
-    expect(lines[5]).toBe("");
-    expect(lines[6]).toBe(HELP_HINT);
+    expect(lines[3]).toBe("/navigator all".padEnd(helpCommandColumnWidth()) + "open overlay with files and git panes (default)");
+    expect(lines[4]).toBe("/navigator files".padEnd(helpCommandColumnWidth()) + "open overlay with files pane only");
+    expect(lines[5]).toBe("/navigator git".padEnd(helpCommandColumnWidth()) + "open overlay with git panel only");
+    expect(lines[6]).toBe("/navigator settings".padEnd(helpCommandColumnWidth()) + "configure images, icons, viewer, tree, and layout behavior");
+    expect(lines[7]).toBe("/navigator help".padEnd(helpCommandColumnWidth()) + "show this command list");
+    expect(lines[8]).toBe("");
+    expect(lines[9]).toBe(HELP_HINT);
   });
 
   it("aligns the command column to the longest command plus 2", () => {
@@ -83,6 +86,9 @@ describe("buildHelpLines", () => {
   it("lists every command row in the documented order", () => {
     expect(NAVIGATOR_COMMANDS.map((row) => row.cmd)).toEqual([
       "/navigator",
+      "/navigator all",
+      "/navigator files",
+      "/navigator git",
       "/navigator settings",
       "/navigator help",
     ]);
@@ -103,6 +109,13 @@ describe("parseNavigatorArgs", () => {
   it("routes help", () => {
     expect(parseNavigatorArgs("help")).toEqual({ kind: "help" });
     expect(parseNavigatorArgs(" help ")).toEqual({ kind: "help" });
+  });
+
+  it("routes the three layout subcommands to the layout kind with their layout (Issue #119)", () => {
+    expect(parseNavigatorArgs("all")).toEqual({ kind: "layout", layout: "files-git-viewer" });
+    expect(parseNavigatorArgs("files")).toEqual({ kind: "layout", layout: "files-viewer" });
+    expect(parseNavigatorArgs("git")).toEqual({ kind: "layout", layout: "git-viewer" });
+    expect(parseNavigatorArgs(" files extra")).toEqual({ kind: "layout", layout: "files-viewer" });
   });
 
   it("ignores trailing tokens after the first subcommand", () => {
@@ -138,26 +151,33 @@ describe("navigatorCompletions", () => {
     );
     const rows = navigatorCompletions("");
     expect(rows).not.toBeNull();
-    // Documented order: the settings token first.
-    expect(rows?.map((row) => row.value)).toEqual(["settings", "help"]);
+    // Documented order: the three layout openers, then settings, then help.
+    expect(rows?.map((row) => row.value)).toEqual(["all", "files", "git", "settings", "help"]);
   });
 
   it("filters by prefix and returns null with no match", () => {
     expect(navigatorCompletions("se")).toEqual([
-      { value: "settings", label: "Open the settings menu", description: "configure images, icons, viewer, and tree behavior" },
+      { value: "settings", label: "Open the settings menu", description: "configure images, icons, viewer, tree, and layout behavior" },
     ]);
     expect(navigatorCompletions("he")).toEqual([
       { value: "help", label: "Show the command list", description: "show this command list" },
+    ]);
+    expect(navigatorCompletions("f")).toEqual([
+      { value: "files", label: "Open files + viewer overlay", description: "open overlay with files pane only" },
     ]);
     expect(navigatorCompletions("zz")).toBeNull();
   });
 });
 
 describe("single-source derivations (Issue #063 finding 5)", () => {
-  it("parses every subcommand token to its own kind", () => {
+  it("parses every subcommand token to its own kind (layout rows carry their layout, Issue #119)", () => {
     for (const sub of NAVIGATOR_SUBCOMMANDS) {
       const token = sub.cmd.slice(NAVIGATOR_CMD_PREFIX.length);
-      expect(parseNavigatorArgs(token)).toEqual({ kind: token });
+      if (sub.layout !== undefined) {
+        expect(parseNavigatorArgs(token)).toEqual({ kind: "layout", layout: sub.layout });
+      } else {
+        expect(parseNavigatorArgs(token)).toEqual({ kind: token });
+      }
     }
     expect(parseNavigatorArgs("bogus")).toEqual({ kind: "unknown", raw: "bogus" });
   });
