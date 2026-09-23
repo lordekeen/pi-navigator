@@ -8,8 +8,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
-| **Pending / Open** | 1 | 2 | 1 | **4** |
-| **Resolved** | 18 | 38 | 59 | **115** |
+| **Pending / Open** | 1 | 1 | 1 | **3** |
+| **Resolved** | 18 | 39 | 59 | **116** |
 | **Total** | **19** | **40** | **60** | **119** |
 
 ---
@@ -21,7 +21,6 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | [#020](020-no-viewer-cache-blocking-highlight.md) | No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread | Bug / Performance | High | `viewer.ts` | Open (partial — cache done; event-loop yielding deferred: blocked by pi's bundled-runtime virtual-module boundary, needs a pi-side API) |
 | [#067](067-typed-config-registry-paths.md) | Typed Config Registry Paths (`path` is `readonly string[]`) | Technical Debt / Type Safety | Low | `settings.ts` | **Deferred** — tracked, not scheduled: the compile-time path/default check is not worth the rework at five fields. Revisit when the schema grows (~15+ fields or a third level), `live: true` lands, the byte-pinned serialize test is relaxed, or a defect escapes that a type check would have caught |
 | [#069](069-native-image-rendering.md) | Native Terminal Image Rendering (kitty / iTerm2 via pi-tui) | Feature | Medium | `images.ts` / `viewer_view.ts` / `index.ts` | Open — implemented in v0.8.0 (spec [`native-image-rendering.md`](../specs/native-image-rendering.md)); awaiting the live-terminal QA checklist ([`qa-evidence.md`](../plans/qa-evidence.md)) before close |
-| [#119](119-overlay-layout-modes.md) | Overlay Has a Single Layout; No Files-Only or Git-Only Modes | Feature | Medium | `types.ts` / `frame.ts` / `navigator.ts` / `settings.ts` / `help.ts` / `index.ts` | Open — spec [`overlay-layout-modes.md`](../specs/overlay-layout-modes.md) approved; awaiting implementation (commit slicing in spec §13) |
 
 ---
 
@@ -29,6 +28,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | ID | Title | Type | Severity | Resolution Summary | Status |
 | :--- | :--- | :--- | :--- | :--- | :---: |
+| [#119](119-overlay-layout-modes.md) | Overlay Has a Single Layout; No Files-Only or Git-Only Modes | Feature | Medium | Three overlay layouts — `files-git-viewer` (default), `files-viewer`, `git-viewer` — selected at open time via `/navigator all\|files\|git` (one-open, never persists), the `layout.default` setting (registry-driven, menu-editable), and the `PI_NAV_LAYOUT` env override (env wins, invalid warns once). Pure derivations in frame.ts (`layoutPanes`/`layoutRows`/`visiblePanes`/`initialFocus`/`cycleFocus`); Tab cycles visible panes; single-pane layouts fill the body with no separator; the default layout renders byte-identically (regression-pinned). +34 cases across frame/render/navigator/settings/settings_menu/help/index. version 0.12.0. | **Resolved** |
 | [#118](118-settings-menu-chafa-capability-note.md) | Settings Menu Offers `chafa` Mode With No Indication That pi-chafa Is Required | Enhancement / UX | Low | Pure `navigatorFieldNotes({ piChafaPresent })` + `buildSettingItems(..., notes?)` append a capability note to the `images.mode` row; `runSettings` detects presence via `detectPiChafa` while the menu module stays pi-free. Annotate, not hide — pre-configuring before install keeps working. +2 tests. version 0.11.0. | **Resolved** |
 | [#117](117-native-abort-cascade-chafa-fallback.md) | Superseded Load's Chafa Fallback Aborts the Newest Native Image Render | Bug / Image Tier | Medium | `viewer.ts` no longer falls through to the chafa seam when the native render returned `render aborted` — a supersession signal, not a render failure — so a superseded load cannot call `nextAbortSlot()` and abort the newer load's render. `IMAGE_ABORT_REASON` is the shared constant. +2 tests (viewer no-fallback; deterministic two-load cascade with real seams/render), each verified to fail with the fix disabled. Dead `KITTY_PROBE_SAMPLES` table removed; `nativelyRenderable` param cleanup. version 0.10.9; per-load abort ownership followed in v0.10.10. | **Resolved** |
 | [#116](116-first-image-chafa-tier-flip.md) | First Image of a Session Renders as Chafa, Later Ones Render Natively | Bug / Image Tier | Medium | v0.10.5 fixed the collateral defects (snapshot-bound seams, in-flight reflow arming, reflow re-arm); the decode probe is scoped per overlay invocation and v0.10.6 settled the root cause by always probing with a PNG sample. v0.10.8 renders JPEG/WebP/GIF on kitty by transcoding to PNG with the peer `pi-coding-agent`'s `convertToPng` (the v0.10.7 PNG-only gate was superseded within one release). Follow-up abort-cascade defect filed as [#117](117-native-abort-cascade-chafa-fallback.md); the deferred per-load abort ownership item was implemented in v0.10.10 (`beginImageLoad` + seam signal forwarding, chafa pre-spawn abort check). | **Resolved** |

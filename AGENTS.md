@@ -14,6 +14,8 @@ Opened via the `/navigator` command, it renders a centered overlay with three pa
 - **Git panel** — branch, ahead/behind counters, unstaged/staged groups, and recent commit history.
 - **Viewer pane** — syntax-highlighted, read-only file viewing with caps, tab expansion, word wrap, horizontal scroll, and in-file search.
 
+Three overlay layouts (Issue #119) choose which left-column panes render beside the viewer: `files-git-viewer` (files + git, the default), `files-viewer` (files only), and `git-viewer` (git only). Bare `/navigator` opens the `layout.default` setting; `/navigator all|files|git` open their layout for one session; `PI_NAV_LAYOUT` overrides the setting (env wins). Layout is presentation-only — data collection is identical in all three.
+
 The overlay is a pure TUI component; it never touches the filesystem or git directly. All async/data work lives in `index.ts`; the component (`navigator.ts`) owns UI state only.
 
 ---
@@ -56,9 +58,9 @@ The overlay is a pure TUI component; it never touches the filesystem or git dire
 
 | File | Owns |
 |---|---|
-| `index.ts` | Extension entry; registers `/navigator` (subcommands `settings` / `help`, argument completions, the help entry renderer); owns all async work (git, tree collection, file stat) and pushes results into the overlay via setters. |
-| `navigator.ts` | `NavigatorOverlay` — the TUI component: state, caches, input routing and render orchestration, delegating each pane's view-model to the modules below (Issue #064). UI state only; no fs/git. Re-exports `HELP_ROWS`. |
-| `frame.ts` | Overlay geometry + chrome: heights/areas, the files↔git split, column width, `padTo`/`joinLeftRight`/`truncateAndWidth`, `shortPath`, title/footer rows, the focus/mode hint tables. Pure. |
+| `index.ts` | Extension entry; registers `/navigator` (subcommands `all` / `files` / `git` / `settings` / `help`, argument completions, the help entry renderer); owns all async work (git, tree collection, file stat) and pushes results into the overlay via setters. |
+| `navigator.ts` | `NavigatorOverlay` — the TUI component: state (incl. the `initialLayout` choice, Issue #119), caches, input routing and render orchestration, delegating each pane's view-model to the modules below (Issue #064). UI state only; no fs/git. Re-exports `HELP_ROWS`. |
+| `frame.ts` | Overlay geometry + chrome: heights/areas, the files↔git split, the pure layout derivations (`layoutPanes`/`layoutRows`/`visiblePanes`/`initialFocus`/`cycleFocus`, Issue #119), column width, `padTo`/`joinLeftRight`/`truncateAndWidth`, `shortPath`, title/footer rows, the focus/mode hint tables. Pure. |
 | `files_view.ts` | Files pane view-model: `buildFilesRows`, files header + file row. Pure functions of a small `FilesViewContext`. |
 | `git_view.ts` | Git pane view-model: `buildGitRows`/`buildGitNavRows` (incl. the commit-family DFS), git header + row, `commitMarker`, `codeText`. Pure. |
 | `viewer_view.ts` | Viewer pane view-model: `renderViewerPane`, header, input/search/filter bars, image card + `imageCardHints`, `canRenderMarkdown`, pane content geometry. Pure — the class precomputes rows, marked files and clamped offsets. |
@@ -70,16 +72,16 @@ The overlay is a pure TUI component; it never touches the filesystem or git dire
 | `icons.ts` | Nerd Font glyph map + `parseIconMode` (a thin projection onto `env.ts`; `parseEnableIcons` is its compatibility wrapper); icons are explicitly opt-in via `icons.enabled` or `PI_NAV_ICONS` (env wins) and never auto-detected. |
 | `env.ts` | Shared env truth-table parser (`parseTruthyEnv`) behind `PI_NAV_ICONS` / `PI_NAV_IMAGES`. Pure, dependency-free (imported by the component module graph via `icons.ts`). |
 | `theme.ts` | `makeNavigatorTheme` — maps semantic tokens (accent/muted/dim/…) onto pi `Theme` tokens. No hardcoded colors. |
-| `types.ts` | Shared structural types (FileNode, GitState, ViewerFile with `kind: "diff"`, rows). |
+| `types.ts` | Shared structural types (FileNode, GitState, ViewerFile with `kind: "diff"`, rows, the `NAVIGATOR_LAYOUTS` union). |
 | `constants.ts` | All tuning constants (caps, ratios, timeouts, ignored names, image extensions). |
-| `settings.ts` | pi-navigator settings schema/normalizer/loader/writer (`~/.pi/agent/pi-navigator.json`, `PI_NAV_IMAGES` / `PI_NAV_ICONS`), the `NAVIGATOR_CONFIG_FIELDS` registry, and pure `applyFieldEdit`. |
+| `settings.ts` | pi-navigator settings schema/normalizer/loader/writer (`~/.pi/agent/pi-navigator.json`, `PI_NAV_IMAGES` / `PI_NAV_ICONS` / `PI_NAV_LAYOUT`), the `NAVIGATOR_CONFIG_FIELDS` registry, and pure `applyFieldEdit`. |
 | `settings_menu.ts` | `/navigator settings` editor-dock menu: pure `buildSettingItems` + the exported pure `buildSettingsMenuTheme` (host `getSettingsListTheme` roles: plain labels, muted values) + a thin pi-tui `SettingsList` wrapper (commit/revert, env-override + capability annotations, Issue #118). Rendered via a plain `ctx.ui.custom` (no overlay) so it docks above the message input, per the pi settings-UI standard; framed by top/bottom full-width `border`-token rules like pi's own `/settings` and pi-overseer, with mouse events forwarded to the list past the frame chrome. No fs access; fs stays in `index.ts`/`settings.ts`. |
-| `help.ts` | Single source for the help surfaces: `NAVIGATOR_SUBCOMMANDS` + `NAVIGATOR_KEYBINDINGS`, the derived `NAVIGATOR_COMMANDS`, and the `/navigator help` durable entry layout (`buildHelpLines`, qdrant-memory parity). Pure. |
+| `help.ts` | Single source for the help surfaces: `NAVIGATOR_SUBCOMMANDS` (incl. the layout openers' `layout` field, Issue #119) + `NAVIGATOR_KEYBINDINGS`, the derived `NAVIGATOR_COMMANDS`, and the `/navigator help` durable entry layout (`buildHelpLines`, qdrant-memory parity). Pure. |
 | `images.ts` | pi-chafa detection, config mirror, chafa probe/render/sanitize, geometry, the native (kitty/iTerm2) capability ladder, and the bounded pi-tui native renderer. |
 
 **View-model rule (Issue #064):** the pane modules (`frame.ts`, `files_view.ts`, `git_view.ts`, `viewer_view.ts`, `help_view.ts`) are pure functions of plain records — they hold no state, touch no cache and never read `this`. The class computes data (marked rows, wrapped `display`, rendered markdown, clamped offsets), then passes it in. Keep new pane logic on the module side of that seam so it stays directly testable.
 
-**Data contract:** `setTree` / `setGitState` / `openRelPath` are the only ways data enters the component, and settings land via the ctor options (`enableIcons`, `initialShowHidden`, `initialWrap`, `initialRenderMarkdown` — Issue #061). Keep the render path pure. v3 adds `openCommit` + the optional `NavigatorOptions.loadCommit` injection (parallel to `loadFile`): when present, Enter on a commit opens its diff as a `ViewerFile` with `kind: "diff"` whose `relPath` is `commit:<hash>`; diffs skip the mtime poll in index.ts (`startsWith("commit:")` guard). When `loadCommit` is absent, Enter falls back to toggling the commit's family.
+**Data contract:** `setTree` / `setGitState` / `openRelPath` are the only ways data enters the component, and settings land via the ctor options (`enableIcons`, `initialShowHidden`, `initialWrap`, `initialRenderMarkdown` — Issue #061; `initialLayout` — Issue #119, default `"files-git-viewer"`, fixed for the overlay's lifetime). Keep the render path pure. v3 adds `openCommit` + the optional `NavigatorOptions.loadCommit` injection (parallel to `loadFile`): when present, Enter on a commit opens its diff as a `ViewerFile` with `kind: "diff"` whose `relPath` is `commit:<hash>`; diffs skip the mtime poll in index.ts (`startsWith("commit:")` guard). When `loadCommit` is absent, Enter falls back to toggling the commit's family.
 
 ---
 

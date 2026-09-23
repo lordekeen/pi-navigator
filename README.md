@@ -25,7 +25,8 @@ Settings live in `~/.pi/agent/pi-navigator.json`. All fields are optional; missi
   "images": { "mode": "off" },
   "icons":  { "enabled": false },
   "viewer": { "wrap": false, "markdown": "code" },
-  "tree":   { "showHidden": false }
+  "tree":   { "showHidden": false },
+  "layout": { "default": "files-git-viewer" }
 }
 ```
 
@@ -36,6 +37,7 @@ Settings live in `~/.pi/agent/pi-navigator.json`. All fields are optional; missi
 | `viewer.wrap` | `false` | `true`, `false` | Start files with word wrap enabled; the `w` key still toggles it per session |
 | `viewer.markdown` | `code` | `code`, `rendered` | Open Markdown files as rendered text or plain code; the `m` key still toggles it per session |
 | `tree.showHidden` | `false` | `true`, `false` | Start with hidden files visible; the `.` key still toggles it per session |
+| `layout.default` | `files-git-viewer` | `files-git-viewer`, `files-viewer`, `git-viewer` | Layout opened by bare `/navigator`; `/navigator all`, `/navigator files`, and `/navigator git` always open their own layout for one session |
 
 Environment variables override the file (precedence: defaults ← file ← env):
 
@@ -43,6 +45,7 @@ Environment variables override the file (precedence: defaults ← file ← env):
 | --- | --- |
 | `PI_NAV_IMAGES` | `chafa`/`native`/`auto` select that mode; `1`/`true`/`yes`/`on` enable chafa; `0`/`false`/`no`/`off` disable; anything else warns and the file value stands; empty/whitespace is no override |
 | `PI_NAV_ICONS` | `1`/`true`/`yes`/`on` enable the icon column; `0`/`false`/`no`/`off` disable; anything else warns and the file value stands; empty/whitespace is no override |
+| `PI_NAV_LAYOUT` | `files-git-viewer`/`files-viewer`/`git-viewer` select the default layout; anything else warns and the file value stands; empty/whitespace is no override |
 
 Edit either the file or the variables in your shell profile (e.g. `export PI_NAV_ICONS=1` in `~/.zshrc`) before launching pi, or pass inline: `PI_NAV_ICONS=1 pi`.
 
@@ -53,14 +56,17 @@ Icons depend on a terminal Nerd Font — without one, glyphs render as placehold
 ## Usage
 
 ```
-/navigator              open the overlay
+/navigator              open the overlay (layout.default setting)
+/navigator all          open the files + git + viewer overlay (default layout)
+/navigator files        open the files + viewer overlay
+/navigator git          open the git + viewer overlay
 /navigator settings     open the settings menu (interactive TUI)
 /navigator help         show this command list
 ```
 
 `/navigator <anything else>` warns and shows the help list. `settings` requires the interactive TUI; in other modes it warns and does nothing.
 
-Layout: files tree on the left, git panel below it, file viewer on the right, contextual key hints in the footer.
+Layout: the left column holds the files tree and the git panel (`files-git-viewer`, the default), the files tree alone (`files-viewer`), or the git panel alone (`git-viewer`); the file viewer sits on the right in every layout, and contextual key hints live in the footer. A layout is chosen when the overlay opens — by the direct command, or by `layout.default`/`PI_NAV_LAYOUT` for bare `/navigator` — and is fixed for that overlay's lifetime; it never switches mid-session and the direct commands never write settings.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -85,7 +91,7 @@ Layout: files tree on the left, git panel below it, file viewer on the right, co
 
 | Scope | Key | Action |
 |---|---|---|
-| Global | `Tab` / `Shift+Tab` | Cycle focus: files, git, viewer |
+| Global | `Tab` / `Shift+Tab` | Cycle focus across the visible panes (files, git, viewer in the default layout; two panes in the single-pane layouts) |
 | Global | `t` | Toggle the left column |
 | Global | `r` | Refresh tree, git, and the open file |
 | Global | `?` | Help modal |
