@@ -9,8 +9,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
 | **Pending / Open** | 1 | 1 | 1 | **3** |
-| **Resolved** | 18 | 34 | 55 | **107** |
-| **Total** | **19** | **35** | **56** | **110** |
+| **Resolved** | 18 | 34 | 56 | **108** |
+| **Total** | **19** | **35** | **57** | **111** |
 
 ---
 
@@ -28,6 +28,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | ID | Title | Type | Severity | Resolution Summary | Status |
 | :--- | :--- | :--- | :--- | :--- | :---: |
+| [#111](111-icon-glyphs-brand-logos-and-v3-tofu.md) | Icon Glyphs Show Product Logos (Apple for Images, Ansible for Unmapped Files) and Four Slots Render as Tofu | Bug / UI Consistency | Low | Audited all 35 glyphs against Nerd Fonts v3.5.1 `glyphnames.json`: images `\uf302` (`linux-apple`) → `fa-file_image`, generic `\ue723` (`dev-ansible`) → `fa-file_o`, js `\ue74c` (`dev-grunt`) → `dev-javascript`, vue `\ue731` (`dev-appwrite`) → `dev-vuejs`; cs/svg/lock/license moved off four v2 MDI codepoints whose ranges v3 deleted (tofu) to `dev-csharp`/`seti-svg`/`fa-lock`/`fa-balance_scale`; yml, scss/sass, less and toml got their own glyphs. Comments now carry registry names, and `ICON_GLYPHS` + a test guard the deleted ranges. +4 cases. | **Resolved** |
 | [#110](110-help-keybinding-description-native-image-drift.md) | Keybinding Help Description and Documentation Drift Following Native Image Rendering | Documentation | Low | `help.ts` `i` description drops the stale `(chafa)` suffix; README/AGENTS test counts updated to the observed 19 suites / 639 cases. | **Resolved** |
 | [#109](109-viewer-cache-lru-recency-refresh.md) | `viewerCache` Uses Insertion-Order FIFO Eviction Instead of True LRU | Enhancement / Performance | Low | Exported `touchCacheEntry` re-inserts a genuine hit at the Map tail, so the existing first-key eviction is true LRU; eviction code unchanged. +2 cases. | **Resolved** |
 | [#108](108-filesystem-walk-uncapped-entry-count.md) | Filesystem Walk Lacks Upper Bound on Total Entry Count | Technical Debt / Resource Bounds | Low | `MAX_FS_ENTRIES = 25_000` enforced in `walk` via a shared `TreeWalkBudget` (checked before every push and descent; `WeakMap`-backed cumulative count so git-mode `collectDirEntries` calls share one cap); `collectFsEntries` returns `{ entries, truncated }`; index.ts surfaces a one-time warning. +5 cases. | **Resolved** |
@@ -145,6 +146,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#103: Inconsistent Card vs. Text Fallthrough in `viewer_view.ts` for Chafa Images with No Lines](103-viewer-view-empty-chafa-image-text-fallthrough.md) *(resolved)*
 - [#106: Binary File Changes Ignored in `readCommitDiff` Files-Changed Count](106-git-numstat-binary-files-changed-count.md) *(resolved)*
 - [#107: Non-Zero Exit from `git status` Silently Defaults to "Clean"](107-git-status-error-silent-clean-fallthrough.md) *(resolved)*
+- [#111: Icon Glyphs Show Product Logos (Apple for Images, Ansible for Unmapped Files) and Four Slots Render as Tofu](111-icon-glyphs-brand-logos-and-v3-tofu.md) *(resolved)*
 - [#100: Native Ladder Forces Settings/Env Protocol on Known No-Image Terminals (Blank Viewer in Alacritty)](100-native-settings-override-no-image-terminal.md) *(resolved)*
 - [#070: Kitty Protocol Bypass of Tmux Guard Causes Terminal Freeze/Crash](070-kitty-protocol-crash-in-tmux.md) *(resolved)*
 - [#072: Infinity Accepted as Valid Setting Value in `validateFieldValue`](072-settings-infinity-number-validation.md) *(resolved)*

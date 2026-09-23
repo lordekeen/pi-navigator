@@ -18,78 +18,103 @@ import { parseTruthyEnv } from "./env";
 /** Environment variable that enables the icon column. */
 export const ICONS_ENV = "PI_NAV_ICONS";
 
-/** Generic file glyph (Nerd Font `nf-custom-file`-class). */
-export const GENERIC_ICON = "\ue723";
+/**
+ * Generic file glyph: `fa-file_o` (a blank document). Verified present in
+ * Nerd Fonts v3; the previous value (\ue723) was `dev-ansible`, so every
+ * unmapped file wore the Ansible logo (Issue #111).
+ */
+export const GENERIC_ICON = "\uf016"; //  fa-file_o
 
-/** Curated extension → Nerd Font codepoint map (v1 subset). */
+/**
+ * Curated extension → Nerd Font codepoint map.
+ *
+ * The preview glyph in each comment IS the codepoint, so a blank or
+ * off-looking preview means the codepoint is wrong. Every value is verified
+ * against Nerd Fonts v3 `glyphnames.json` (3.5.1); the trailing name is the
+ * registry name. Do NOT paste codepoints from a v2 cheatsheet — v3 deleted
+ * the old Material Design Icons ranges (\uf3e0-\uf3ff and \uf600-\ufdff),
+ * where they render as tofu (Issue #111).
+ */
 const EXT_ICONS: Record<string, string> = {
-  ts: "\ue628", //  typescript
-  tsx: "\ue7ba", //  typescript-react
-  js: "\ue74c", //  javascript
-  jsx: "\ue7ba", //  javascript-react
-  mjs: "\ue74c",
-  cjs: "\ue74c",
-  json: "\ue60b", //  json
-  jsonc: "\ue60b",
-  md: "\uf48a", //  markdown
-  mdx: "\uf48a",
-  sh: "\ue795", //  terminal
-  bash: "\ue795",
-  zsh: "\ue795",
-  css: "\ue749", //  css
-  scss: "\ue749",
-  sass: "\ue749",
-  less: "\ue749",
-  html: "\ue736", //  html
-  htm: "\ue736",
-  vue: "\ue731", //  vue
-  svelte: "\ue697", //  svelte
-  py: "\ue606", //  python
-  go: "\ue626", //  golang
-  rs: "\ue7a8", //  rust
-  rb: "\ue739", //  ruby
-  php: "\ue73d", //  php
-  java: "\ue738", //  java
-  c: "\ue61e", //  c
-  h: "\ue61e",
-  cpp: "\ue61d", //  cpp
-  cc: "\ue61d",
-  hpp: "\ue61d",
-  cs: "\uf81a", //  csharp
-  swift: "\ue755", //  swift
-  kt: "\ue634", //  kotlin
-  yml: "\ue60b",
-  yaml: "\ue60b",
-  toml: "\ue615", //  toml
-  xml: "\ue619", //  xml
-  svg: "\uf72f", //  svg
-  png: "\uf302", //  image
-  jpg: "\uf302",
-  jpeg: "\uf302",
-  gif: "\uf302",
-  webp: "\uf302",
-  ico: "\uf302",
-  bmp: "\uf302",
-  avif: "\uf302",
-  lock: "\uf3e2", //  lock
-  sql: "\uf1c0", //  database
-  db: "\uf1c0",
-  txt: "\uf15c", //  file-text
-  log: "\uf15c",
-  pdf: "\uf1c1", //  pdf
+  ts: "\ue628",       //  seti-typescript
+  tsx: "\ue7ba",      //  dev-react
+  js: "\ue781",       //  dev-javascript
+  jsx: "\ue7ba",      //  dev-react
+  mjs: "\ue781",      //  dev-javascript
+  cjs: "\ue781",      //  dev-javascript
+  json: "\ue60b",     //  seti-json
+  jsonc: "\ue60b",    //  seti-json
+  md: "\uf48a",       //  oct-markdown
+  mdx: "\uf48a",      //  oct-markdown
+  sh: "\ue795",       //  dev-terminal
+  bash: "\ue795",     //  dev-terminal
+  zsh: "\ue795",      //  dev-terminal
+  css: "\ue749",      //  dev-css3
+  scss: "\ue74b",     //  dev-sass
+  sass: "\ue74b",     //  dev-sass
+  less: "\ue758",     //  dev-less
+  html: "\ue736",     //  dev-html5
+  htm: "\ue736",      //  dev-html5
+  vue: "\ue8dc",      //  dev-vuejs
+  svelte: "\ue697",   //  seti-svelte
+  py: "\ue606",       //  seti-python
+  go: "\ue626",       //  custom-go
+  rs: "\ue7a8",       //  dev-rust
+  rb: "\ue739",       //  dev-ruby
+  php: "\ue73d",      //  dev-php
+  java: "\ue738",     //  dev-java
+  c: "\ue61e",        //  custom-c
+  h: "\ue61e",        //  custom-c
+  cpp: "\ue61d",      //  custom-cpp
+  cc: "\ue61d",       //  custom-cpp
+  hpp: "\ue61d",      //  custom-cpp
+  cs: "\ue7b2",       //  dev-csharp
+  swift: "\ue755",    //  dev-swift
+  kt: "\ue634",       //  custom-kotlin
+  yml: "\ue6a8",      //  seti-yml
+  yaml: "\ue6a8",     //  seti-yml
+  toml: "\ue6b2",     //  custom-toml
+  xml: "\ue619",      //  seti-xml
+  svg: "\ue698",      //  seti-svg
+  png: "\uf1c5",      //  fa-file_image
+  jpg: "\uf1c5",      //  fa-file_image
+  jpeg: "\uf1c5",     //  fa-file_image
+  gif: "\uf1c5",      //  fa-file_image
+  webp: "\uf1c5",     //  fa-file_image
+  ico: "\uf1c5",      //  fa-file_image
+  bmp: "\uf1c5",      //  fa-file_image
+  avif: "\uf1c5",     //  fa-file_image
+  lock: "\uf023",     //  fa-lock
+  sql: "\uf1c0",      //  fa-database
+  db: "\uf1c0",       //  fa-database
+  txt: "\uf15c",      //  fa-file_lines
+  log: "\uf15c",      //  fa-file_lines
+  pdf: "\uf1c1",      //  fa-file_pdf
 };
 
 /** Exact filename glyph map for dotfiles and special filenames without standard extensions. */
 const FILENAME_ICONS: Record<string, string> = {
-  dockerfile: "\uf308", //  docker
-  license: "\uf718",
-  ".gitignore": "\uf1d3", //  git
-  ".gitattributes": "\uf1d3",
-  ".editorconfig": "\uf461",
+  dockerfile: "\uf308",       //  linux-docker
+  license: "\uf24e",          //  fa-balance_scale
+  ".gitignore": "\uf1d3",     //  fa-git
+  ".gitattributes": "\uf1d3", //  fa-git
+  ".editorconfig": "\ue615",  //  seti-config
 };
 
 /** Folder glyph for directories. */
-const DIR_ICON = "\uf4d3"; //  folder
+const DIR_ICON = "\uf4d3"; //  oct-file_directory_fill
+
+/**
+ * Every glyph the map can emit, for the v3-range guard in the icon suite
+ * (Issue #111): the table is curated by hand, so a codepoint copied from a v2
+ * cheatsheet renders as tofu with nothing to catch it at runtime.
+ */
+export const ICON_GLYPHS: readonly string[] = [
+  ...Object.values(EXT_ICONS),
+  ...Object.values(FILENAME_ICONS),
+  DIR_ICON,
+  GENERIC_ICON,
+];
 
 /**
  * Resolve the Nerd Font glyph for a tree entry. Directories always get the
