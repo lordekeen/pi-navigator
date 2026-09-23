@@ -9,7 +9,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { NAVIGATOR_CONFIG_FIELDS, type NavigatorConfigField, type NavigatorSettings } from "../settings";
-import { buildSettingItems, buildSettingsMenuTheme, openSettingsMenu, type SettingsMenuDeps, type SettingsMenuTheme, type SettingsMenuUi } from "../settings_menu";
+import { buildSettingItems, buildSettingsMenuTheme, navigatorFieldNotes, openSettingsMenu, type SettingsMenuDeps, type SettingsMenuTheme, type SettingsMenuUi } from "../settings_menu";
 
 interface ComponentLike {
   render(width: number): string[];
@@ -120,6 +120,21 @@ describe("buildSettingItems", () => {
   it("keeps descriptions annotation-free when nothing is shadowed", () => {
     const items = buildSettingItems(fullSettings(), {});
     for (const item of items) expect(item.description).not.toContain("overridden");
+  });
+
+  it("appends caller-provided capability notes and composes with env overrides (Issue #118)", () => {
+    const notes = navigatorFieldNotes({ piChafaPresent: false });
+    const items = buildSettingItems(fullSettings(), { "images.mode": "PI_NAV_IMAGES" }, notes);
+    expect(items[0]?.description).toContain("the chafa mode needs chafa + pi-chafa (pi install npm:pi-chafa)");
+    expect(items[0]?.description).toContain("\u2014 overridden by PI_NAV_IMAGES (env wins)");
+    expect(items[1]?.description).not.toContain("chafa");
+  });
+
+  it("emits no capability notes when pi-chafa is present, leaving descriptions untouched (Issue #118)", () => {
+    expect(navigatorFieldNotes({ piChafaPresent: true })).toEqual({});
+    const withNotes = buildSettingItems(fullSettings(), {}, navigatorFieldNotes({ piChafaPresent: true }));
+    const without = buildSettingItems(fullSettings(), {});
+    expect(withNotes.map((item) => item.description)).toEqual(without.map((item) => item.description));
   });
 
   it("safely handles partial or empty settings without throwing TypeError", () => {

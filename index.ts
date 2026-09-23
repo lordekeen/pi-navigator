@@ -50,9 +50,9 @@ import {
 } from "./git";
 import { ICONS_ENV } from "./icons";
 import { buildHelpLines, HELP_COMMANDS_TITLE, HELP_HEADER_PREFIX, HELP_HINT, HELP_ENTRY_TYPE, helpCommandColumnWidth, NAVIGATOR_CMD_PREFIX, NAVIGATOR_SUBCOMMANDS, type NavigatorHelpData } from "./help";
-import { makeDeferredImageSupport, resolveImageSupport, runChafaRender, runNativeRender, buildKittyProbeQuery, consumeKittyProbeReply, createKittyProbeState, type ImageSupport, type KittyProbeState, type KittyProbeVerdict, type NativeProtocol } from "./images";
+import { makeDeferredImageSupport, resolveImageSupport, runChafaRender, runNativeRender, buildKittyProbeQuery, consumeKittyProbeReply, createKittyProbeState, detectPiChafa, type ImageSupport, type KittyProbeState, type KittyProbeVerdict, type NativeProtocol } from "./images";
 import { loadNavigatorSettings, writeNavigatorSettings } from "./settings";
-import { openSettingsMenu } from "./settings_menu";
+import { navigatorFieldNotes, openSettingsMenu } from "./settings_menu";
 import { styleDiffLines } from "./diff";
 import { NavigatorOverlay } from "./navigator";
 import { makeNavigatorTheme } from "./theme";
@@ -811,13 +811,20 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
  * notify warnings; any throw becomes a bounded `{ok:false}` — the menu issues
  * the warning and reverts the row display.
  */
-async function runSettings(ctx: ExtensionCommandContext): Promise<void> {
+async function runSettings(pi: ExtensionAPI, ctx: ExtensionCommandContext): Promise<void> {
   if (!ctx.hasUI || ctx.mode !== "tui" || typeof ctx.ui.custom !== "function") {
     ctx.ui.notify("pi-navigator settings requires the interactive TUI", "warning");
     return;
   }
 
   const userPath = join(getAgentDir(), NAVIGATOR_SETTINGS_FILE);
+  // chafa-mode capability note (Issue #118): pi-chafa presence is detected here
+  // (the menu module stays pi-free) and surfaced as a row note — the value is
+  // documented, not hidden, so pre-configuring before install keeps working.
+  const piChafaPresent = detectPiChafa(pi, {
+    userSettings: join(getAgentDir(), "settings.json"),
+    projectSettings: join(ctx.cwd, ".pi", "settings.json"),
+  }).present;
   const notifyWarning = makeWarningNotifier(ctx.ui);
 
   const fileLoaded = loadNavigatorSettings({ userPath });
@@ -834,6 +841,7 @@ async function runSettings(ctx: ExtensionCommandContext): Promise<void> {
     await openSettingsMenu(ctx.ui, {
       settings: fileLoaded.settings,
       overrides,
+      notes: navigatorFieldNotes({ piChafaPresent }),
       commit: (next) => {
         try {
           writeNavigatorSettings(userPath, next);
@@ -884,7 +892,7 @@ export default function (pi: ExtensionAPI): void {
           await runNavigator(pi, ctx);
           return;
         case "settings":
-          await runSettings(ctx);
+          await runSettings(pi, ctx);
           return;
         case "help":
           pi.appendEntry(HELP_ENTRY_TYPE, { cwd: ctx.cwd });

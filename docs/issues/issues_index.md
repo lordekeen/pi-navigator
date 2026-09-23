@@ -9,8 +9,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
 | **Pending / Open** | 1 | 1 | 1 | **3** |
-| **Resolved** | 18 | 38 | 58 | **114** |
-| **Total** | **19** | **39** | **59** | **117** |
+| **Resolved** | 18 | 38 | 59 | **115** |
+| **Total** | **19** | **39** | **60** | **118** |
 
 ---
 
@@ -28,6 +28,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | ID | Title | Type | Severity | Resolution Summary | Status |
 | :--- | :--- | :--- | :--- | :--- | :---: |
+| [#118](118-settings-menu-chafa-capability-note.md) | Settings Menu Offers `chafa` Mode With No Indication That pi-chafa Is Required | Enhancement / UX | Low | Pure `navigatorFieldNotes({ piChafaPresent })` + `buildSettingItems(..., notes?)` append a capability note to the `images.mode` row; `runSettings` detects presence via `detectPiChafa` while the menu module stays pi-free. Annotate, not hide — pre-configuring before install keeps working. +2 tests. version 0.11.0. | **Resolved** |
 | [#117](117-native-abort-cascade-chafa-fallback.md) | Superseded Load's Chafa Fallback Aborts the Newest Native Image Render | Bug / Image Tier | Medium | `viewer.ts` no longer falls through to the chafa seam when the native render returned `render aborted` — a supersession signal, not a render failure — so a superseded load cannot call `nextAbortSlot()` and abort the newer load's render. `IMAGE_ABORT_REASON` is the shared constant. +2 tests (viewer no-fallback; deterministic two-load cascade with real seams/render), each verified to fail with the fix disabled. Dead `KITTY_PROBE_SAMPLES` table removed; `nativelyRenderable` param cleanup. version 0.10.9; per-load abort ownership followed in v0.10.10. | **Resolved** |
 | [#116](116-first-image-chafa-tier-flip.md) | First Image of a Session Renders as Chafa, Later Ones Render Natively | Bug / Image Tier | Medium | v0.10.5 fixed the collateral defects (snapshot-bound seams, in-flight reflow arming, reflow re-arm); the decode probe is scoped per overlay invocation and v0.10.6 settled the root cause by always probing with a PNG sample. v0.10.8 renders JPEG/WebP/GIF on kitty by transcoding to PNG with the peer `pi-coding-agent`'s `convertToPng` (the v0.10.7 PNG-only gate was superseded within one release). Follow-up abort-cascade defect filed as [#117](117-native-abort-cascade-chafa-fallback.md); the deferred per-load abort ownership item was implemented in v0.10.10 (`beginImageLoad` + seam signal forwarding, chafa pre-spawn abort check). | **Resolved** |
 | [#113](113-git-group-row-ignores-leftw.md) | Git Group Rows Ignore `leftW`, Clipping the Status-Error Hint | Bug / UI Consistency | Low | `buildGitRow`'s group branch ignored the `leftW` it was handed, so #107's 57-cell error label overflowed the 44-cell pane at every terminal size and `joinLeftRight` clipped it mid-word — `(press r to retry)` never rendered. The label is now cut to the pane *before* styling (own `…`, per the #010 convention); short labels render byte-identically. +3 cases. | **Resolved** |
@@ -148,6 +149,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 ## 📂 Issues by Category
 
 ### Bug Fixes & UI Consistency
+- [#118: Settings Menu Offers `chafa` Mode With No Indication That pi-chafa Is Required](118-settings-menu-chafa-capability-note.md) *(resolved)*
 - [#117: Superseded Load's Chafa Fallback Aborts the Newest Native Image Render](117-native-abort-cascade-chafa-fallback.md) *(resolved)*
 - [#116: First Image of a Session Renders as Chafa, Later Ones Render Natively](116-first-image-chafa-tier-flip.md) *(resolved)*
 - [#113: Git Group Rows Ignore `leftW`, Clipping the Status-Error Hint](113-git-group-row-ignores-leftw.md) *(resolved)*

@@ -61,6 +61,7 @@ function fieldValue(
 export function buildSettingItems(
   settings: NavigatorSettings,
   overrides: Readonly<Record<string, string>>, // fieldId → env var name
+  notes: Readonly<Record<string, string>> = {}, // fieldId → capability note
 ): readonly SettingItemData[] {
   const items: SettingItemData[] = [];
   for (const field of NAVIGATOR_CONFIG_FIELDS) {
@@ -94,11 +95,26 @@ export function buildSettingItems(
         break;
     }
     const envVar = overrides[field.id];
-    const description =
-      envVar !== undefined ? `${field.description} \u2014 overridden by ${envVar} (env wins)` : field.description;
+    const note = notes[field.id];
+    let description = field.description;
+    if (note !== undefined) description += ` \u2014 ${note}`;
+    if (envVar !== undefined) description += ` \u2014 overridden by ${envVar} (env wins)`;
     items.push({ id: field.id, label: field.label, description, currentValue, values, submenu });
   }
   return items;
+}
+
+/**
+ * Capability notes for settings rows (Issue #118): a value whose runtime
+ * requirement is not met is annotated, not hidden — a user can legitimately
+ * pre-configure `images.mode` before installing pi-chafa, and hiding the value
+ * would make the menu disagree with the schema. Presence is detected by the
+ * caller (`index.ts`); this mapping is pure and unit-tested.
+ */
+export function navigatorFieldNotes(input: { piChafaPresent: boolean }): Readonly<Record<string, string>> {
+  return input.piChafaPresent
+    ? {}
+    : { "images.mode": "the chafa mode needs chafa + pi-chafa (pi install npm:pi-chafa)" };
 }
 
 export interface SettingsMenuTheme {
@@ -116,6 +132,8 @@ export interface SettingsMenuUi {
 export interface SettingsMenuDeps {
   settings: NavigatorSettings;
   overrides: Readonly<Record<string, string>>;
+  /** Capability notes appended to field descriptions (Issue #118). */
+  notes?: Readonly<Record<string, string>>;
   commit: (next: NavigatorSettings) => { ok: true; settings: NavigatorSettings } | { ok: false; error: string };
   onWarning: (message: string) => void;
   termRows?: number;
@@ -187,6 +205,10 @@ class SettingsMenuFrame implements Component {
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
     if (event.type === "wheel") {
+      // SAFETY: pi-tui's SettingsList keeps `searchEnabled` (set from the
+      // `enableSearch` option this wrapper always passes) as an internal field
+      // the published type omits; reading it decides whether the search bar
+      // occupies the first two rows. A missing field falls back to 0.
       const minY = (this.list as unknown as { searchEnabled?: boolean }).searchEnabled ? 2 : 0;
       const y = Math.max(minY, Math.min(Math.max(minY, this.listHeight - 1), event.y - FRAME_HEADER_ROWS));
       return this.list.handleMouse?.({ ...event, y, height: this.listHeight });
@@ -194,6 +216,9 @@ class SettingsMenuFrame implements Component {
     const y = event.y - FRAME_HEADER_ROWS;
     if (y < 0 || y >= this.listHeight) {
       if (event.type === "release" || event.type === "click") {
+        // SAFETY: same internal-field access as above — `mousePressedIndex` is
+        // pi-tui's list-internal mouse press state; clearing it on an
+        // out-of-bounds release prevents a stale click from sticking.
         ((this.list as unknown) as { mousePressedIndex?: number }).mousePressedIndex = undefined;
       }
       return undefined;
@@ -219,7 +244,7 @@ export async function openSettingsMenu(ui: SettingsMenuUi, deps: SettingsMenuDep
   let current = deps.settings;
 
   const refreshRows = (items: SettingItem[], list: SettingsList): void => {
-    const rows = buildSettingItems(current, deps.overrides);
+    const rows = buildSettingItems(current, deps.overrides, deps.notes);
     for (const item of items) {
       const row = rows.find((candidate) => candidate.id === item.id);
       if (row === undefined) continue;
@@ -235,7 +260,7 @@ export async function openSettingsMenu(ui: SettingsMenuUi, deps: SettingsMenuDep
     (_tui, theme, _keybindings, done) => {
       const settingsTheme = buildSettingsMenuTheme(theme);
 
-      const items: SettingItem[] = buildSettingItems(current, deps.overrides).map((data) => ({
+      const items: SettingItem[] = buildSettingItems(current, deps.overrides, deps.notes).map((data) => ({
         id: data.id,
         label: data.label,
         description: data.description,
