@@ -89,6 +89,14 @@ function bounded(text: string): string {
     : `${text.slice(0, IMAGE_ERROR_MAX_CHARS - 1)}…`;
 }
 
+/**
+ * Shared abort reason for both render seams (Issue #117). `viewer.ts` treats it
+ * as a supersession signal: a native render aborted by a newer load must NOT
+ * fall through to the chafa seam, because that seam's `nextAbortSlot()` would
+ * abort the newer load's in-flight render (silently degrading it to chafa).
+ */
+export const IMAGE_ABORT_REASON = "render aborted";
+
 // ── pi-chafa presence ──
 
 /** Structural provenance subset of pi's SourceInfo (spec §3.2). */
@@ -698,7 +706,7 @@ export async function runChafaRender(
       err.code === "ABORT_ERR" ||
       ctx.signal?.aborted
     ) {
-      return { ok: false, reason: "render aborted" };
+      return { ok: false, reason: IMAGE_ABORT_REASON };
     }
     if (err.killed || err.signal === "SIGTERM") {
       return {
@@ -875,22 +883,12 @@ export type KittyProbeVerdict = "ok" | "error" | "no-reply";
 /**
  * 1x1 PNG sample for the kitty `a=q` protocol probe (Issue #116). A single
  * PNG is sufficient because `f=100` means PNG in the kitty spec and kitty
- * auto-detects the actual format during `a=T` transmission.
- *
- * The per-MIME JPEG/WebP samples from Issue #102 are retained for backward
- * compatibility in tests but are no longer used by the probe — they caused
- * `a=q` to fail because kitty decoded them as PNG per the `f=100` tag.
+ * auto-detects the actual format during `a=T` transmission; the Issue #102
+ * per-MIME JPEG/WebP samples failed the probe because kitty decoded them as
+ * PNG per the `f=100` tag and are no longer carried.
  */
 export const KITTY_PROBE_SAMPLE: string =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
-
-/** @deprecated Retained for test backward compatibility; use KITTY_PROBE_SAMPLE. */
-export const KITTY_PROBE_SAMPLES: Record<string, string> = {
-  "image/png": KITTY_PROBE_SAMPLE,
-  "image/jpeg":
-    "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==",
-  "image/webp": "UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAwA0JaQAA3AA/vuUAAA=",
-};
 
 /**
  * Build the kitty graphics query escape for the protocol probe
@@ -1037,7 +1035,7 @@ export async function runNativeRender(
 > {
   // a) Abort before any read.
   if (ctx.signal?.aborted) {
-    return { ok: false, reason: bounded("render aborted") };
+    return { ok: false, reason: bounded(IMAGE_ABORT_REASON) };
   }
 
   // Defensive guard for direct callers (tests pass `env`; production always
@@ -1056,7 +1054,8 @@ export async function runNativeRender(
     }
   }
 
-  // b) Mime gate (D5): unknown extension, or kitty with a non-PNG/JPEG/WebP mime — no read.
+  // b) Mime gate (D5): unknown extension — no read. Under kitty every
+  //    NATIVE_IMAGE_MIME format is accepted; non-PNG is transcoded in (e).
   const mime = mimeOfPath(absPath);
   if (mime === undefined) {
     return {
@@ -1119,7 +1118,7 @@ export async function runNativeRender(
   }
 
   if (ctx.signal?.aborted) {
-    return { ok: false, reason: bounded("render aborted") };
+    return { ok: false, reason: bounded(IMAGE_ABORT_REASON) };
   }
 
   // f) Encode through pi-tui (D3); null means the capability vanished.

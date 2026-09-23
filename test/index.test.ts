@@ -8,11 +8,18 @@
  * - extension lifecycle: command registration, subcommand routing, help renderer, headless guard
  */
 
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
+import { getCapabilities, resetCapabilitiesCache, setCapabilities } from "@earendil-works/pi-tui";
+
 import { IMAGE_NATIVE_CACHE_MAX_CHARS, MAX_FS_ENTRIES } from "../constants";
-import { DEFAULT_PI_CHAFA_SUBSET, KITTY_PROBE_SAMPLE, KITTY_PROBE_SAMPLES, type ImageSupport, type KittyProbeVerdict } from "../images";
+import { DEFAULT_PI_CHAFA_SUBSET, KITTY_PROBE_SAMPLE, type ImageSupport, type KittyProbeVerdict } from "../images";
 import type { ViewerFile } from "../types";
+import { loadFile } from "../viewer";
 import registerNavigatorExtension, {
   createViewerCache,
   isCacheableRender,
@@ -538,5 +545,90 @@ describe("makeImageSeams (Issue #116 fix 1)", () => {
     await seams.renderNativeImage("/work/missing.png", { cols: 10, rows: 5 });
     expect(slots).toHaveLength(2);
     expect(slots[1]).not.toBe(slots[0]);
+  });
+
+  it("a superseded load's abort never reaches the chafa seam, so the newest load stays native (Issue #117)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nav117-"));
+    const saved = getCapabilities();
+    try {
+      const png = join(dir, "pixel.png");
+      writeFileSync(png, Buffer.from(KITTY_PROBE_SAMPLE, "base64"));
+      setCapabilities({ ...saved, images: "kitty" });
+
+      // Shared abort slot, mirroring index.ts: a newer seam call aborts the
+      // previous controller.
+      let slot: AbortController | null = null;
+      const nextAbortSlot = (): AbortController => {
+        slot?.abort();
+        slot = new AbortController();
+        return slot;
+      };
+
+      let markAEntered!: () => void;
+      let markBEntered!: () => void;
+      const aEntered = new Promise<void>((resolve) => {
+        markAEntered = resolve;
+      });
+      const bEntered = new Promise<void>((resolve) => {
+        markBEntered = resolve;
+      });
+      let releaseA!: (verdict: KittyProbeVerdict) => void;
+      let releaseB!: (verdict: KittyProbeVerdict) => void;
+      const gateA = new Promise<KittyProbeVerdict>((resolve) => {
+        releaseA = resolve;
+      });
+      const gateB = new Promise<KittyProbeVerdict>((resolve) => {
+        releaseB = resolve;
+      });
+
+      const seamsA = makeImageSeams({
+        support: snapshot(),
+        probeDecode: () => {
+          markAEntered();
+          return gateA;
+        },
+        nextAbortSlot,
+      });
+      const seamsB = makeImageSeams({
+        support: snapshot(),
+        probeDecode: () => {
+          markBEntered();
+          return gateB;
+        },
+        nextAbortSlot,
+      });
+      const req = { cols: 20, rows: 10 };
+
+      // Load A parks on its probe with slot A installed; load B starts next
+      // and aborts A's controller at its own seam entry.
+      const loadA = loadFile(png, "a.png", {
+        image: req,
+        renderNativeImage: seamsA.renderNativeImage,
+        renderImage: seamsA.renderImage,
+      });
+      await aEntered;
+      const loadB = loadFile(png, "b.png", {
+        image: req,
+        renderNativeImage: seamsB.renderNativeImage,
+        renderImage: seamsB.renderImage,
+      });
+      await bEntered;
+
+      releaseA("no-reply");
+      const a = await loadA;
+      expect(a.imageTier).toBe("metadata");
+      expect(a.imageError).toBe("render aborted");
+
+      releaseB("no-reply");
+      const b = await loadB;
+      // Pre-#117 the superseded load's chafa fallback aborted B here and the
+      // displayed image silently degraded to chafa.
+      expect(b.imageTier).toBe("native");
+      expect(b.imageLines?.length ?? 0).toBeGreaterThan(0);
+    } finally {
+      setCapabilities(saved);
+      resetCapabilitiesCache();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

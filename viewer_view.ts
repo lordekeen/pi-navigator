@@ -11,7 +11,7 @@
 
 import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 
-import type { ImageSupport, NativeProtocol } from "./images";
+import type { ImageSupport } from "./images";
 import type { NavigatorTheme } from "./theme";
 import type { Focus, SearchMatch, ViewerFile } from "./types";
 import { NATIVE_IMAGE_MIME } from "./constants";
@@ -351,9 +351,8 @@ function imageErrorLabel(support: ImageSupport): string {
 }
 
 /** True when runNativeRender's mime gate (D5) would accept this path. */
-function nativelyRenderable(relPath: string, _protocol: NativeProtocol): boolean {
-  const mime = NATIVE_IMAGE_MIME[extOf(relPath)];
-  return mime !== undefined;
+function nativelyRenderable(relPath: string): boolean {
+  return NATIVE_IMAGE_MIME[extOf(relPath)] !== undefined;
 }
 
 /**
@@ -376,7 +375,7 @@ export function imageCardHints(
     if (support.nativeProtocol === null) {
       return ["this terminal does not support kitty/iTerm2 - use auto or chafa"];
     }
-    if (!nativelyRenderable(file.relPath, support.nativeProtocol)) {
+    if (!nativelyRenderable(file.relPath)) {
       return ["this image format cannot be rendered natively - use chafa or auto"];
     }
     return [];

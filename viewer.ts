@@ -27,6 +27,7 @@ import {
   MAX_LINE_COUNT_BYTES,
   TAB_WIDTH,
 } from "./constants";
+import { IMAGE_ABORT_REASON } from "./images";
 import type { SearchMatch, ViewerFile } from "./types";
 
 // ── Text helpers ──
@@ -410,7 +411,13 @@ export async function loadFile(
         };
       }
     }
-    if (opts?.image !== undefined && opts.renderImage !== undefined) {
+    // Issue #117: an aborted native render is a supersession signal, not a
+    // render failure. Falling through to the chafa seam would call its
+    // nextAbortSlot() (index.ts) and abort the in-flight render of the load
+    // that superseded this one, silently degrading it to chafa; this stale
+    // result is discarded by navigator's loadSeq guard anyway.
+    const nativeAborted = nativeReason === IMAGE_ABORT_REASON;
+    if (!nativeAborted && opts?.image !== undefined && opts.renderImage !== undefined) {
       try {
         const out = await opts.renderImage(absPath, opts.image);
         if (out.ok) {

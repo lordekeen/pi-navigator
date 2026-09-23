@@ -632,6 +632,26 @@ describe("loadFile", () => {
       expect(file.imageError).toBeUndefined();
     });
 
+    it("does not fall through to chafa when the native render was aborted (Issue #117)", async () => {
+      const path = await writePng("native-aborted.png");
+      let chafaCalled = false;
+      const file = await loadFile(path, "native-aborted.png", {
+        renderNativeImage: async () => ({ ok: false, reason: "render aborted" }),
+        renderImage: async () => {
+          chafaCalled = true;
+          return { ok: true, lines: ["c"], cols: 1, rows: 1 };
+        },
+        image: { cols: 40, rows: 10 },
+      });
+      // A superseded load must not start a chafa render: the chafa seam calls
+      // nextAbortSlot(), which by then belongs to the newer load (#117).
+      expect(chafaCalled).toBe(false);
+      expect(file.kind).toBe("image");
+      expect(file.imageTier).toBe("metadata");
+      expect(file.imageError).toBe("render aborted");
+      expect(file.imageLines).toBeUndefined();
+    });
+
     it("falls back to chafa under auto without error, and keeps native reason on card under strict native", async () => {
       const path = await writePng("over-cap.png");
       const native: ImageRenderer = (absPath, req) =>

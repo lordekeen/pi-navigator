@@ -1,6 +1,6 @@
 # Issue #117: Superseded Load's Chafa Fallback Aborts the Newest Native Image Render
 
-- **Status**: Pending
+- **Status**: Resolved
 - **Type**: Bug / Image Tier
 - **Severity**: Medium
 - **Components**: [`images.ts`](file:///home/jhonny/Sources/pi-navigator/images.ts#L1119-L1123) (post-read/post-conversion abort check), [`viewer.ts`](file:///home/jhonny/Sources/pi-navigator/viewer.ts#L413) (fallback on any clean native failure), [`index.ts`](file:///home/jhonny/Sources/pi-navigator/index.ts#L441-L443) (shared abort slot), [`navigator.ts`](file:///home/jhonny/Sources/pi-navigator/navigator.ts#L399-L404) (ungated overlapping loads)
@@ -103,14 +103,15 @@ fallback are what turn it into a user-visible downgrade.
 
 ## Acceptance Criteria
 
-- [ ] A superseded load's fallback can never abort the load that superseded it — pinned
+- [x] A superseded load's fallback can never abort the load that superseded it — pinned
       by a deterministic two-load test (real `makeImageSeams` + real `runNativeRender`).
-- [ ] With `mode: "auto"` on a kitty-capable terminal, overlapping image loads leave the
+- [x] With `mode: "auto"` on a kitty-capable terminal, overlapping image loads leave the
       displayed image native (no chafa fallback caused by an abort from another load).
-- [ ] Abort still lands promptly on overlay close and on genuine supersession (no
-      regression to cancellation semantics).
-- [ ] #116's "abort ownership is per load" item is either implemented or its consequence
-      is closed here.
+- [x] Abort still lands promptly on overlay close and on genuine supersession (no
+      regression to cancellation semantics) — neither seam's abort handling changed; the
+      existing abort tests stay green.
+- [x] #116's "abort ownership is per load" item is either implemented or its consequence
+      is closed here — consequence closed; the item itself stays deferred in #116.
 
 ## Evidence (2026-09-23, `c518371` v0.10.8)
 
@@ -119,3 +120,33 @@ fallback are what turn it into a user-visible downgrade.
   reproduces deterministically); with the `images.ts:1122` hunk removed, `loadA`
   resolves `{ ok: true }` and the cascade does not occur.
 - Working tree was restored byte-identical after the probe (`git status` clean).
+
+## Resolution (v0.10.9) — an aborted native render is a supersession signal
+
+`viewer.ts` no longer falls through to the chafa seam when the native render
+returned `render aborted`. `images.ts` exports `IMAGE_ABORT_REASON` as the single
+source for that string (both seams already produced it), and `loadFile` compares
+the native failure reason against it before invoking the chafa seam. A superseded
+load therefore never calls `nextAbortSlot()` again, so it cannot abort the render
+of the load that superseded it; its stale metadata card is discarded by
+navigator's `loadSeq` guard. The post-read/post-conversion abort check (now
+`images.ts:1118`) is kept: it only skips work for a superseded load.
+
+Candidate fix 1 (this) was taken. Candidate 2 (per-load abort ownership) and
+candidate 3 (dropping the abort check) were not: the ownership model is unchanged,
+and #116's "abort ownership is per load" acceptance item stays deferred there —
+only its user-visible consequence is closed.
+
+Tests (+2, each verified to fail with the fix disabled):
+
+- `test/viewer.test.ts` — a native `render aborted` failure never invokes the chafa
+  seam; the result is the metadata card carrying the abort reason.
+- `test/index.test.ts` — the deterministic two-load cascade with real
+  `makeImageSeams` + real `runNativeRender`: load B supersedes A, A's abort resolves
+  to a card, and B still renders `native`.
+
+Cleanup in the same change: the dead `KITTY_PROBE_SAMPLES` table (Issue #102
+leftover, kept alive only by its own tests) is removed; `nativelyRenderable` drops
+its unused protocol parameter; the stale mime-gate comment is corrected.
+
+Gates: `npm run typecheck` clean; 20 suites / 670 cases green. version 0.10.9.

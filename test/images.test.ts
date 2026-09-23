@@ -24,7 +24,6 @@ import {
   createKittyProbeState,
   detectPiChafa,
   KITTY_PROBE_SAMPLE,
-  KITTY_PROBE_SAMPLES,
   loadPiChafaConfig,
   makeDeferredImageSupport,
   probeChafa,
@@ -1125,17 +1124,11 @@ describe("resolveNativeProtocol", () => {
 describe("kitty protocol probe helpers (Issue #101, #116)", () => {
   it("buildKittyProbeQuery always sends the PNG sample under f=100 (Issue #116)", () => {
     const q = buildKittyProbeQuery(31);
-    expect(q).toBe(`\x1b_Ga=q,t=d,f=100,i=31;${KITTY_PROBE_SAMPLE}\x1b\\`);
     // The PNG sample is the ONLY valid payload for f=100 — JPEG/WebP samples
     // would be rejected by kitty's a=q decoder, which interprets f=100 literally
-    // as PNG (Issue #116 root cause).
-    expect(q).toContain(KITTY_PROBE_SAMPLES["image/png"]);
-    expect(q).not.toContain(KITTY_PROBE_SAMPLES["image/jpeg"]);
-    expect(q).not.toContain(KITTY_PROBE_SAMPLES["image/webp"]);
-  });
-
-  it("KITTY_PROBE_SAMPLE is the same as the PNG entry in KITTY_PROBE_SAMPLES", () => {
-    expect(KITTY_PROBE_SAMPLE).toBe(KITTY_PROBE_SAMPLES["image/png"]);
+    // as PNG (Issue #116 root cause). The Issue #102 per-MIME sample table was
+    // removed with its last consumer (Issue #117 cleanup).
+    expect(q).toBe(`\x1b_Ga=q,t=d,f=100,i=31;${KITTY_PROBE_SAMPLE}\x1b\\`);
   });
 
   it("the PNG probe sample decodes as 1x1 via pi-tui getImageDimensions", () => {
@@ -1143,19 +1136,6 @@ describe("kitty protocol probe helpers (Issue #101, #116)", () => {
     expect(dims).not.toBeNull();
     expect(dims?.widthPx).toBe(1);
     expect(dims?.heightPx).toBe(1);
-  });
-
-  it("every retained KITTY_PROBE_SAMPLES entry decodes as 1x1 for its own mime only", () => {
-    for (const [mime, sample] of Object.entries(KITTY_PROBE_SAMPLES)) {
-      const dims = getImageDimensions(sample, mime);
-      expect(dims).not.toBeNull();
-      expect(dims?.widthPx).toBe(1);
-      expect(dims?.heightPx).toBe(1);
-      // Cross-format validity: a sample must not decode under another mime.
-      for (const other of Object.keys(KITTY_PROBE_SAMPLES)) {
-        if (other !== mime) expect(getImageDimensions(sample, other)).toBeNull();
-      }
-    }
   });
 
   it("consumeKittyProbeReply matches the OK reply terminated by ESC ST", () => {
