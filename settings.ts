@@ -351,7 +351,8 @@ export function normalizeNavigatorSettings(raw: unknown): { settings: NavigatorS
  * delegating to the shared `parseTruthyEnv` (env.ts), so the accepted value
  * sets per env var stay byte-identical to the pre-#063 truth tables.
  */
-export function parseImageMode(value: string | undefined): { mode: NavigatorImageMode | undefined; warning?: string } {  if (value === undefined) return { mode: undefined };
+export function parseImageMode(value: string | undefined): { mode: NavigatorImageMode | undefined; warning?: string } {
+  if (value === undefined) return { mode: undefined };
   const trimmed = value.trim();
   if (trimmed === "") return { mode: undefined };
   const normalized = trimmed.toLowerCase();
@@ -385,6 +386,7 @@ export function parseLayoutMode(value: string | undefined): { layout: NavigatorL
     warning: `${trimmed} is not a valid ${NAVIGATOR_LAYOUT_ENV} value; using the file/default setting`,
   };
 }
+
 /**
  * Loads settings with precedence defaults ← user file ← env (§5.2).
  * A missing file is not a warning (sources: ["defaults"]); an unreadable or
