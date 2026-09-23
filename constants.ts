@@ -81,6 +81,9 @@ export const NAVIGATOR_SETTINGS_FILE = "pi-navigator.json";
 /** Environment override for the image rendering mode (read once in index.ts). */
 export const NAVIGATOR_IMAGES_ENV = "PI_NAV_IMAGES";
 
+/** Environment override for the default layout (read once in index.ts, Issue #119). */
+export const NAVIGATOR_LAYOUT_ENV = "PI_NAV_LAYOUT";
+
 // ── Chafa / image rendering ──
 
 /** pi-chafa's config file name (read-only mirror; never written here). */

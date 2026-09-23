@@ -14,9 +14,10 @@ import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "
 // pi-lens-ignore: TS2304
 import { dirname } from "node:path";
 
-import { NAVIGATOR_IMAGES_ENV } from "./constants";
+import { NAVIGATOR_IMAGES_ENV, NAVIGATOR_LAYOUT_ENV } from "./constants";
 import { parseIconMode } from "./icons";
 import { parseTruthyEnv } from "./env";
+import { NAVIGATOR_LAYOUTS, type NavigatorLayout } from "./types";
 
 export type NavigatorImageMode = "off" | "chafa" | "native" | "auto";
 
@@ -37,12 +38,17 @@ export interface NavigatorTreeSettings {
   readonly showHidden: boolean;
 }
 
+export interface NavigatorLayoutSettings {
+  readonly default: NavigatorLayout;
+}
+
 export interface NavigatorSettings {
   readonly version: number;
   readonly images: NavigatorImageSettings;
   readonly icons: NavigatorIconSettings;
   readonly viewer: NavigatorViewerSettings;
   readonly tree: NavigatorTreeSettings;
+  readonly layout: NavigatorLayoutSettings;
 }
 
 const SETTINGS_VERSION = 1;
@@ -119,6 +125,18 @@ export const NAVIGATOR_CONFIG_FIELDS: readonly NavigatorConfigField[] = [
     label: "Hidden files",
     description: "Start with hidden files visible; the `.` key still toggles it per session.",
     default: false,
+    live: false,
+  },
+  {
+    id: "layout.default",
+    path: ["layout", "default"],
+    kind: "enum",
+    section: "Layout",
+    label: "Default layout",
+    description:
+      "Layout opened by bare /navigator; /navigator all, /navigator files, and /navigator git always open their own layout for one session.",
+    options: [...NAVIGATOR_LAYOUTS],
+    default: "files-git-viewer",
     live: false,
   },
 ];
@@ -333,8 +351,7 @@ export function normalizeNavigatorSettings(raw: unknown): { settings: NavigatorS
  * delegating to the shared `parseTruthyEnv` (env.ts), so the accepted value
  * sets per env var stay byte-identical to the pre-#063 truth tables.
  */
-export function parseImageMode(value: string | undefined): { mode: NavigatorImageMode | undefined; warning?: string } {
-  if (value === undefined) return { mode: undefined };
+export function parseImageMode(value: string | undefined): { mode: NavigatorImageMode | undefined; warning?: string } {  if (value === undefined) return { mode: undefined };
   const trimmed = value.trim();
   if (trimmed === "") return { mode: undefined };
   const normalized = trimmed.toLowerCase();
@@ -347,6 +364,28 @@ export function parseImageMode(value: string | undefined): { mode: NavigatorImag
 }
 
 /**
+ * Parses the PI_NAV_LAYOUT env override for `layout.default` (Issue #119, D11):
+ * accepted values are exactly the three layout names — unlike PI_NAV_IMAGES
+ * there are no legacy boolean-ish tokens, because this env var is new.
+ * Matching is case-sensitive; undefined/empty/whitespace is "no override",
+ * never a warning; anything else is one warning and the file/default value
+ * stands. Mirrors parseImageMode's contract shape.
+ */
+export function parseLayoutMode(value: string | undefined): { layout: NavigatorLayout | undefined; warning?: string } {
+  if (value === undefined) return { layout: undefined };
+  const trimmed = value.trim();
+  if (trimmed === "") return { layout: undefined };
+  if ((NAVIGATOR_LAYOUTS as readonly string[]).includes(trimmed)) {
+    // SAFETY: the includes check above narrowed trimmed to exactly the union's
+    // members; the cast only re-labels the verified string.
+    return { layout: trimmed as NavigatorLayout };
+  }
+  return {
+    layout: undefined,
+    warning: `${trimmed} is not a valid ${NAVIGATOR_LAYOUT_ENV} value; using the file/default setting`,
+  };
+}
+/**
  * Loads settings with precedence defaults ← user file ← env (§5.2).
  * A missing file is not a warning (sources: ["defaults"]); an unreadable or
  * corrupt file is one bounded warning (sources: ["defaults"]); a valid file
@@ -354,7 +393,7 @@ export function parseImageMode(value: string | undefined): { mode: NavigatorImag
  */
 export function loadNavigatorSettings(paths: {
   userPath: string;
-  env?: { images?: string | undefined; icons?: string | undefined };
+  env?: { images?: string | undefined; icons?: string | undefined; layout?: string | undefined };
 }): { settings: NavigatorSettings; warnings: string[]; sources: string[] } {
   const warnings: string[] = [];
   const sources: string[] = [];
@@ -386,6 +425,12 @@ export function loadNavigatorSettings(paths: {
     settings = { ...settings, icons: { ...settings.icons, enabled: iconMode.enabled } };
   }
   if (iconMode.warning !== undefined) warnings.push(iconMode.warning);
+
+  const layoutMode = parseLayoutMode(paths.env?.layout);
+  if (layoutMode.layout !== undefined) {
+    settings = { ...settings, layout: { ...settings.layout, default: layoutMode.layout } };
+  }
+  if (layoutMode.warning !== undefined) warnings.push(layoutMode.warning);
 
   if (sources.length === 0) sources.push("defaults");
   return { settings, warnings, sources };

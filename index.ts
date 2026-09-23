@@ -35,6 +35,7 @@ import {
   MAX_POLL_INTERVAL_MS,
   MAX_VIEWER_CACHE_ENTRIES,
   NAVIGATOR_IMAGES_ENV,
+  NAVIGATOR_LAYOUT_ENV,
   NAVIGATOR_SETTINGS_FILE,
   OVERLAY_OPTIONS,
   REFRESH_INTERVAL_MS,
@@ -415,7 +416,11 @@ async function runNavigator(pi: ExtensionAPI, ctx: ExtensionContext | ExtensionC
       const agentDir = getAgentDir();
       const loaded = loadNavigatorSettings({
         userPath: join(agentDir, NAVIGATOR_SETTINGS_FILE),
-        env: { images: process.env[NAVIGATOR_IMAGES_ENV], icons: process.env[ICONS_ENV] },
+        env: {
+          images: process.env[NAVIGATOR_IMAGES_ENV],
+          icons: process.env[ICONS_ENV],
+          layout: process.env[NAVIGATOR_LAYOUT_ENV],
+        },
       });
       const notifyWarning = makeWarningNotifier(ctx.ui);
       // One-shot tree truncation warning (Issue #108): the tree walks share a
@@ -836,6 +841,8 @@ async function runSettings(pi: ExtensionAPI, ctx: ExtensionCommandContext): Prom
   if (imagesEnv !== undefined && imagesEnv.trim() !== "") overrides["images.mode"] = NAVIGATOR_IMAGES_ENV;
   const iconsEnv = process.env[ICONS_ENV];
   if (iconsEnv !== undefined && iconsEnv.trim() !== "") overrides["icons.enabled"] = ICONS_ENV;
+  const layoutEnv = process.env[NAVIGATOR_LAYOUT_ENV];
+  if (layoutEnv !== undefined && layoutEnv.trim() !== "") overrides["layout.default"] = NAVIGATOR_LAYOUT_ENV;
 
   try {
     await openSettingsMenu(ctx.ui, {

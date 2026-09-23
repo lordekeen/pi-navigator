@@ -25,6 +25,7 @@ function fullSettings(): NavigatorSettings {
     icons: { enabled: false },
     viewer: { wrap: false, markdown: "code" },
     tree: { showHidden: false },
+    layout: { default: "files-git-viewer" },
   };
 }
 
@@ -35,6 +36,7 @@ function markedUpSettings(): NavigatorSettings {
     icons: { enabled: true },
     viewer: { wrap: true, markdown: "rendered" },
     tree: { showHidden: true },
+    layout: { default: "git-viewer" },
   };
 }
 
@@ -88,12 +90,19 @@ describe("buildSettingItems", () => {
       "viewer.wrap",
       "viewer.markdown",
       "tree.showHidden",
+      "layout.default",
     ]);
     expect(items[0]).toMatchObject({ label: "Image rendering", currentValue: "off", values: ["off", "chafa", "native", "auto"] });
     expect(items[1]).toMatchObject({ label: "Nerd Font icons", currentValue: "off", values: ["on", "off"] });
     expect(items[2]).toMatchObject({ label: "Word wrap", currentValue: "off", values: ["on", "off"] });
     expect(items[3]).toMatchObject({ label: "Markdown view", currentValue: "code", values: ["code", "rendered"] });
     expect(items[4]).toMatchObject({ label: "Hidden files", currentValue: "off", values: ["on", "off"] });
+    // Issue #119: the Layout section row exposes the three layouts.
+    expect(items[5]).toMatchObject({
+      label: "Default layout",
+      currentValue: "files-git-viewer",
+      values: ["files-git-viewer", "files-viewer", "git-viewer"],
+    });
   });
 
   it("reads current values from the settings object for booleans and enums", () => {
@@ -103,15 +112,19 @@ describe("buildSettingItems", () => {
     expect(items[2]?.currentValue).toBe("on");
     expect(items[3]?.currentValue).toBe("rendered");
     expect(items[4]?.currentValue).toBe("on");
+    expect(items[5]?.currentValue).toBe("git-viewer");
   });
 
   it("annotates env-shadowed rows with the env var name", () => {
     const items = buildSettingItems(fullSettings(), {
       "images.mode": "PI_NAV_IMAGES",
       "icons.enabled": "PI_NAV_ICONS",
+      "layout.default": "PI_NAV_LAYOUT",
     });
     expect(items[0]?.description).toContain("\u2014 overridden by PI_NAV_IMAGES (env wins)");
     expect(items[1]?.description).toContain("\u2014 overridden by PI_NAV_ICONS (env wins)");
+    // Issue #119: the layout row annotates the same way.
+    expect(items[5]?.description).toContain("\u2014 overridden by PI_NAV_LAYOUT (env wins)");
     expect(items[0]?.description.startsWith("Render images as native terminal graphics")).toBe(true);
     expect(items[2]?.description).not.toContain("overridden");
     expect(items[4]?.description).not.toContain("overridden");
@@ -140,9 +153,11 @@ describe("buildSettingItems", () => {
   it("safely handles partial or empty settings without throwing TypeError", () => {
     expect(() => buildSettingItems({} as any, {})).not.toThrow();
     const items = buildSettingItems({} as any, {});
-    expect(items).toHaveLength(5);
+    expect(items).toHaveLength(6);
     expect(items[0]?.currentValue).toBe("off");
     expect(items[1]?.currentValue).toBe("off");
+    // A missing layout section falls back to the registry default.
+    expect(items[5]?.currentValue).toBe("files-git-viewer");
   });
 
   it("supports numeric fields with submenu and text input", () => {

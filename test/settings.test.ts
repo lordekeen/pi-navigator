@@ -19,12 +19,14 @@ import {
   loadNavigatorSettings,
   normalizeNavigatorSettings,
   parseImageMode,
+  parseLayoutMode,
   parseNumberField,
   serializeNavigatorSettings,
   writeNavigatorSettings,
 } from "../settings";
 
 import type { NavigatorImageMode } from "../settings";
+import { NAVIGATOR_LAYOUTS } from "../types";
 
 function deepFreeze<T>(value: T): T {
   if (value !== null && typeof value === "object") {
@@ -36,12 +38,13 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-/** A complete settings object with the canonical shape (all four sections). */
+/** A complete settings object with the canonical shape (all five sections). */
 function fullSettings(overrides: Partial<{
   images: { mode: NavigatorImageMode };
   icons: { enabled: boolean };
   viewer: { wrap: boolean; markdown: "code" | "rendered" };
   tree: { showHidden: boolean };
+  layout: { default: (typeof NAVIGATOR_LAYOUTS)[number] };
 }> = {}): ReturnType<typeof cloneDefaultsLike> {
   return {
     version: 1,
@@ -49,6 +52,7 @@ function fullSettings(overrides: Partial<{
     icons: overrides.icons ?? { enabled: false },
     viewer: overrides.viewer ?? { wrap: false, markdown: "code" },
     tree: overrides.tree ?? { showHidden: false },
+    layout: overrides.layout ?? { default: "files-git-viewer" },
   };
 }
 
@@ -58,6 +62,7 @@ function cloneDefaultsLike(): {
   icons: { enabled: boolean };
   viewer: { wrap: boolean; markdown: "code" | "rendered" };
   tree: { showHidden: boolean };
+  layout: { default: (typeof NAVIGATOR_LAYOUTS)[number] };
 } {
   return {
     version: 1,
@@ -65,6 +70,7 @@ function cloneDefaultsLike(): {
     icons: { enabled: false },
     viewer: { wrap: false, markdown: "code" },
     tree: { showHidden: false },
+    layout: { default: "files-git-viewer" },
   };
 }
 
@@ -122,6 +128,42 @@ describe("parseImageMode", () => {
   });
 });
 
+// ── PI_NAV_LAYOUT truth table (Issue #119, D11) ──
+
+describe("parseLayoutMode", () => {
+  it("resolves exactly the three layout names, case-sensitively", () => {
+    for (const layout of NAVIGATOR_LAYOUTS) {
+      expect(parseLayoutMode(layout)).toEqual({ layout });
+    }
+    // No legacy boolean-ish tokens and no case folding: this env var is new.
+    expect(parseLayoutMode("1").layout).toBeUndefined();
+    expect(parseLayoutMode("FILES-VIEWER").layout).toBeUndefined();
+    expect(parseLayoutMode("Files-Viewer").layout).toBeUndefined();
+  });
+
+  it("treats undefined, empty, and whitespace as no override, without a warning", () => {
+    expect(parseLayoutMode(undefined)).toEqual({ layout: undefined });
+    expect(parseLayoutMode("")).toEqual({ layout: undefined });
+    expect(parseLayoutMode("   ")).toEqual({ layout: undefined });
+    expect(parseLayoutMode("\t\n")).toEqual({ layout: undefined });
+  });
+
+  it("trims surrounding whitespace from a valid value", () => {
+    expect(parseLayoutMode(" git-viewer ")).toEqual({ layout: "git-viewer" });
+  });
+
+  it("emits the exact warning string for invalid values and keeps the original casing", () => {
+    expect(parseLayoutMode("sixel")).toEqual({
+      layout: undefined,
+      warning: "sixel is not a valid PI_NAV_LAYOUT value; using the file/default setting",
+    });
+    expect(parseLayoutMode("SIXEL")).toEqual({
+      layout: undefined,
+      warning: "SIXEL is not a valid PI_NAV_LAYOUT value; using the file/default setting",
+    });
+  });
+});
+
 // ── normalizeNavigatorSettings (§5.2) ──
 
 describe("normalizeNavigatorSettings", () => {
@@ -140,13 +182,14 @@ describe("normalizeNavigatorSettings", () => {
     expect(result.warnings).toEqual([]);
   });
 
-  it("expanded defaults cover all four sections", () => {
+  it("expanded defaults cover all five sections", () => {
     expect(DEFAULT_NAVIGATOR_SETTINGS).toEqual({
       version: 1,
       images: { mode: "off" },
       icons: { enabled: false },
       viewer: { wrap: false, markdown: "code" },
       tree: { showHidden: false },
+      layout: { default: "files-git-viewer" },
     });
   });
 
@@ -164,7 +207,7 @@ describe("normalizeNavigatorSettings", () => {
 
   it("the exported defaults stay deeply frozen", () => {
     expect(Object.isFrozen(DEFAULT_NAVIGATOR_SETTINGS)).toBe(true);
-    for (const section of ["images", "icons", "viewer", "tree"]) {
+    for (const section of ["images", "icons", "viewer", "tree", "layout"]) {
       const value = (DEFAULT_NAVIGATOR_SETTINGS as unknown as Record<string, unknown>)[section];
       expect(value).toBeDefined();
       if (value !== null && typeof value === "object") expect(Object.isFrozen(value), section).toBe(true);
@@ -224,14 +267,29 @@ describe("normalizeNavigatorSettings", () => {
     }
   });
 
+  it("accepts all three layout.default values without warnings", () => {
+    for (const layout of NAVIGATOR_LAYOUTS) {
+      const result = normalizeNavigatorSettings({ version: 1, layout: { default: layout } });
+      expect(result.settings.layout.default).toBe(layout);
+      expect(result.warnings).toEqual([]);
+    }
+  });
+
+  it("warns on invalid layout.default values and falls back to files-git-viewer", () => {
+    const result = normalizeNavigatorSettings({ version: 1, layout: { default: "split" } });
+    expect(result.settings.layout.default).toBe("files-git-viewer");
+    expect(result.warnings.some((w) => w.includes("layout.default"))).toBe(true);
+  });
+
   it("accepts object sections and rejects non-object sections with a warning", () => {
-    const result = normalizeNavigatorSettings({ version: 1, icons: { enabled: true }, viewer: { wrap: true, markdown: "rendered" }, tree: { showHidden: true } });
+    const result = normalizeNavigatorSettings({ version: 1, icons: { enabled: true }, viewer: { wrap: true, markdown: "rendered" }, tree: { showHidden: true }, layout: { default: "git-viewer" } });
     expect(result.settings).toEqual({
       version: 1,
       images: { mode: "off" },
       icons: { enabled: true },
       viewer: { wrap: true, markdown: "rendered" },
       tree: { showHidden: true },
+      layout: { default: "git-viewer" },
     });
     expect(result.warnings).toEqual([]);
     for (const section of ["icons", "viewer", "tree"]) {
@@ -363,25 +421,37 @@ describe("normalizeNavigatorSettings", () => {
 // ── serializeNavigatorSettings (§5.2) ──
 
 describe("serializeNavigatorSettings", () => {
-  it("emits the canonical nested shape with all four sections", () => {
+  it("emits the canonical nested shape with all five sections", () => {
     expect(serializeNavigatorSettings(DEFAULT_NAVIGATOR_SETTINGS)).toEqual({
       version: 1,
       images: { mode: "off" },
       icons: { enabled: false },
       viewer: { wrap: false, markdown: "code" },
       tree: { showHidden: false },
+      layout: { default: "files-git-viewer" },
     });
     // Key order is part of the persistence contract: the writer (and thus
     // versions of the file on disk) stays byte-identical across formats.
     expect(JSON.stringify(serializeNavigatorSettings(DEFAULT_NAVIGATOR_SETTINGS))).toBe(
-      '{"version":1,"images":{"mode":"off"},"icons":{"enabled":false},"viewer":{"wrap":false,"markdown":"code"},"tree":{"showHidden":false}}',
+      '{"version":1,"images":{"mode":"off"},"icons":{"enabled":false},"viewer":{"wrap":false,"markdown":"code"},"tree":{"showHidden":false},"layout":{"default":"files-git-viewer"}}',
     );
-    expect(serializeNavigatorSettings(fullSettings({ images: { mode: "chafa" }, icons: { enabled: true }, viewer: { wrap: true, markdown: "rendered" }, tree: { showHidden: true } }))).toEqual({
+    expect(
+      serializeNavigatorSettings(
+        fullSettings({
+          images: { mode: "chafa" },
+          icons: { enabled: true },
+          viewer: { wrap: true, markdown: "rendered" },
+          tree: { showHidden: true },
+          layout: { default: "git-viewer" },
+        }),
+      ),
+    ).toEqual({
       version: 1,
       images: { mode: "chafa" },
       icons: { enabled: true },
       viewer: { wrap: true, markdown: "rendered" },
       tree: { showHidden: true },
+      layout: { default: "git-viewer" },
     });
   });
 
@@ -485,11 +555,46 @@ describe("loadNavigatorSettings", () => {
   });
 
   it("applies the env overrides with no file present", () => {
-    const result = loadNavigatorSettings({ userPath: join(dir, "missing.json"), env: { images: "1", icons: "on" } });
+    const result = loadNavigatorSettings({ userPath: join(dir, "missing.json"), env: { images: "1", icons: "on", layout: "git-viewer" } });
     expect(result.settings.images.mode).toBe("chafa");
     expect(result.settings.icons.enabled).toBe(true);
+    expect(result.settings.layout.default).toBe("git-viewer");
     expect(result.warnings).toEqual([]);
     expect(result.sources).toEqual(["defaults"]);
+  });
+
+  it("resolves PI_NAV_LAYOUT precedence inside the loader (file ← env, Issue #119)", () => {
+    const splitFile = join(dir, "layout-split.json");
+    writeFileSync(splitFile, JSON.stringify(fullSettings({ layout: { default: "files-git-viewer" } })), "utf8");
+    const overridden = loadNavigatorSettings({ userPath: splitFile, env: { layout: "files-viewer" } });
+    expect(overridden.settings.layout.default).toBe("files-viewer");
+    expect(overridden.warnings).toEqual([]);
+    expect(overridden.sources).toEqual([splitFile]);
+
+    const gitFile = join(dir, "layout-git.json");
+    writeFileSync(gitFile, JSON.stringify(fullSettings({ layout: { default: "git-viewer" } })), "utf8");
+    const reverted = loadNavigatorSettings({ userPath: gitFile, env: { layout: "files-git-viewer" } });
+    expect(reverted.settings.layout.default).toBe("files-git-viewer");
+    expect(reverted.warnings).toEqual([]);
+  });
+
+  it("ignores an empty or whitespace layout env without a warning", () => {
+    const path = join(dir, "layout-file.json");
+    writeFileSync(path, JSON.stringify(fullSettings({ layout: { default: "files-viewer" } })), "utf8");
+    for (const layout of ["", "   ", undefined]) {
+      const result = loadNavigatorSettings({ userPath: path, env: { layout } });
+      expect(result.settings.layout.default).toBe("files-viewer");
+      expect(result.warnings).toEqual([]);
+    }
+  });
+
+  it("warns on an invalid layout env and falls back to the file value", () => {
+    const path = join(dir, "layout-file.json");
+    writeFileSync(path, JSON.stringify(fullSettings({ layout: { default: "files-viewer" } })), "utf8");
+    const result = loadNavigatorSettings({ userPath: path, env: { layout: "sixel" } });
+    expect(result.settings.layout.default).toBe("files-viewer");
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0] ?? "").toContain("PI_NAV_LAYOUT");
   });
 
   it("ignores empty or whitespace env values without a warning", () => {
@@ -557,7 +662,7 @@ describe("writeNavigatorSettings", () => {
 
   it("writes the canonical shape atomically and leaves no tmp file behind", () => {
     const path = join(dir, "nested", "deep", "pi-navigator.json"); // exercises mkdir -p
-    writeNavigatorSettings(path, fullSettings({ images: { mode: "chafa" }, icons: { enabled: true } }));
+    writeNavigatorSettings(path, fullSettings({ images: { mode: "chafa" }, icons: { enabled: true }, layout: { default: "git-viewer" } }));
     const onDisk = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
     expect(onDisk).toEqual({
       version: 1,
@@ -565,6 +670,7 @@ describe("writeNavigatorSettings", () => {
       icons: { enabled: true },
       viewer: { wrap: false, markdown: "code" },
       tree: { showHidden: false },
+      layout: { default: "git-viewer" },
     });
     const entries = readdirSync(join(dir, "nested", "deep"));
     expect(entries).toEqual(["pi-navigator.json"]);
@@ -583,13 +689,14 @@ describe("writeNavigatorSettings", () => {
   it("overwrites an existing file atomically", () => {
     const path = join(dir, "pi-navigator.json");
     writeFileSync(path, JSON.stringify(fullSettings({ images: { mode: "off" } })), "utf8");
-    writeNavigatorSettings(path, fullSettings({ images: { mode: "chafa" } }));
+    writeNavigatorSettings(path, fullSettings({ images: { mode: "chafa" }, layout: { default: "files-viewer" } }));
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
       version: 1,
       images: { mode: "chafa" },
       icons: { enabled: false },
       viewer: { wrap: false, markdown: "code" },
       tree: { showHidden: false },
+      layout: { default: "files-viewer" },
     });
     expect(readdirSync(dir)).toEqual(["pi-navigator.json"]);
   });
@@ -621,6 +728,15 @@ describe("applyFieldEdit", () => {
       ok: true,
       settings: fullSettings({ viewer: { wrap: false, markdown: "rendered" } }),
     });
+    for (const layout of NAVIGATOR_LAYOUTS) {
+      expect(applyFieldEdit(fullSettings(), "layout.default", layout)).toEqual({
+        ok: true,
+        settings: fullSettings({ layout: { default: layout } }),
+      });
+    }
+    const bad = applyFieldEdit(fullSettings(), "layout.default", "split");
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.error).toContain("expected one of files-git-viewer, files-viewer, git-viewer");
   });
 
   it("rejects an unknown field id", () => {
@@ -661,8 +777,8 @@ describe("applyFieldEdit", () => {
 // ── NAVIGATOR_CONFIG_FIELDS sync guard (overseer pattern) ──
 
 describe("NAVIGATOR_CONFIG_FIELDS", () => {
-  it("has exactly five entries matching the spec table", () => {
-    expect(NAVIGATOR_CONFIG_FIELDS).toHaveLength(5);
+  it("has exactly six entries matching the spec table", () => {
+    expect(NAVIGATOR_CONFIG_FIELDS).toHaveLength(6);
     expect(NAVIGATOR_CONFIG_FIELDS[0]).toMatchObject({
       id: "images.mode",
       path: ["images", "mode"],
@@ -703,6 +819,16 @@ describe("NAVIGATOR_CONFIG_FIELDS", () => {
       kind: "boolean",
       section: "Tree",
       label: "Hidden files",
+      live: false,
+    });
+    expect(NAVIGATOR_CONFIG_FIELDS[5]).toMatchObject({
+      id: "layout.default",
+      path: ["layout", "default"],
+      kind: "enum",
+      section: "Layout",
+      label: "Default layout",
+      options: ["files-git-viewer", "files-viewer", "git-viewer"],
+      default: "files-git-viewer",
       live: false,
     });
     for (const field of NAVIGATOR_CONFIG_FIELDS) {
@@ -750,6 +876,13 @@ describe("NAVIGATOR_CONFIG_FIELDS", () => {
     expect(markdownField?.options).toEqual(["code", "rendered"]);
     expect(normalizeNavigatorSettings({ version: 1, viewer: { markdown: "rendered" } }).warnings).toEqual([]);
     expect(normalizeNavigatorSettings({ version: 1, viewer: { markdown: "preview" } }).warnings.length).toBeGreaterThan(0);
+    // Issue #119: the layout enum's options are exactly NAVIGATOR_LAYOUTS.
+    const layoutField = NAVIGATOR_CONFIG_FIELDS[5];
+    expect(layoutField?.options).toEqual([...NAVIGATOR_LAYOUTS]);
+    for (const layout of NAVIGATOR_LAYOUTS) {
+      expect(normalizeNavigatorSettings({ version: 1, layout: { default: layout } }).warnings).toEqual([]);
+    }
+    expect(normalizeNavigatorSettings({ version: 1, layout: { default: "grid" } }).warnings.length).toBeGreaterThan(0);
   });
 
   it("applyFieldEdit round-trips every registry field through the normalizer", () => {
