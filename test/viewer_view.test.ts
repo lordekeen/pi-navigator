@@ -299,49 +299,6 @@ describe("buildViewerHeader", () => {
   });
 });
 
-describe("Issue #116: native failure reason on a rendered chafa image", () => {
-  const chafaImage = viewerFile({
-    kind: "image",
-    relPath: "pics/sample.png",
-    imageTier: "chafa",
-    imageLines: ["\u2588"],
-    imageCols: 40,
-    imageRows: 1,
-    sizeBytes: 1024,
-    message: "1.0 KB",
-  });
-
-  it("surfaces the fallback reason as a dim suffix next to the chafa badge", () => {
-    const file = { ...chafaImage, imageError: "image exceeds the 4 MiB native rendering cap" };
-    const header = buildViewerHeader(paneView({ file, imageLines: file.imageLines }), 120);
-    expect(header).toContain("chafa \u00b7 i card");
-    expect(header).toContain("image exceeds the 4 MiB native rendering cap");
-    // The whole meta block rides the dim channel (T.dim wraps the join).
-    const toned = buildViewerHeader(
-      paneView({ file, imageLines: file.imageLines, theme: toneTheme }),
-      120,
-    );
-    expect(toned).toContain("dim:1.0 KB · chafa · i card · image exceeds the 4 MiB native rendering cap");
-  });
-
-  it("shows no suffix when the rendered image carries no error", () => {
-    const header = buildViewerHeader(paneView({ file: chafaImage, imageLines: chafaImage.imageLines }), 120);
-    expect(header).toContain("chafa \u00b7 i card");
-    expect(header).not.toContain("4 MiB");
-    expect(header).not.toContain("failed:");
-  });
-
-  it("truncates the suffix to keep the header width-safe at every pane width", () => {
-    for (const width of [120, 100, 80, 60, 40]) {
-      const file = { ...chafaImage, imageError: "x".repeat(200) };
-      const header = buildViewerHeader(paneView({ file, imageLines: file.imageLines }), width);
-      expect(visibleWidth(header), `header overflows width ${width}`).toBeLessThanOrEqual(width);
-      // The left path keeps cells: the suffix never eats the whole header.
-      expect(header).toContain("chafa \u00b7 i card");
-      if (width >= 60) expect(header).toContain("x".repeat(10)); // reason visibly present
-    }
-  });
-});
 
 describe("imageCardHints", () => {
   const image = viewerFile({ kind: "image", relPath: "pic.png", imageTier: "metadata", lines: [] });
@@ -404,13 +361,11 @@ describe("imageCardHints", () => {
       "terminal.showImages is false - image rendering disabled",
     ]);
 
-    // Supported formats under a capable strict-native session: no hint.
+    // Supported format under a capable strict-native session: no hint.
     expect(imageCardHints(png, native, geometry)).toEqual([]);
-    expect(imageCardHints({ ...png, relPath: "pic.jpg" }, native, geometry)).toEqual([]);
-    expect(imageCardHints({ ...png, relPath: "pic.webp" }, native, geometry)).toEqual([]);
-    // An unsupported format on kitty (e.g. GIF) and on iTerm2 get format hints.
-    expect(imageCardHints({ ...png, relPath: "pic.gif" }, native, geometry)).toEqual([
-      "kitty rendering needs PNG, JPEG, or WebP - chafa or auto can render this format",
+    // A non-PNG on kitty and an unsupported format on iTerm2 get format hints.
+    expect(imageCardHints({ ...png, relPath: "pic.jpg" }, native, geometry)).toEqual([
+      "kitty rendering needs PNG - chafa or auto can render this format",
     ]);
     expect(
       imageCardHints({ ...png, relPath: "pic.bmp" }, nativeSupport({ nativeProtocol: "iterm2" }), geometry),

@@ -217,21 +217,11 @@ abort path is unreachable in production; only chafa children are abortable
 mid-flight, and those belong to superseded loads. It has no observable effect today,
 so it is left until the probe question is settled.
 
-## Resolution (v0.10.6) — Kitty protocol probe & JPEG/WebP decode fix
+## Resolution (v0.10.6) — Kitty PNG gate & Clean Chafa rendering
 
-1. **Protocol-level Kitty probe with valid PNG sample**: The Kitty decode probe
-   (`buildKittyProbeQuery`) now always transmits a valid 1×1 PNG sample under
-   `f=100`, verifying terminal protocol support rather than per-MIME decoding.
-   Because `f=100` strictly designates PNG format in the Kitty graphics protocol,
-   transmitting JPEG/WebP samples tagged `f=100` in `a=q` queries caused Kitty's
-   PNG decoder to reject them with an explicit error (`Failed to decode PNG image`),
-   which falsely degraded native JPEG/WebP rendering to Chafa in auto mode or
-   produced decode error cards in native mode. Real Kitty terminals support
-   auto-detection during image transmission (`a=T`), so probing protocol support
-   with PNG accurately gates Kitty rendering without format-mismatch errors.
-2. **Per-invocation probe cache**: In `index.ts`, `makeTuiKittyDecodeProbe` cache is
-   now scoped per overlay invocation rather than a module-level process-wide latch,
-   so a transient error verdict does not permanently degrade the entire process.
-3. **Card hint alignment**: Updated `nativelyRenderable` and `imageCardHints` in
-   `viewer_view.ts` to recognize `image/jpeg` and `image/webp` alongside `image/png`
-   under Kitty protocol, matching `runNativeRender`'s MIME gate and Issue #071.
+1. **Kitty graphics protocol requires PNG**: The Kitty terminal emulator directly decodes only PNG (`f=100`) and raw RGB pixel streams; it does not decode JPEG or WebP from direct inline transmissions (`a=T,f=100,q=2`). Attempting native Kitty transmission for JPEG/WebP causes Kitty's decoder to fail silently, leaving the viewer completely blank. Both `runNativeRender` (`images.ts`) and `nativelyRenderable` (`viewer_view.ts`) enforce the PNG requirement for Kitty:
+   - In `auto` mode, JPEG and WebP fall back cleanly to Chafa without attempting unrenderable native transmission (the viewer renders Chafa art instead of remaining blank).
+   - In `native` mode, JPEG and WebP display the metadata card with `"kitty rendering needs PNG - chafa or auto can render this format"`.
+   - PNG images under 4 MiB render natively in Kitty.
+2. **Reverted top-of-screen header error on Chafa renders**: Removed the `file.imageError` injection from the header of successfully rendered Chafa images in `viewer_view.ts` and `viewer.ts`. When an image falls back to Chafa (e.g. over 4 MiB PNG or non-PNG on Kitty), Chafa renders cleanly with standard `chafa · i card` badges. The failure reason message is reserved exclusively for metadata cards when there is no way to render the image.
+3. **Protocol-level Kitty probe**: The Kitty decode probe (`buildKittyProbeQuery`) transmits a valid 1×1 PNG sample under `f=100` and is cached per overlay invocation in `index.ts`, avoiding stale process-wide latches.

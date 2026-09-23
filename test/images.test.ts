@@ -1747,52 +1747,45 @@ describe("runNativeRender", () => {
     expect(readBytes).toHaveBeenCalledWith("/tmp/pixel.png");
   });
 
-  it("kitty renders a real JPEG fixture (#071)", async () => {
-    withProtocol("kitty");
+  it("iterm2 renders a real JPEG fixture", async () => {
+    withProtocol("iterm2");
     const readBytes = readBytesOf(JPEG_1X1_BASE64);
     const result = await runNativeRender("/tmp/pixel.jpg", geometry, {
-      protocol: "kitty",
+      protocol: "iterm2",
       readBytes,
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.rows).toBeGreaterThan(0);
     expect(result.cols).toBeGreaterThan(0);
-    expect(result.lines[0]).toContain("\x1b_G");
     expect(readBytes).toHaveBeenCalledWith("/tmp/pixel.jpg");
   });
 
-  it("kitty renders a real WebP fixture (#071)", async () => {
-    withProtocol("kitty");
+  it("iterm2 renders a real WebP fixture", async () => {
+    withProtocol("iterm2");
     const readBytes = readBytesOf(WEBP_1X1_BASE64);
     const result = await runNativeRender("/tmp/pixel.webp", geometry, {
-      protocol: "kitty",
+      protocol: "iterm2",
       readBytes,
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.rows).toBeGreaterThan(0);
     expect(result.cols).toBeGreaterThan(0);
-    expect(result.lines[0]).toContain("\x1b_G");
     expect(readBytes).toHaveBeenCalledWith("/tmp/pixel.webp");
   });
 
-  it("kitty renders JPEG and WebP when protocol probe succeeds (Issue #116)", async () => {
+  it("kitty rejects non-PNG formats (JPEG, WebP) before any read (D5)", async () => {
     withProtocol("kitty");
-    const probeDecode = vi.fn(async () => "ok" as const);
     for (const [ext, b64] of [["jpg", JPEG_1X1_BASE64], ["webp", WEBP_1X1_BASE64]] as const) {
       const readBytes = readBytesOf(b64);
       const result = await runNativeRender(`/tmp/pixel.${ext}`, geometry, {
         protocol: "kitty",
         readBytes,
-        probeDecode,
       });
-      expect(result.ok).toBe(true);
-      expect(readBytes).toHaveBeenCalledWith(`/tmp/pixel.${ext}`);
+      expect(result).toEqual({ ok: false, reason: "kitty requires PNG" });
+      expect(readBytes).not.toHaveBeenCalled();
     }
-    // Protocol probe takes no mime argument — it probes protocol support with PNG
-    expect(probeDecode).toHaveBeenCalledTimes(2);
-    expect(probeDecode).toHaveBeenCalledWith();
   });
 
   it("iterm2: fillers are empty and the last line is moveUp + File= with inline=1 and width=", async () => {
@@ -1825,7 +1818,7 @@ describe("runNativeRender", () => {
       protocol: "kitty",
       readBytes,
     });
-    expect(result).toEqual({ ok: false, reason: "kitty requires PNG, JPEG, or WebP" });
+    expect(result).toEqual({ ok: false, reason: "kitty requires PNG" });
     expect(readBytes).not.toHaveBeenCalled();
   });
 

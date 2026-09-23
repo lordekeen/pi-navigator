@@ -892,34 +892,6 @@ describe("chafa image render width safety (§12.5)", () => {
     }
   });
 
-  it("keeps a chafa fallback reason in the header width-safe at every suite size (Issue #116 fix 2)", async () => {
-    // A native render can fail cleanly and fall through to chafa; the reason is
-    // now kept on the rendered file and shown as a dim header suffix. It must
-    // never push a row past the pane width — the failure this pins is exactly
-    // the width-safety class this suite exists for.
-    const reason =
-      "image exceeds the 4 MiB native rendering cap, which is a deliberately long reason to force clamping";
-    const sizes = [
-      [120, 36],
-      [100, 28],
-      [80, 24],
-      [60, 24],
-      [50, 24],
-    ] as const;
-    for (const [width, rows] of sizes) {
-      const overlay = makeChafaHarness(rows, activeChafaSupport(), reason);
-      overlay.render(width); // first frame records the pane snapshot
-      await overlay.openRelPath("sample.png");
-      const joined = expectWidthSafe(overlay, width).join("\n");
-      // The art still rendered: the reason is additive, never a card.
-      expect(joined, `chafa payload missing at ${width}`).toContain("\x1b[31m");
-      expect(joined, `card hints leaked at ${width}`).not.toContain("optional:");
-      // The header only carries the reason where the pane has budget for it
-      // (the suffix is deliberately budgeted, then clamped); at the widest size
-      // it must be there in full prefix form.
-      if (width === 120) expect(joined, "reason missing at 120").toContain("4 MiB");
-    }
-  });
 
   it("renders a card-only frame when image rendering is not active", async () => {
     // Inactive support (mode off) is the real card-only path: openRelPath

@@ -1052,13 +1052,8 @@ export async function runNativeRender(
       reason: bounded("native rendering does not support this image format"),
     };
   }
-  if (
-    ctx.protocol === "kitty" &&
-    mime !== "image/png" &&
-    mime !== "image/jpeg" &&
-    mime !== "image/webp"
-  ) {
-    return { ok: false, reason: bounded("kitty requires PNG, JPEG, or WebP") };
+  if (ctx.protocol === "kitty" && mime !== "image/png") {
+    return { ok: false, reason: bounded("kitty requires PNG") };
   }
 
   // b2) Kitty protocol probe (Issue #101, #116): an explicit terminal error

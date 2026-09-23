@@ -425,11 +425,6 @@ export async function loadFile(
             imageLines: out.lines,
             imageCols: out.cols,
             imageRows: out.rows,
-            // Issue #116 fix 2: a clean native failure that fell through to
-            // chafa keeps its reason so the fallback is diagnosable from the
-            // UI (header suffix on the rendered image; the metadata card
-            // already surfaces it through imageCardHints).
-            ...(nativeReason !== undefined ? { imageError: boundImageError(nativeReason) } : {}),
           };
         }
         return {

@@ -235,18 +235,6 @@ export function buildViewerHeader(view: ViewerPaneView, rightW: number): string 
       if (file.imageTier === "chafa" && !view.imageAsCard) {
         meta.push("chafa");
         meta.push("i card");
-        // Issue #116 diagnostic: a native failure that fell through to chafa
-        // keeps its reason here — the only surface a rendered image has (the
-        // notice row exists only for text kinds; card hints only for the
-        // card). Sized to what the pane still shows after the meta already
-        // queued (plus a reserve for the wrap/col/loading entries pushed
-        // below) so the left path keeps cells; the clamp at the bottom makes
-        // the whole right side width-safe at any pane width.
-        if (file.imageError !== undefined) {
-          const queued = meta.reduce((width, item) => width + visibleWidth(item) + 3, 0);
-          const budget = Math.max(0, rightW - queued - 16);
-          if (budget > 0) meta.push(truncateAndWidth(file.imageError, budget).text);
-        }
       } else if (file.imageTier === "native" && !view.imageAsCard) {
         meta.push(view.imageSupport.nativeProtocol ?? "native");
         meta.push("i card");
@@ -260,14 +248,7 @@ export function buildViewerHeader(view: ViewerPaneView, rightW: number): string 
   } else if (view.loading && currentPath !== "(no file)") {
     meta.push("loading\u2026");
   }
-  const right =
-    meta.length > 0
-      ? // Width clamp (Issue #116): joinLeftRight ellipsizes the LEFT path,
-        // never the right side, so the (possibly long) diagnostic suffix is
-        // hard-clamped to the pane width here — the empty-ellipsis cut
-        // (Issue #010) keeps every header row width-safe at any width.
-        " " + T.dim(truncateAndWidth(meta.join(" \u00b7 "), Math.max(0, rightW - 2)).text) + " "
-      : " ";
+  const right = meta.length > 0 ? T.dim(meta.join(" \u00b7 ")) + " " : " ";
   return joinLeftRight(left, right, rightW);
 }
 
@@ -373,10 +354,7 @@ function imageErrorLabel(support: ImageSupport): string {
 function nativelyRenderable(relPath: string, protocol: NativeProtocol): boolean {
   const mime = NATIVE_IMAGE_MIME[extOf(relPath)];
   if (mime === undefined) return false;
-  if (protocol === "kitty") {
-    return mime === "image/png" || mime === "image/jpeg" || mime === "image/webp";
-  }
-  return true;
+  return protocol !== "kitty" || mime === "image/png";
 }
 
 /**
@@ -401,7 +379,7 @@ export function imageCardHints(
     }
     if (!nativelyRenderable(file.relPath, support.nativeProtocol)) {
       return support.nativeProtocol === "kitty"
-        ? ["kitty rendering needs PNG, JPEG, or WebP - chafa or auto can render this format"]
+        ? ["kitty rendering needs PNG - chafa or auto can render this format"]
         : ["this image format cannot be rendered natively - use chafa or auto"];
     }
     return [];
