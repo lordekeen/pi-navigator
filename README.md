@@ -39,7 +39,7 @@ Settings live in `~/.pi/agent/pi-navigator.json`. All fields are optional; missi
 | `tree.showHidden` | `false` | `true`, `false` | Start with hidden files visible; the `.` key still toggles it per session |
 | `layout.default` | `files-git-viewer` | `files-git-viewer`, `files-viewer`, `git-viewer` | Layout opened by bare `/navigator`; `/navigator all`, `/navigator files`, and `/navigator git` always open their own layout for one session |
 
-Environment variables override the file (precedence: defaults ← file ← env):
+Environment variables override the file, and launcher flags override both (precedence: defaults ← file ← env ← flags):
 
 | Variable | Values |
 | --- | --- |
@@ -48,6 +48,18 @@ Environment variables override the file (precedence: defaults ← file ← env):
 | `PI_NAV_LAYOUT` | `files-git-viewer`/`files-viewer`/`git-viewer` select the default layout; anything else warns and the file value stands; empty/whitespace is no override |
 
 Edit either the file or the variables in your shell profile (e.g. `export PI_NAV_ICONS=1` in `~/.zshrc`) before launching pi, or pass inline: `PI_NAV_ICONS=1 pi`.
+
+Launcher flags are the only layer you can discover from the terminal — they are listed in `pi --help` (env vars never are) — and they apply to that run only:
+
+| Flag | Values |
+| --- | --- |
+| `--navigator-images <value>` | The same values `PI_NAV_IMAGES` accepts |
+| `--navigator-icons` | Boolean: passing it enables the icon column; omit it and the file/env value stands |
+| `--navigator-layout <value>` | The same values `PI_NAV_LAYOUT` accepts |
+
+**`/navigator set <field> <value>`** writes a single field without opening the menu, through the same registry and validator the menu uses — so it works where the menu cannot mount (`-p` / print and json mode) and from scripts that provision a later session. Field ids are the ones in the table above: `/navigator set images.mode native`, `/navigator set viewer.wrap on`, `/navigator set layout.default git-viewer`. Booleans take `on`/`off`; enums take the listed tokens. A bad field or value warns with a one-line usage and writes nothing. If a flag or environment variable will shadow the field you just wrote, the notice says so — the file is updated, but the more explicit layer still wins for the running session.
+
+In `-p` / print and json mode the UI commands (`/navigator`, `/navigator settings`) refuse **silently**: the host's `notify` is a no-op there, so an extension has no channel to report through, and json mode's stdout is contractually a single machine-readable document. That is a deliberate, documented deviation rather than an oversight — `set` is the path those modes can use, and it needs no UI at all.
 
 **`/navigator settings`** opens a settings menu (interactive TUI) over the same fields — Enter/Space cycles a row and the change is written atomically; Esc closes without writing. The menu follows the host settings-panel standard: it docks above the message input, uses the host list roles (bright labels, muted values), and is framed by full-width rules like pi's own `/settings`; mouse wheel and click work in fullscreen mode. Rows shadowed by an environment variable are annotated (`— overridden by PI_NAV_IMAGES (env wins)`); editing one still writes the file, and the env value stays effective until it is unset. Settings are read once per `/navigator` invocation, so **changes apply the next time /navigator opens** — there is nothing applied live mid-session.
 
@@ -61,10 +73,11 @@ Icons depend on a terminal Nerd Font — without one, glyphs render as placehold
 /navigator files        open the files + viewer overlay
 /navigator git          open the git + viewer overlay
 /navigator settings     open the settings menu (interactive TUI)
+/navigator set          write one config value (no UI at all)
 /navigator help         show this command list
 ```
 
-`/navigator <anything else>` warns and shows the help list. `settings` requires the interactive TUI; in other modes it warns and does nothing.
+`/navigator <anything else>` warns and shows the help list. `settings` requires the interactive TUI; in other modes it warns and does nothing. `set` needs no UI at all and works in every mode (see [Configuration](#configuration)).
 
 Layout: the left column holds the files tree and the git panel (`files-git-viewer`, the default), the files tree alone (`files-viewer`), or the git panel alone (`git-viewer`); the file viewer sits on the right in every layout, and contextual key hints live in the footer. A layout is chosen when the overlay opens — by the direct command, or by `layout.default`/`PI_NAV_LAYOUT` for bare `/navigator` — and is fixed for that overlay's lifetime; it never switches mid-session and the direct commands never write settings.
 

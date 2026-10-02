@@ -14,7 +14,8 @@ colors:
   warning: "#E0AF68"
   error: "#F7768E"
   text: "#C0CAF5"
-  # Frame borders reuse `dim`.
+  # Frame borders follow the host's `borderMuted` role (Issue #135 L6); the hex
+  # below is the neutral equivalent, for preview rendering only.
   frame: "#6C7278"
   # Selection / search surfaces (background-driven).
   selected-bg: "#2A2E3A"
@@ -80,9 +81,14 @@ components:
   git-family-row:
     textColor: "{colors.text}"
   # Commit diff view (v3, #034): diff lines styled by prefix in the loader.
-  # + → success, - → error, @@ → accent, diff/index/+++/---/new file/deleted
-  # file/Binary files meta → muted, context → text. The diff summary notice
-  # (“commit abc1234 · N files · +I −D”) uses dim, not warning.
+  # Added, removed and context lines take the host's dedicated diff roles
+  # (toolDiffAdded / toolDiffRemoved / toolDiffContext, Issue #135 L7) so a
+  # theme that styles diffs specifically reaches this view instead of the
+  # generic success/error/text tokens, which mean other things elsewhere in the
+  # overlay. @@ → accent (the host has no hunk role); diff/index/+++/---/new
+  # file/deleted file/Binary files meta → muted. The diff summary notice
+  # (“commit abc1234 · N files · +I −D”) uses dim, not warning. The hex values in
+  # the diff-line-* rows are equivalent defaults for preview rendering only.
   diff-line-add:
     textColor: "{colors.success}"
   diff-line-del:
@@ -141,15 +147,15 @@ The visual identity follows the host **pi theme** (see `theme.ts`): no colors ar
 
 ## Colors
 
-All color is **semantic and theme-delegated**. The overlay calls `NavigatorTheme` methods (`T.accent`, `T.muted`, `T.dim`, `T.warning`, `T.success`, `T.error`, `T.text`, `T.frame`) which map onto the active pi `Theme`'s `fg`/`bg` tokens. The hex values in the front matter are illustrative defaults for preview rendering only.
+All color is **semantic and theme-delegated**. The overlay calls `NavigatorTheme` methods (`T.accent`, `T.muted`, `T.dim`, `T.warning`, `T.success`, `T.error`, `T.text`, `T.frame`, `T.diffAdded`, `T.diffRemoved`, `T.diffContext`) which map onto the active pi `Theme`'s `fg`/`bg` tokens — `frame` onto the host's `borderMuted` role, and the diff trio onto its own `toolDiff*` roles (Issue #135 L6/L7). The hex values in the front matter are illustrative defaults for preview rendering only.
 
 - **accent (`#7AA2F7` default)** — primary interaction signal: the open file's row, the pane header for the focused pane, branch name, help-modal title, and the active footer pane label.
 - **muted (`#6C7278` default)** — secondary text: non-focused pane labels, card body text, help descriptions, secondary path segments.
-- **dim (`#6C7278` default)** — tertiary/de-emphasized: line-number gutter, frame borders, indentation guides, footer hints, file-row hidden/untracked names, git commit subjects. (`frame` aliases `dim`.)
+- **dim (`#6C7278` default)** — tertiary/de-emphasized: line-number gutter, indentation guides, footer hints, file-row hidden/untracked names. Frame borders are **not** here: they follow the host's `borderMuted` role (Issue #135 L6).
 - **success (`#9ECE6A` default)** — git "added" badge, staged file rows.
 - **warning (`#E0AF68` default)** — git "modified" badge, unstaged file rows, viewer truncation/disk-change notices, binary-card title, "has changes" file rows.
-- **error (`#F7768E` default)** — git "deleted" badge, git "behind" counter, error-card title.
-- **text (`#C0CAF5` default)** — default file-row label and neutral selected-row text.
+- **error (`#F7768E` default)** — git "deleted" badge, error-card title. Not a failure signal: the git "behind" counter uses `warning`, because being behind is state, not an error (Issue #135 L8).
+- **text (`#C0CAF5` default)** — default file-row label, neutral selected-row text, git commit subjects (the row's primary content, with the short hash staying `muted` as secondary metadata — Issue #135 L5).
 - **selected-bg (`#2A2E3A` default)** — cursor row background (reverse-video equivalent).
 - **search-match-bg / search-match-text** — in-file search hit highlight; the current match additionally gets underline.
 
@@ -181,7 +187,7 @@ Agents must never introduce `fontFamily: sans-serif`/`serif`, `fontSize` in `px`
 
 ## Layout
 
-The overlay is a centered box bounded by `OVERLAY_OPTIONS` (width 90%, min 80, max height 85%, anchor center, margin 1). Inside:
+The overlay is a centered box bounded by `OVERLAY_OPTIONS` (width 90%, min 80, max height 85% — derived from `OVERLAY_HEIGHT_RATIO` in `constants.ts`, anchor center, margin 1 row). `frame.overlayHeight()` uses that same ratio and reserves `OVERLAY_MARGIN_ROWS` top and bottom, so the height the host allocates and the frame the component draws into it cannot drift (Issue #130); it is deliberately free to fall below the frame floor, which is what makes the compact "terminal too small" refusal notice reachable. Inside:
 
 1. **Top border** — `┌─┐`
 2. **Title row** — `pi-navigator` + cwd short path (left) · branch + ahead/behind + changed counters (right)

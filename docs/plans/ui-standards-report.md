@@ -76,9 +76,9 @@ The concrete values skill-gate uses ([`index.ts`](../references/pi-skill-gate-ma
 
 - Detect keys with `matchesKey(data, Key.up)` and the `Key` helpers; never parse raw escape sequences ([`docs/tui.md`](../references/pi-main/packages/coding-agent/docs/tui.md:288)).
 - Printable-character capture for filter and search input uses `decodeKittyPrintable(data)` plus a `>= " "` guard ([`overlay.ts`](../references/pi-skill-gate-main/overlay.ts:262)).
-- `ctx.ui.custom` components receive an injected `keybindings: KeybindingsManager` and must use it instead of the global manager ([`docs/extensions.md`](../references/pi-main/packages/coding-agent/docs/extensions.md:2351)).
+- `ctx.ui.custom` components receive an injected `keybindings: KeybindingsManager` and must use it instead of the global manager ([`docs/extensions.md`](../references/pi-main/packages/coding-agent/docs/extensions.md:2351)) — **for host-owned action ids**, so a user remap takes effect. `tui.select.cancel` (default keys Esc and Ctrl+C) is the funnel in `NavigatorOverlay.matchesCancel`, consulted at each level of the Esc stack; the manager is threaded in from `ctx.ui.custom` in `index.ts`.
 - Global pi actions live in `keybindings.json` with namespaced ids; extensions register global hotkeys with `pi.registerShortcut("ctrl+x", { description, handler })` ([`docs/extensions.md`](../references/pi-main/packages/coding-agent/docs/extensions.md:1643)).
-- The rule "never hardcode key checks" applies to pi core. Overlay-local keys (j/k, /, ?) are hardcoded in extensions by convention, as skill-gate does.
+- The rule "never hardcode key checks" applies to pi core. Overlay-local keys (j/k, /, ?) are hardcoded in extensions by convention, as skill-gate does — the narrowed policy above is where that stops: no-manager fallbacks are for harnesses, never a shipping substitute ([#126](../issues/126-keybindings-manager-ignored.md)).
 
 ### 2.6 Theme and color standards
 
