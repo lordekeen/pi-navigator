@@ -24,6 +24,12 @@ export interface NavigatorTheme {
   searchCurrent(t: string): string;
   /** Frame borders. */
   frame(t: string): string;
+  /** Added diff line. */
+  diffAdded(t: string): string;
+  /** Removed diff line. */
+  diffRemoved(t: string): string;
+  /** Diff context line. */
+  diffContext(t: string): string;
 }
 
 export function makeNavigatorTheme(theme: Theme): NavigatorTheme {
@@ -45,6 +51,12 @@ export function makeNavigatorTheme(theme: Theme): NavigatorTheme {
       const match = theme.bg("searchMatchBg", theme.fg("searchMatchText", t));
       return typeof theme.underline === "function" ? theme.underline(match) : match;
     },
-    frame: (t) => theme.fg("dim", t),
+    frame: (t) => theme.fg("borderMuted", t),
+    // Dedicated host diff roles. The generic success/error/text tokens mean
+    // other things elsewhere in the overlay, and a theme that styles diffs
+    // specifically (toolDiff*) would otherwise never reach this view (#135 L7).
+    diffAdded: (t) => theme.fg("toolDiffAdded", t),
+    diffRemoved: (t) => theme.fg("toolDiffRemoved", t),
+    diffContext: (t) => theme.fg("toolDiffContext", t),
   };
 }

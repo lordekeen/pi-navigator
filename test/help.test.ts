@@ -50,18 +50,19 @@ describe("buildHelpLines", () => {
   it("produces the exact layout: header, commands title, aligned rows, blank, hint", () => {
     const cwd = "/work/repo";
     const lines = buildHelpLines({ cwd });
-    expect(lines).toHaveLength(10);
+    expect(lines).toHaveLength(11);
     expect(lines[0]).toBe(`pi-navigator \u2014 ${cwd}`);
     expect(lines[0]).toBe(`${HELP_HEADER_PREFIX}${cwd}`);
     expect(lines[1]).toBe(HELP_COMMANDS_TITLE);
-    expect(lines[2]).toBe("/navigator".padEnd(helpCommandColumnWidth()) + "open the read-only project navigator overlay");
-    expect(lines[3]).toBe("/navigator all".padEnd(helpCommandColumnWidth()) + "open overlay with files and git panes (default)");
-    expect(lines[4]).toBe("/navigator files".padEnd(helpCommandColumnWidth()) + "open overlay with files pane only");
-    expect(lines[5]).toBe("/navigator git".padEnd(helpCommandColumnWidth()) + "open overlay with git panel only");
-    expect(lines[6]).toBe("/navigator settings".padEnd(helpCommandColumnWidth()) + "configure images, icons, viewer, tree, and layout behavior");
-    expect(lines[7]).toBe("/navigator help".padEnd(helpCommandColumnWidth()) + "show this command list");
-    expect(lines[8]).toBe("");
-    expect(lines[9]).toBe(HELP_HINT);
+    expect(lines[2]).toBe("/navigator".padEnd(helpCommandColumnWidth()) + "Open the read-only project navigator overlay");
+    expect(lines[3]).toBe("/navigator all".padEnd(helpCommandColumnWidth()) + "Open overlay with files and git panes (default)");
+    expect(lines[4]).toBe("/navigator files".padEnd(helpCommandColumnWidth()) + "Open overlay with files pane only");
+    expect(lines[5]).toBe("/navigator git".padEnd(helpCommandColumnWidth()) + "Open overlay with git panel only");
+    expect(lines[6]).toBe("/navigator settings".padEnd(helpCommandColumnWidth()) + "Configure images, icons, viewer, tree, and layout behavior");
+    expect(lines[7]).toBe("/navigator set".padEnd(helpCommandColumnWidth()) + "set one config value, e.g. images.mode native");
+    expect(lines[8]).toBe("/navigator help".padEnd(helpCommandColumnWidth()) + "Show this command list");
+    expect(lines[9]).toBe("");
+    expect(lines[10]).toBe(HELP_HINT);
   });
 
   it("aligns the command column to the longest command plus 2", () => {
@@ -90,6 +91,7 @@ describe("buildHelpLines", () => {
       "/navigator files",
       "/navigator git",
       "/navigator settings",
+      "/navigator set",
       "/navigator help",
     ]);
   });
@@ -115,12 +117,21 @@ describe("parseNavigatorArgs", () => {
     expect(parseNavigatorArgs("all")).toEqual({ kind: "layout", layout: "files-git-viewer" });
     expect(parseNavigatorArgs("files")).toEqual({ kind: "layout", layout: "files-viewer" });
     expect(parseNavigatorArgs("git")).toEqual({ kind: "layout", layout: "git-viewer" });
-    expect(parseNavigatorArgs(" files extra")).toEqual({ kind: "layout", layout: "files-viewer" });
+    expect(parseNavigatorArgs(" files ")).toEqual({ kind: "layout", layout: "files-viewer" });
   });
 
-  it("ignores trailing tokens after the first subcommand", () => {
-    expect(parseNavigatorArgs("settings extra tokens")).toEqual({ kind: "settings" });
-    expect(parseNavigatorArgs("help whatever")).toEqual({ kind: "help" });
+  it("rejects trailing tokens instead of ignoring them (Issue #134)", () => {
+    expect(parseNavigatorArgs("settings extra tokens")).toEqual({
+      kind: "extra",
+      sub: "settings",
+      extra: ["extra", "tokens"],
+    });
+    expect(parseNavigatorArgs("help whatever")).toEqual({ kind: "extra", sub: "help", extra: ["whatever"] });
+    expect(parseNavigatorArgs("all extra")).toEqual({ kind: "extra", sub: "all", extra: ["extra"] });
+    // `set` takes two values, so a third token is the rejected one.
+    expect(parseNavigatorArgs("set viewer.wrap on now")).toEqual({ kind: "extra", sub: "set", extra: ["now"] });
+    // Without trailing tokens the subcommand keeps its own kind.
+    expect(parseNavigatorArgs("settings")).toEqual({ kind: "settings" });
   });
 
   it("reports unknown subcommands with the offending token", () => {
@@ -151,21 +162,23 @@ describe("navigatorCompletions", () => {
     );
     const rows = navigatorCompletions("");
     expect(rows).not.toBeNull();
-    // Documented order: the three layout openers, then settings, then help.
-    expect(rows?.map((row) => row.value)).toEqual(["all", "files", "git", "settings", "help"]);
+    // Documented order: the three layout openers, then settings, set, then help.
+    expect(rows?.map((row) => row.value)).toEqual(["all", "files", "git", "settings", "set", "help"]);
   });
 
-  it("filters by prefix and returns null with no match", () => {
+  it("filters by prefix and returns an empty array for no match (Issue #134)", () => {
+    // "se" prefixes both settings and set (Issue #131).
     expect(navigatorCompletions("se")).toEqual([
-      { value: "settings", label: "Open the settings menu", description: "configure images, icons, viewer, tree, and layout behavior" },
+      { value: "settings", label: "Open the settings menu", description: "Configure images, icons, viewer, tree, and layout behavior" },
+      { value: "set", label: "Set a config value", description: "set one config value, e.g. images.mode native" },
     ]);
     expect(navigatorCompletions("he")).toEqual([
-      { value: "help", label: "Show the command list", description: "show this command list" },
+      { value: "help", label: "Show the command list", description: "Show this command list" },
     ]);
     expect(navigatorCompletions("f")).toEqual([
-      { value: "files", label: "Open files + viewer overlay", description: "open overlay with files pane only" },
+      { value: "files", label: "Open files + viewer overlay", description: "Open overlay with files pane only" },
     ]);
-    expect(navigatorCompletions("zz")).toBeNull();
+    expect(navigatorCompletions("zz")).toEqual([]);
   });
 });
 
@@ -184,7 +197,7 @@ describe("single-source derivations (Issue #063 finding 5)", () => {
 
   it("NAVIGATOR_COMMANDS is the bare overlay row followed by the subcommand table projection", () => {
     expect(NAVIGATOR_COMMANDS).toEqual([
-      { cmd: "/navigator", desc: "open the read-only project navigator overlay" },
+      { cmd: "/navigator", desc: "Open the read-only project navigator overlay" },
       ...NAVIGATOR_SUBCOMMANDS.map(({ cmd, desc }) => ({ cmd, desc })),
     ]);
   });

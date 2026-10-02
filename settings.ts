@@ -14,7 +14,13 @@ import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "
 // pi-lens-ignore: TS2304
 import { dirname } from "node:path";
 
-import { NAVIGATOR_IMAGES_ENV, NAVIGATOR_LAYOUT_ENV } from "./constants";
+import {
+  NAVIGATOR_IMAGES_ENV,
+  NAVIGATOR_IMAGES_FLAG,
+  NAVIGATOR_ICONS_FLAG,
+  NAVIGATOR_LAYOUT_ENV,
+  NAVIGATOR_LAYOUT_FLAG,
+} from "./constants";
 import { parseIconMode } from "./icons";
 import { parseTruthyEnv } from "./env";
 import { NAVIGATOR_LAYOUTS, type NavigatorLayout } from "./types";
@@ -351,7 +357,10 @@ export function normalizeNavigatorSettings(raw: unknown): { settings: NavigatorS
  * delegating to the shared `parseTruthyEnv` (env.ts), so the accepted value
  * sets per env var stay byte-identical to the pre-#063 truth tables.
  */
-export function parseImageMode(value: string | undefined): { mode: NavigatorImageMode | undefined; warning?: string } {
+export function parseImageMode(
+  value: string | undefined,
+  source: string = NAVIGATOR_IMAGES_ENV,
+): { mode: NavigatorImageMode | undefined; warning?: string } {
   if (value === undefined) return { mode: undefined };
   const trimmed = value.trim();
   if (trimmed === "") return { mode: undefined };
@@ -359,7 +368,7 @@ export function parseImageMode(value: string | undefined): { mode: NavigatorImag
   if (normalized === "chafa") return { mode: "chafa" };
   if (normalized === "native") return { mode: "native" };
   if (normalized === "auto") return { mode: "auto" };
-  const parsed = parseTruthyEnv(trimmed, NAVIGATOR_IMAGES_ENV);
+  const parsed = parseTruthyEnv(trimmed, source);
   if (parsed.warning !== undefined) return { mode: undefined, warning: parsed.warning };
   return { mode: parsed.value ? "chafa" : "off" };
 }
@@ -372,7 +381,10 @@ export function parseImageMode(value: string | undefined): { mode: NavigatorImag
  * never a warning; anything else is one warning and the file/default value
  * stands. Mirrors parseImageMode's contract shape.
  */
-export function parseLayoutMode(value: string | undefined): { layout: NavigatorLayout | undefined; warning?: string } {
+export function parseLayoutMode(
+  value: string | undefined,
+  source: string = NAVIGATOR_LAYOUT_ENV,
+): { layout: NavigatorLayout | undefined; warning?: string } {
   if (value === undefined) return { layout: undefined };
   const trimmed = value.trim();
   if (trimmed === "") return { layout: undefined };
@@ -383,19 +395,22 @@ export function parseLayoutMode(value: string | undefined): { layout: NavigatorL
   }
   return {
     layout: undefined,
-    warning: `${trimmed} is not a valid ${NAVIGATOR_LAYOUT_ENV} value; using the file/default setting`,
+    warning: `${trimmed} is not a valid ${source} value; using the file/default setting`,
   };
 }
 
 /**
- * Loads settings with precedence defaults ← user file ← env (§5.2).
- * A missing file is not a warning (sources: ["defaults"]); an unreadable or
- * corrupt file is one bounded warning (sources: ["defaults"]); a valid file
- * contributes its path to `sources`.
+ * Loads settings with precedence defaults ← user file ← env ← flag (§5.2,
+ * Issue #131). A missing file is not a warning (sources: ["defaults"]); an
+ * unreadable or corrupt file is one bounded warning (sources: ["defaults"]);
+ * a valid file contributes its path to `sources`, and each flag that actually
+ * overrides contributes its own name. `undefined` means "not passed"; an
+ * empty or whitespace value is "no override", never a warning.
  */
 export function loadNavigatorSettings(paths: {
   userPath: string;
   env?: { images?: string | undefined; icons?: string | undefined; layout?: string | undefined };
+  flags?: { images?: string | undefined; icons?: boolean | undefined; layout?: string | undefined };
 }): { settings: NavigatorSettings; warnings: string[]; sources: string[] } {
   const warnings: string[] = [];
   const sources: string[] = [];
@@ -413,7 +428,14 @@ export function loadNavigatorSettings(paths: {
   }
 
   const normalized = normalizeNavigatorSettings(raw);
-  warnings.push(...normalized.warnings);
+  // File-content warnings name the file they came from (Issue #135 L13): with
+  // two candidate sources (this file and the PI_NAV_* env vars below), an
+  // "unknown setting ... ignored" warning is unactionable without knowing which
+  // one produced it. The normalizer stays path-free by design; the loader owns
+  // the injected path, and the full path matches the settings-menu outcome
+  // wording (Issue #133). Env warnings keep their own prefix - they name the
+  // env var, and prefixing them with a file path would misattribute them.
+  for (const warning of normalized.warnings) warnings.push(`${paths.userPath}: ${warning}`);
 
   let settings = normalized.settings;
   const envMode = parseImageMode(paths.env?.images);
@@ -433,6 +455,35 @@ export function loadNavigatorSettings(paths: {
     settings = { ...settings, layout: { ...settings.layout, default: layoutMode.layout } };
   }
   if (layoutMode.warning !== undefined) warnings.push(layoutMode.warning);
+
+  // Flags are the most explicit layer, so they are applied last and beat env
+  // (Issue #131). A boolean flag passes true/false directly — there is no
+  // parse step to warn about; a string flag reuses the env parsers with the
+  // flag name as the warning source, so a bad flag value names the flag.
+  const imagesFlag = paths.flags?.images;
+  if (imagesFlag !== undefined && imagesFlag.trim() !== "") {
+    const parsed = parseImageMode(imagesFlag, `--${NAVIGATOR_IMAGES_FLAG}`);
+    if (parsed.mode !== undefined) {
+      settings = { ...settings, images: { ...settings.images, mode: parsed.mode } };
+      sources.push(NAVIGATOR_IMAGES_FLAG);
+    }
+    if (parsed.warning !== undefined) warnings.push(parsed.warning);
+  }
+
+  if (typeof paths.flags?.icons === "boolean") {
+    settings = { ...settings, icons: { ...settings.icons, enabled: paths.flags.icons } };
+    sources.push(NAVIGATOR_ICONS_FLAG);
+  }
+
+  const layoutFlag = paths.flags?.layout;
+  if (layoutFlag !== undefined && layoutFlag.trim() !== "") {
+    const parsed = parseLayoutMode(layoutFlag, `--${NAVIGATOR_LAYOUT_FLAG}`);
+    if (parsed.layout !== undefined) {
+      settings = { ...settings, layout: { ...settings.layout, default: parsed.layout } };
+      sources.push(NAVIGATOR_LAYOUT_FLAG);
+    }
+    if (parsed.warning !== undefined) warnings.push(parsed.warning);
+  }
 
   if (sources.length === 0) sources.push("defaults");
   return { settings, warnings, sources };

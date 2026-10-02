@@ -155,10 +155,43 @@ describe("buildGitNavRows", () => {
 });
 
 describe("buildGitHeader", () => {
-  function header(git: GitState | null, focus: "git" | "files" | "viewer" = "git", treeSource: "git" | "fs" | null = "git") {
-    const view: GitHeaderView = { theme: identityTheme, focus, git, treeSource };
+  function header(
+    git: GitState | null,
+    focus: "git" | "files" | "viewer" = "git",
+    treeSource: "git" | "fs" | null = "git",
+    position: { gitCursorIndex: number; gitNavCount: number; gitAreaRows: number } = {
+      gitCursorIndex: 0,
+      gitNavCount: 0,
+      gitAreaRows: 0,
+    },
+  ) {
+    const view: GitHeaderView = { theme: identityTheme, focus, git, treeSource, ...position };
     return buildGitHeader(30, view);
   }
+
+  // ── L3 (audit §Low): the position indicator on overflow ──
+
+  function headerAt(leftW: number, position: { gitCursorIndex: number; gitNavCount: number; gitAreaRows: number }) {
+    const view: GitHeaderView = { theme: identityTheme, focus: "git", git: gitState(), treeSource: "git", ...position };
+    return buildGitHeader(leftW, view);
+  }
+
+  it("shows the cursor position only when the list overflows the pane (L3)", () => {
+    expect(headerAt(44, { gitCursorIndex: 4, gitNavCount: 20, gitAreaRows: 6 })).toContain("5/20");
+    // A list that fits needs no position indicator.
+    expect(headerAt(44, { gitCursorIndex: 4, gitNavCount: 6, gitAreaRows: 6 })).not.toContain("5/6");
+  });
+
+  it("omits the counter rather than letting it squeeze the pane label out (L3)", () => {
+    // joinLeftRight cuts the LEFT side to make room, so an appended counter
+    // must respect the budget instead of truncating the label — the Issue #113
+    // failure class. Width 28: the label and the counters fit (26 cells), the
+    // label plus counters plus "1/99" would not (31).
+    const narrow = headerAt(28, { gitCursorIndex: 0, gitNavCount: 99, gitAreaRows: 3 });
+    expect(narrow).toContain("GIT");
+    expect(narrow).not.toContain("1/99");
+    expect(visibleWidth(narrow)).toBe(28);
+  });
 
   it("shows unstaged/staged counters when available", () => {
     const row = header(
@@ -203,6 +236,21 @@ describe("buildGitRow", () => {
         expect(visibleWidth(selected)).toBe(leftW); // selected rows pad to the full pane
       }
     }
+  });
+
+  it("styles the commit subject with the content (text) step while the hash stays muted (L5)", () => {
+    // leftW 70: the toneTheme "text:"/"muted:" prefixes inflate the styled
+    // row past the builder's raw-width accounting, so the pane must be wide
+    // enough for the full subject to survive padding.
+    const commit = buildGitRow(commitRow, false, 70, rowView({ theme: toneTheme }));
+    expect(commit).toContain("muted:abc1234");
+    expect(commit).toContain("text:a fairly long commit subject line here");
+    expect(commit).not.toContain("dim:a fairly long");
+
+    const child = buildGitRow(childRow, false, 70, rowView({ theme: toneTheme }));
+    expect(child).toContain("muted:p999999");
+    expect(child).toContain("text:nested parent subject");
+    expect(child).not.toContain("dim:nested parent subject");
   });
 
   it("indents commit-child rows by two cells per depth level", () => {

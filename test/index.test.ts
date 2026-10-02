@@ -6,18 +6,27 @@
  * - parseNavigatorArgs subcommand parsing
  * - navigatorCompletions argument prefix completions
  * - extension lifecycle: command registration, subcommand routing, help renderer, headless guard
+ * - settings-menu integration through runSettings (Issues #121, #133): Esc leaves the
+ *   settings file byte-identical, Save writes once, and both outcomes notify info
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { getCapabilities, resetCapabilitiesCache, setCapabilities } from "@earendil-works/pi-tui";
+import {
+  getCapabilities,
+  KeybindingsManager,
+  resetCapabilitiesCache,
+  setCapabilities,
+  TUI_KEYBINDINGS,
+} from "@earendil-works/pi-tui";
 
 import { IMAGE_NATIVE_CACHE_MAX_CHARS, MAX_FS_ENTRIES } from "../constants";
 import { DEFAULT_PI_CHAFA_SUBSET, KITTY_PROBE_SAMPLE, type ImageSupport, type KittyProbeVerdict } from "../images";
+import { serializeNavigatorSettings, type NavigatorSettings } from "../settings";
 import type { ViewerFile } from "../types";
 import { loadFile } from "../viewer";
 import registerNavigatorExtension, {
@@ -32,6 +41,17 @@ import registerNavigatorExtension, {
   touchCacheEntry,
 } from "../index";
 
+/**
+ * Test seam (Issue #121): the integration tests point getAgentDir at a
+ * per-test temp dir so runSettings writes a scratch pi-navigator.json
+ * instead of the real user config.
+ */
+const agentDir = vi.hoisted(() => ({ dir: "/tmp/pi-navigator-test" }));
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
+  return { ...actual, getAgentDir: () => agentDir.dir };
+});
+
 function fakeUi() {
   const notify = vi.fn();
   return { ui: { notify }, notify };
@@ -41,18 +61,32 @@ function mockPi() {
   const commands = new Map<string, any>();
   const entryRenderers = new Map<string, any>();
   const entries: Array<{ type: string; data: any }> = [];
+  // Issue #131: the extension registers three startup flags while loading, so
+  // the harness models both halves of the host contract — the registrations
+  // and the values a user actually passed. getFlag returns undefined for a
+  // registered-but-unset flag, exactly like the host when no default was
+  // declared, which is what makes "absent" observable.
+  const flagRegistrations = new Map<string, any>();
+  const flagValues = new Map<string, boolean | string>();
   const pi = {
     registerCommand: (name: string, def: any) => commands.set(name, def),
     registerEntryRenderer: (type: string, fn: any) => entryRenderers.set(type, fn),
     appendEntry: (type: string, data: any) => entries.push({ type, data }),
+    registerFlag: (name: string, options: any) => flagRegistrations.set(name, options),
+    getFlag: (name: string) => flagValues.get(name),
+    // driveFestive: runSettings probes for pi-chafa through the pi API; an
+    // empty tool/command set is a clean "not present".
+    getAllTools: () => [],
+    getCommands: () => [],
   };
-  return { pi: pi as any, commands, entryRenderers, entries };
+  return { pi: pi as any, commands, entryRenderers, entries, flagRegistrations, flagValues };
 }
 
-function mockCtx(opts: { hasUI?: boolean; cwd?: string } = {}) {
+function mockCtx(opts: { hasUI?: boolean; cwd?: string; mode?: "tui" | "rpc" | "json" | "print" } = {}) {
   const notifications: Array<{ msg: string; level: string }> = [];
   const ctx = {
     hasUI: opts.hasUI ?? true,
+    mode: opts.mode ?? "tui",
     cwd: opts.cwd ?? "/test",
     ui: {
       notify: (msg: string, level: string) => notifications.push({ msg, level }),
@@ -89,6 +123,16 @@ describe("makeWarningNotifier", () => {
 });
 
 describe("parseNavigatorArgs (Issue #095)", () => {
+  it("routes `set` with its two trailing tokens, and reports missing ones as undefined (Issue #131)", () => {
+    // `set` is reached through the shared subcommand table, so this assertion
+    // doubles as a drift guard: removing the row would parse as `unknown`.
+    expect(parseNavigatorArgs("set viewer.wrap on")).toEqual({ kind: "set", field: "viewer.wrap", value: "on" });
+    expect(parseNavigatorArgs("set viewer.wrap")).toEqual({ kind: "set", field: "viewer.wrap", value: undefined });
+    expect(parseNavigatorArgs("set")).toEqual({ kind: "set", field: undefined, value: undefined });
+    expect(parseNavigatorArgs("  set  images.mode  native  ")).toEqual({ kind: "set", field: "images.mode", value: "native" });
+    // Every other subcommand rejects trailing tokens instead of ignoring them.
+    expect(parseNavigatorArgs("help extra")).toEqual({ kind: "extra", sub: "help", extra: ["extra"] });
+  });
   it("parses empty or whitespace arguments as overlay", () => {
     expect(parseNavigatorArgs("")).toEqual({ kind: "overlay" });
     expect(parseNavigatorArgs("   ")).toEqual({ kind: "overlay" });
@@ -98,7 +142,6 @@ describe("parseNavigatorArgs (Issue #095)", () => {
     expect(parseNavigatorArgs("settings")).toEqual({ kind: "settings" });
     expect(parseNavigatorArgs("  settings  ")).toEqual({ kind: "settings" });
     expect(parseNavigatorArgs("help")).toEqual({ kind: "help" });
-    expect(parseNavigatorArgs("help extra")).toEqual({ kind: "help" });
   });
 
   it("routes the layout subcommands to the layout kind with their layout (Issue #119)", () => {
@@ -106,7 +149,6 @@ describe("parseNavigatorArgs (Issue #095)", () => {
     expect(parseNavigatorArgs("files")).toEqual({ kind: "layout", layout: "files-viewer" });
     expect(parseNavigatorArgs("git")).toEqual({ kind: "layout", layout: "git-viewer" });
     expect(parseNavigatorArgs("git  ")).toEqual({ kind: "layout", layout: "git-viewer" });
-    expect(parseNavigatorArgs("files trailing tokens")).toEqual({ kind: "layout", layout: "files-viewer" });
   });
 
   it("parses unknown subcommands and preserves raw token", () => {
@@ -120,8 +162,8 @@ describe("navigatorCompletions (Issue #095)", () => {
     const completions = navigatorCompletions("");
     expect(completions).not.toBeNull();
     const values = completions!.map((c) => c.value);
-    // Issue #119: the three layout openers lead the table.
-    expect(values).toEqual(["all", "files", "git", "settings", "help"]);
+    // Issue #119: the three layout openers lead the table; #131 appends `set`.
+    expect(values).toEqual(["all", "files", "git", "settings", "set", "help"]);
   });
 
   it("exposes the layout openers' completion labels and descriptions", () => {
@@ -129,32 +171,35 @@ describe("navigatorCompletions (Issue #095)", () => {
     expect(completions![0]).toEqual({
       value: "all",
       label: "Open files + git + viewer overlay",
-      description: "open overlay with files and git panes (default)",
+      description: "Open overlay with files and git panes (default)",
     });
     expect(completions![1]).toEqual({
       value: "files",
       label: "Open files + viewer overlay",
-      description: "open overlay with files pane only",
+      description: "Open overlay with files pane only",
     });
     expect(completions![2]).toEqual({
       value: "git",
       label: "Open git + viewer overlay",
-      description: "open overlay with git panel only",
+      description: "Open overlay with git panel only",
     });
   });
 
   it("filters completions by prefix", () => {
     const set = navigatorCompletions("set");
-    expect(set).toHaveLength(1);
+    expect(set).toHaveLength(2);
     expect(set![0]?.value).toBe("settings");
+    expect(set![1]?.value).toBe("set");
 
     const hel = navigatorCompletions("hel");
     expect(hel).toHaveLength(1);
     expect(hel![0]?.value).toBe("help");
   });
 
-  it("returns null when no completions match prefix", () => {
-    expect(navigatorCompletions("xyz")).toBeNull();
+  it("returns an empty array when no completions match prefix (Issue #134)", () => {
+    // `[]` is "I have nothing"; the old `null` meant "not my job" and handed the
+    // argument slot back to another provider for our own argument list.
+    expect(navigatorCompletions("xyz")).toEqual([]);
   });
 });
 
@@ -203,6 +248,34 @@ describe("extension lifecycle & routing (Issue #095)", () => {
     expect(ctx.ui.custom).not.toHaveBeenCalled();
   });
 
+  it("refuses the overlay in RPC mode, where hasUI is true but custom() cannot mount (#122)", async () => {
+    const { pi, commands } = mockPi();
+    registerNavigatorExtension(pi);
+    const cmd = commands.get("navigator");
+    const { ctx, notifications } = mockCtx({ hasUI: true, mode: "rpc" });
+
+    await cmd.handler("", ctx);
+    expect(notifications).toEqual([
+      { msg: "pi-navigator requires the interactive TUI", level: "warning" },
+    ]);
+    expect(ctx.ui.custom).not.toHaveBeenCalled();
+  });
+
+  it("refuses the overlay in json and print modes via the tui-mode clause (#122)", async () => {
+    for (const mode of ["json", "print"] as const) {
+      const { pi, commands } = mockPi();
+      registerNavigatorExtension(pi);
+      const cmd = commands.get("navigator");
+      const { ctx, notifications } = mockCtx({ hasUI: false, mode });
+
+      await cmd.handler("", ctx);
+      expect(notifications).toEqual([
+        { msg: "pi-navigator requires the interactive TUI", level: "warning" },
+      ]);
+      expect(ctx.ui.custom).not.toHaveBeenCalled();
+    }
+  });
+
   it("renders help entry via registered entry renderer", () => {
     const { pi, entryRenderers } = mockPi();
     registerNavigatorExtension(pi);
@@ -242,6 +315,197 @@ describe("extension lifecycle & routing (Issue #095)", () => {
     await cmd.handler("", ctx); // bare: still opens (settings default resolves inside)
     expect(ctx.ui.custom).toHaveBeenCalledTimes(2);
   });
+
+  it("registers the three startup flags without a default (Issue #131)", () => {
+    const { pi, flagRegistrations } = mockPi();
+    registerNavigatorExtension(pi);
+    expect([...flagRegistrations.keys()].sort()).toEqual(["navigator-icons", "navigator-images", "navigator-layout"]);
+    // A declared default is stored into the flag value by the host, so getFlag
+    // would return it even when the user passed nothing — absent must stay
+    // undefined for the precedence chain (defaults ← file ← env ← flag).
+    for (const options of flagRegistrations.values()) expect(options.default).toBeUndefined();
+    expect(flagRegistrations.get("navigator-icons")?.type).toBe("boolean");
+    expect(flagRegistrations.get("navigator-images")?.type).toBe("string");
+    expect(flagRegistrations.get("navigator-layout")?.type).toBe("string");
+  });
+
+  it("carries a flag value into the settings loader, naming the flag when it is invalid (Issue #131)", async () => {
+    // The loader's precedence is unit-tested; this pins the WIRING — the value
+    // has to travel from pi.getFlag() into loadNavigatorSettings(). Two things
+    // make it real: an invalid flag value is the observable, and the settings
+    // load happens INSIDE the ctx.ui.custom factory, so the mock must invoke
+    // that factory — a custom that never calls it would assert nothing, which
+    // is the failure class Issue #114 recorded.
+    const { pi, commands, flagValues } = mockPi();
+    registerNavigatorExtension(pi);
+    flagValues.set("navigator-images", "sixel");
+    const notifications: Array<{ msg: string; level: string }> = [];
+    const tui = {
+      terminal: { rows: 24, write: vi.fn() },
+      requestRender: vi.fn(),
+      addInputListener: () => () => undefined,
+    };
+    const theme = { fg: (_c: string, t: string) => t, bg: (_c: string, t: string) => t };
+    let componentHolder: Array<{ handleInput: (data: string) => void }> = [];
+    const ctx = {
+      hasUI: true,
+      mode: "tui",
+      cwd: "/test",
+      ui: {
+        notify: (msg: string, level: string) => notifications.push({ msg, level }),
+        custom: (factory: (tui: unknown, th: unknown, kb: unknown, done: (value: null) => void) => unknown) => {
+          const mounted = factory(tui, theme, new KeybindingsManager(TUI_KEYBINDINGS), () => undefined) as {
+            handleInput: (data: string) => void;
+          };
+          componentHolder = [mounted];
+          return Promise.resolve(mounted);
+        },
+      },
+    } as any;
+
+    await commands.get("navigator").handler("", ctx);
+    expect(notifications.map((n) => n.msg).some((m) => m.includes("--navigator-images"))).toBe(true);
+
+    // Close the mount so the poll timer is cleared (no leaked handles).
+    componentHolder[0]?.handleInput("\u001b");
+  });
+
+  // ── /navigator set: the headless config path (Issue #131) ──
+
+  it("writes a setting from a plain command with no UI mounted, in print mode", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-nav-set-"));
+    agentDir.dir = dir;
+    try {
+      const { pi, commands } = mockPi();
+      registerNavigatorExtension(pi);
+      const { ctx, notifications } = mockCtx({ hasUI: false, mode: "print" });
+      await commands.get("navigator").handler("set viewer.wrap on", ctx);
+      const written = JSON.parse(readFileSync(join(dir, "pi-navigator.json"), "utf8"));
+      expect(written.viewer.wrap).toBe(true);
+      expect(notifications.some((n) => n.level === "info" && n.msg.includes("viewer.wrap"))).toBe(true);
+      // Headless: the durable effect is the file, so no component is mounted
+      // even though the mode could not host one.
+      expect(ctx.ui.custom).not.toHaveBeenCalled();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      agentDir.dir = "/tmp/pi-navigator-test";
+    }
+  });
+
+  it("refuses an unknown field and a missing argument without writing anything", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-nav-set-"));
+    agentDir.dir = dir;
+    try {
+      const { pi, commands } = mockPi();
+      registerNavigatorExtension(pi);
+      const { ctx, notifications } = mockCtx();
+      await commands.get("navigator").handler("set bogus.field on", ctx);
+      await commands.get("navigator").handler("set bogus.field", ctx);
+      expect(notifications.some((n) => n.level === "warning" && n.msg.includes('unknown setting "bogus.field"'))).toBe(true);
+      expect(notifications.some((n) => n.level === "warning" && n.msg.includes("usage: /navigator set"))).toBe(true);
+      expect(existsSync(join(dir, "pi-navigator.json"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      agentDir.dir = "/tmp/pi-navigator-test";
+    }
+  });
+
+  it("warns when a startup layer will shadow the value it just wrote", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-nav-set-"));
+    agentDir.dir = dir;
+    try {
+      const { pi, commands, flagValues } = mockPi();
+      registerNavigatorExtension(pi);
+      flagValues.set("navigator-layout", "git-viewer");
+      const { ctx, notifications } = mockCtx();
+      await commands.get("navigator").handler("set layout.default files-viewer", ctx);
+      // The write is durable but this run ignores it — say so.
+      expect(notifications.find((n) => n.level === "info")?.msg).toContain("--navigator-layout overrides it for this run");
+      expect(JSON.parse(readFileSync(join(dir, "pi-navigator.json"), "utf8")).layout.default).toBe("files-viewer");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      agentDir.dir = "/tmp/pi-navigator-test";
+    }
+  });
+
+  // ── #134: rejects extra arguments, and suggests near misses ──
+
+  it("rejects a trailing argument with a one-line usage and opens nothing", async () => {
+    const { pi, commands } = mockPi();
+    registerNavigatorExtension(pi);
+    const { ctx, notifications } = mockCtx();
+    await commands.get("navigator").handler("all extra", ctx);
+    expect(notifications.map((n) => n.msg)).toContain(
+      'pi-navigator: unexpected argument "extra" — usage: /navigator all',
+    );
+    // A rejected invocation must not also mount the overlay.
+    expect(ctx.ui.custom).not.toHaveBeenCalled();
+  });
+
+  it("rejects a third token after `set`'s value, with the value syntax in the usage", async () => {
+    const { pi, commands } = mockPi();
+    registerNavigatorExtension(pi);
+    const { ctx, notifications } = mockCtx();
+    await commands.get("navigator").handler("set viewer.wrap on now", ctx);
+    expect(notifications.map((n) => n.msg)).toContain(
+      'pi-navigator: unexpected argument "now" — usage: /navigator set <setting> <value>',
+    );
+  });
+
+  it("suggests the correction for a near miss, and stays quiet for an unrelated token", async () => {
+    const { pi, commands } = mockPi();
+    registerNavigatorExtension(pi);
+    const { ctx, notifications } = mockCtx();
+    await commands.get("navigator").handler("setting", ctx);
+    expect(notifications.map((n) => n.msg)).toContain(
+      'pi-navigator: unknown subcommand "setting" — did you mean "/navigator settings"?',
+    );
+    await commands.get("navigator").handler("zzz", ctx);
+    const messages = notifications.map((n) => n.msg);
+    expect(messages).toContain('pi-navigator: unknown subcommand "zzz"');
+    // A token that is not a plausible typo gets no suggestion at all.
+    expect(messages.some((m) => m.includes('"zzz"') && m.includes("did you mean"))).toBe(false);
+  });
+
+  it("threads the injected KeybindingsManager into the overlay, so Ctrl+C cancels (Issues #125/#126)", async () => {
+    const { pi, commands } = mockPi();
+    registerNavigatorExtension(pi);
+    const cmd = commands.get("navigator");
+
+    const tui = {
+      terminal: { rows: 24, write: vi.fn() },
+      requestRender: vi.fn(),
+      addInputListener: () => () => undefined,
+    };
+    const theme = { fg: (_c: string, t: string) => t, bg: (_c: string, t: string) => t };
+    const keybindings = new KeybindingsManager(TUI_KEYBINDINGS);
+    const done = vi.fn();
+    let component: { handleInput: (data: string) => void } | null = null;
+    const ctx = {
+      hasUI: true,
+      mode: "tui",
+      cwd: "/test",
+      ui: {
+        notify: vi.fn(),
+        custom: vi.fn(
+          (factory: (tui: unknown, th: unknown, kb: unknown, done: (value: null) => void) => unknown) => {
+            component = factory(tui, theme, keybindings, done) as { handleInput: (data: string) => void };
+            return Promise.resolve(component);
+          },
+        ),
+      },
+    } as any;
+
+    await cmd.handler("", ctx);
+    expect(component).not.toBeNull();
+    // Ctrl+C is the host's cancel alias (tui.select.cancel, default keys
+    // Escape + Ctrl+C): with the manager threaded from the custom factory
+    // into the overlay it cancels — closing the overlay — instead of being
+    // swallowed. Closing also tears the mount down (no poll timers leak).
+    component!.handleInput("\x03");
+    expect(done).toHaveBeenCalledTimes(1);
+    expect(done).toHaveBeenCalledWith(null);
+  });
 });
 
 /** mockCtx variant that records every ctx.ui.custom call's arguments. */
@@ -249,6 +513,7 @@ function mockCtxWithCustomCapture(calls: unknown[][]): { ctx: any; notifications
   const notifications: Array<{ msg: string; level: string }> = [];
   const ctx = {
     hasUI: true,
+    mode: "tui",
     cwd: "/test",
     ui: {
       notify: (msg: string, level: string) => notifications.push({ msg, level }),
@@ -704,6 +969,150 @@ describe("makeImageSeams (Issue #116 fix 1)", () => {
       setCapabilities(saved);
       resetCapabilitiesCache();
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("settings menu integration via runSettings (Issues #121, #133)", () => {
+  const KEYS = { enter: "\r", down: "\x1b[B", escape: "\x1b" } as const;
+
+  /** A tui-mode ctx whose ui.custom mounts the real menu and closes on done(). */
+  function mockSettingsCtx(): {
+    ctx: any;
+    notifications: Array<{ msg: string; level: string }>;
+    ready: Promise<void>;
+    getComponent: () => { render(width: number): string[]; handleInput?(data: string): void };
+  } {
+    let component: { render(width: number): string[]; handleInput?(data: string): void } | undefined;
+    let resolveReady!: () => void;
+    let resolveClosed!: (value?: unknown) => void;
+    const ready = new Promise<void>((resolve) => { resolveReady = resolve; });
+    const closed = new Promise<unknown>((resolve) => { resolveClosed = resolve; });
+    const notifications: Array<{ msg: string; level: string }> = [];
+    const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+    const ctx = {
+      hasUI: true,
+      mode: "tui",
+      cwd: "/work",
+      ui: {
+        notify: (msg: string, level: string) => notifications.push({ msg, level }),
+        custom: (factory: (tui: unknown, th: unknown, keybindings: unknown, done: (value?: unknown) => void) => unknown) => {
+          const result = factory({}, theme, {}, (value?: unknown) => resolveClosed(value));
+          component = result as typeof component;
+          resolveReady();
+          return closed;
+        },
+      },
+    };
+    return {
+      ctx,
+      notifications,
+      ready,
+      getComponent: () => {
+        if (component === undefined) throw new Error("settings menu component was not created");
+        return component;
+      },
+    };
+  }
+
+  function writeSettingsFile(dir: string, settings: NavigatorSettings): string {
+    const filePath = join(dir, "pi-navigator.json");
+    writeFileSync(filePath, JSON.stringify(serializeNavigatorSettings(settings), null, 2), "utf8");
+    return filePath;
+  }
+
+  it("Esc after edits leaves the settings file byte-identical and reports info (cancelled) (#121, #133)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nav121-esc-"));
+    agentDir.dir = dir;
+    const settings: NavigatorSettings = {
+      version: 1,
+      images: { mode: "chafa" },
+      icons: { enabled: true },
+      viewer: { wrap: true, markdown: "rendered" },
+      tree: { showHidden: true },
+      layout: { default: "git-viewer" },
+    };
+    const filePath = writeSettingsFile(dir, settings);
+    const before = readFileSync(filePath, "utf8");
+    try {
+      const { pi, commands } = mockPi();
+      registerNavigatorExtension(pi);
+      const cmd = commands.get("navigator");
+      const harness = mockSettingsCtx();
+      const pending = cmd.handler("settings", harness.ctx);
+      await harness.ready;
+
+      harness.getComponent().handleInput?.(KEYS.enter); // images.mode chafa -> native (staged)
+      harness.getComponent().handleInput?.(KEYS.escape); // cancel: discard the draft
+      await pending;
+
+      expect(readFileSync(filePath, "utf8")).toBe(before);
+      expect(harness.notifications).toContainEqual({
+        msg: "pi-navigator: settings unchanged (cancelled)",
+        level: "info",
+      });
+      expect(harness.notifications.filter((n) => n.level === "warning")).toEqual([]);
+      expect(readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("the Save row writes the draft exactly once and reports count + file as info (#121, #133)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nav121-save-"));
+    agentDir.dir = dir;
+    const settings: NavigatorSettings = {
+      version: 1,
+      images: { mode: "off" },
+      icons: { enabled: false },
+      viewer: { wrap: false, markdown: "code" },
+      tree: { showHidden: false },
+      layout: { default: "files-git-viewer" },
+    };
+    const filePath = writeSettingsFile(dir, settings);
+    try {
+      const { pi, commands } = mockPi();
+      registerNavigatorExtension(pi);
+      const cmd = commands.get("navigator");
+      const harness = mockSettingsCtx();
+      const pending = cmd.handler("settings", harness.ctx);
+      await harness.ready;
+
+      const component = harness.getComponent();
+      component.handleInput?.(KEYS.enter); // images.mode off -> chafa (staged)
+      component.handleInput?.(KEYS.down); // icons.enabled
+      component.handleInput?.(KEYS.enter); // false -> true (staged)
+      for (let i = 0; i < 5; i++) component.handleInput?.(KEYS.down); // to the Save row
+      component.handleInput?.(KEYS.enter); // Save: one commit, then close
+      await pending;
+
+      const after = JSON.parse(readFileSync(filePath, "utf8")) as Record<string, unknown>;
+      expect(after).toEqual(
+        serializeNavigatorSettings({ ...settings, images: { mode: "chafa" }, icons: { enabled: true } }),
+      );
+      expect(harness.notifications).toContainEqual({
+        msg: `pi-navigator: settings saved (2 fields) \u2192 ${filePath}`,
+        level: "info",
+      });
+      expect(harness.notifications.filter((n) => n.level === "warning")).toEqual([]);
+      expect(readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses the settings menu in every non-TUI mode (#122)", async () => {
+    for (const mode of ["rpc", "json", "print"] as const) {
+      const { pi, commands } = mockPi();
+      registerNavigatorExtension(pi);
+      const cmd = commands.get("navigator");
+      const { ctx, notifications } = mockCtx({ hasUI: mode === "rpc", mode });
+
+      await cmd.handler("settings", ctx);
+      expect(notifications).toEqual([
+        { msg: "pi-navigator settings requires the interactive TUI", level: "warning" },
+      ]);
+      expect(ctx.ui.custom).not.toHaveBeenCalled();
     }
   });
 });

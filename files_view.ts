@@ -36,10 +36,38 @@ export function buildFilesRows(root: FileNode | null, query: string, hidden: boo
 export function buildFilesHeader(leftW: number, total: number, ctx: FilesViewContext): string {
   const T = ctx.theme;
   const label = " " + (ctx.focus === "files" ? T.accent(T.bold("FILES")) : T.dim("FILES"));
-  const info = ctx.filterQuery
-    ? T.warning(`${total} matches`) + " "
-    : T.dim(`${Math.max(1, Math.min(ctx.filesCursor + 1, total))}/${total}`) + " ";
+  let info: string;
+  if (ctx.filterQuery) {
+    info = T.warning(`${total} matches`) + " ";
+  } else if (total > 0) {
+    info = T.dim(`${Math.min(ctx.filesCursor + 1, total)}/${total}`) + " ";
+  } else {
+    // Issue #129: a zero-entry tree hides the position counter instead of
+    // rendering "1/0" — the old Math.max(1, …) guard floored the numerator
+    // while the denominator could still be zero. With no entries there is no
+    // position to report, and the numerator can never exceed the denominator.
+    info = "";
+  }
   return joinLeftRight(label, info, leftW);
+}
+
+/**
+ * The placeholder row an empty tree gets instead of a blank pane (Issue #129).
+ *
+ * The reason is the point: a filter matching nothing is a different state from
+ * a tree with no entries, and saying which one it is keeps the row explanatory
+ * rather than decorative.
+ *
+ * Deliberately NOT part of the row model: as a model row it would be counted by
+ * `buildFilesHeader`'s numerator/denominator (an empty tree would read "1/1"),
+ * need a new `FilesRow` variant, and force a decision about whether the cursor
+ * may land on it. As presentation it changes neither the counts nor the cursor
+ * math, and the pane's row budget stays exactly as it was.
+ */
+export function filesEmptyRow(leftW: number, ctx: FilesViewContext): string {
+  const T = ctx.theme;
+  const reason = ctx.filterQuery !== "" ? `no matches for "${ctx.filterQuery}"` : "no files";
+  return padTo(" " + T.dim(reason), leftW);
 }
 
 export function buildFileRow(row: FilesRow, isCursor: boolean, leftW: number, ctx: FilesViewContext): string {
@@ -73,12 +101,28 @@ export function buildFileRow(row: FilesRow, isCursor: boolean, leftW: number, ct
   } else if (row.node.isDir) {
     const marker = row.node.expanded ? "\u25be " : "\u25b8 ";
     const indent = "  ".repeat(Math.max(0, row.node.depth));
-    const nameStyle = hasChanges(row.node) ? T.warning : row.node.hidden ? T.dim : T.muted;
+    const changed = hasChanges(row.node);
+    const nameStyle = changed ? T.warning : row.node.hidden ? T.dim : T.muted;
     const label = row.node.name + (row.node.isSymlink ? T.dim(" \u2197") : "");
     // Issue #031: icon sits after the indent so it moves with depth and
     // stays glued to the marker/name it belongs to, instead of floating at
     // a fixed left column that desynchronizes from the indented label.
     body = T.dim(indent) + icon(nameStyle) + T.dim(marker) + nameStyle(label);
+    // Issue #128: "contains changes" must not ride on colour alone (host UI
+    // invariant 4). The `•` in the right-aligned badge cell file rows reserve
+    // for git codes is the twin; the warning tone above is reinforcement, not
+    // the carrier. Chosen over a suffix or an arrow change because (a) it
+    // occupies the already-reserved badge cell, so columns never shift, (b)
+    // it is punctuation, never a letter, so it cannot be misread as an
+    // M/A/D/R/C/?/! status code, and (c) unlike a name suffix it is not glued
+    // to the truncatable label — the badge is appended after the body budget
+    // is computed, so the NAME loses cells first and the whole `•` survives at
+    // every real pane width (>= LEFT_COLUMN_MIN 24). It is distinct from the
+    // ▸/▾ disclosure arrow, which stays glued to the indent, and needs no
+    // Nerd Font, so it renders in monochrome and with icons off alike. Only
+    // below unreachable widths (< 8 cells) would padTo's hard cut drop it,
+    // glyph-whole, never a partial marker.
+    if (changed) badge = " " + T.warning("\u2022");
   } else {
     const indent = "  ".repeat(Math.max(0, row.node.depth));
     const isOpen = row.node.relPath === ctx.openRelPath;

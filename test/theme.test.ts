@@ -47,7 +47,10 @@ const TOKEN_MAP: Record<keyof NavigatorTheme, string> = {
   selectedBg: "bg:selectedBg(<x>)",
   searchMatch: "bg:searchMatchBg(fg:searchMatchText(<x>))",
   searchCurrent: "underline(bg:searchMatchBg(fg:searchMatchText(<x>)))",
-  frame: "fg:dim(<x>)",
+  frame: "fg:borderMuted(<x>)",
+  diffAdded: "fg:toolDiffAdded(<x>)",
+  diffRemoved: "fg:toolDiffRemoved(<x>)",
+  diffContext: "fg:toolDiffContext(<x>)",
 };
 
 describe("makeNavigatorTheme token mapping", () => {

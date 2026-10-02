@@ -26,7 +26,7 @@ import {
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 
-import { getCapabilities, Text } from "@earendil-works/pi-tui";
+import { getCapabilities, type KeybindingsManager, Text } from "@earendil-works/pi-tui";
 
 import {
   IMAGE_EXTENSIONS,
@@ -35,7 +35,10 @@ import {
   MAX_POLL_INTERVAL_MS,
   MAX_VIEWER_CACHE_ENTRIES,
   NAVIGATOR_IMAGES_ENV,
+  NAVIGATOR_IMAGES_FLAG,
+  NAVIGATOR_ICONS_FLAG,
   NAVIGATOR_LAYOUT_ENV,
+  NAVIGATOR_LAYOUT_FLAG,
   NAVIGATOR_SETTINGS_FILE,
   OVERLAY_OPTIONS,
   REFRESH_INTERVAL_MS,
@@ -53,8 +56,8 @@ import { ICONS_ENV } from "./icons";
 import { buildHelpLines, HELP_COMMANDS_TITLE, HELP_HEADER_PREFIX, HELP_HINT, HELP_ENTRY_TYPE, helpCommandColumnWidth, NAVIGATOR_CMD_PREFIX, NAVIGATOR_SUBCOMMANDS, type NavigatorHelpData } from "./help";
 import type { NavigatorLayout } from "./types";
 import { makeDeferredImageSupport, resolveImageSupport, runChafaRender, runNativeRender, buildKittyProbeQuery, consumeKittyProbeReply, createKittyProbeState, detectPiChafa, type ImageSupport, type KittyProbeState, type KittyProbeVerdict, type NativeProtocol } from "./images";
-import { loadNavigatorSettings, writeNavigatorSettings } from "./settings";
-import { navigatorFieldNotes, openSettingsMenu } from "./settings_menu";
+import { applyFieldEdit, loadNavigatorSettings, writeNavigatorSettings } from "./settings";
+import { countChangedFields, navigatorFieldNotes, openSettingsMenu } from "./settings_menu";
 import { styleCommitMessage, styleDiffLines } from "./diff";
 import { NavigatorOverlay } from "./navigator";
 import { makeNavigatorTheme } from "./theme";
@@ -203,45 +206,213 @@ export function makeImageSeams(opts: {
 
 /**
  * Pure argument routing for /navigator (Issue #061): the first whitespace
- * token decides, trailing tokens are ignored, matching is case-sensitive
- * lowercase (a `Settings` token is unknown). Layout subcommands (Issue #119)
- * resolve through the shared table's `layout` field to `{ kind: "layout" }`.
+ * token decides and matching is case-sensitive lowercase (a `Settings` token
+ * is unknown). Layout subcommands (Issue #119) resolve through the shared
+ * table's `layout` field to `{ kind: "layout" }`.
+ *
+ * `set <field> <value>` (Issue #131) is the one subcommand that reads past the
+ * first token — it needs both trailing tokens, so they ride on the result
+ * rather than being dropped. A `set` missing its arguments routes to the same
+ * kind with `undefined` fields so the handler can state the usage instead of
+ * silently doing nothing.
+ *
+ * Anything beyond a subcommand's arity is **rejected**, not ignored (Issue
+ * #134): the standard forbids silently dropping an argument you do not
+ * understand, so `/navigator all extra` and `/navigator set a b c` come back as
+ * `extra` with the offending tokens and the handler answers with a one-line
+ * usage.
  */
 export type ParsedNavigatorArgs =
   | { readonly kind: "overlay" }
   | { readonly kind: "settings" }
   | { readonly kind: "help" }
   | { readonly kind: "layout"; readonly layout: NavigatorLayout }
+  | { readonly kind: "set"; readonly field: string | undefined; readonly value: string | undefined }
+  | { readonly kind: "extra"; readonly sub: string; readonly extra: readonly string[] }
   | { readonly kind: "unknown"; readonly raw: string };
 
 export function parseNavigatorArgs(args: string): ParsedNavigatorArgs {
-  const token = args.trim().split(/\s+/).filter(Boolean)[0];
+  const tokens = args.trim().split(/\s+/).filter(Boolean);
+  const token = tokens[0];
   if (token === undefined) return { kind: "overlay" };
   // Subcommand tokens come from the shared help table (Issue #063 finding 5):
   // a table lookup — never a cast — so an unknown token can never be
   // re-labeled into a known kind. A row carrying a layout routes to the
-  // layout kind with that layout (Issue #119, D12); settings/help keep their
-  // own kinds; anything else is unknown.
+  // layout kind with that layout (Issue #119, D12); set/settings/help keep
+  // their own kinds; anything else is unknown.
   const sub = NAVIGATOR_SUBCOMMANDS.find((candidate) => candidate.cmd.slice(NAVIGATOR_CMD_PREFIX.length) === token);
   if (sub === undefined) return { kind: "unknown", raw: token };
+  // `set` is `set <setting> <value>` (three tokens); every other subcommand
+  // takes nothing beyond its own name. Extra tokens are rejected, never
+  // dropped (Issue #134).
+  const arity = sub.cmd.endsWith("set") ? 3 : 1;
+  if (tokens.length > arity) return { kind: "extra", sub: token, extra: tokens.slice(arity) };
   if (sub.layout !== undefined) return { kind: "layout", layout: sub.layout };
+  if (sub.cmd.endsWith("set")) return { kind: "set", field: tokens[1], value: tokens[2] };
   if (sub.cmd.endsWith("settings")) return { kind: "settings" };
   return { kind: "help" };
 }
 
 /**
- * Argument completions for /navigator: settings / help, filtered by prefix.
- * Rows project from NAVIGATOR_SUBCOMMANDS (Issue #063 finding 5) so the
- * completion descriptions cannot drift from the /navigator help rows.
+ * Argument completions for /navigator, filtered by prefix. Rows project from
+ * NAVIGATOR_SUBCOMMANDS (Issue #063 finding 5) so the completion descriptions
+ * cannot drift from the /navigator help rows.
+ *
+ * Always an array (Issue #134): `[]` is "I have nothing", which is the honest
+ * answer for a prefix matching no subcommand, while `null` means "not my job"
+ * and would hand the argument slot back to another provider for our own
+ * argument list.
  */
-export function navigatorCompletions(prefix: string): { value: string; label: string; description: string }[] | null {
-  const items = NAVIGATOR_SUBCOMMANDS.map((sub) => ({
+export function navigatorCompletions(prefix: string): { value: string; label: string; description: string }[] {
+  return NAVIGATOR_SUBCOMMANDS.map((sub) => ({
     value: sub.cmd.slice(NAVIGATOR_CMD_PREFIX.length),
     label: sub.completionLabel,
     description: sub.desc,
-  }));
-  const filtered = items.filter((item) => item.value.startsWith(prefix));
-  return filtered.length > 0 ? filtered : null;
+  })).filter((item) => item.value.startsWith(prefix));
+}
+
+/**
+ * The one-line usage for a subcommand token (Issue #134). `set` is the only
+ * subcommand that takes values, which is why it is the only one that gets a
+ * value syntax appended.
+ */
+function subcommandUsage(token: string): string {
+  return `${NAVIGATOR_CMD_PREFIX}${token}${token === "set" ? " <setting> <value>" : ""}`;
+}
+
+/** Levenshtein distance, iterative. Tokens are tiny, so this stays cheap. */
+function editDistance(a: string, b: string): number {
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i++) {
+    const current: number[] = [i];
+    for (let j = 1; j <= b.length; j++) {
+      const substitution = (previous[j - 1] ?? 0) + (a[i - 1] === b[j - 1] ? 0 : 1);
+      current[j] = Math.min((previous[j] ?? 0) + 1, (current[j - 1] ?? 0) + 1, substitution);
+    }
+    previous = current;
+  }
+  return previous[b.length] ?? 0;
+}
+
+/**
+ * The closest subcommand token to `token`, or undefined when nothing is close
+ * enough to be a typo (Issue #134). Candidates come from the one subcommand
+ * table, so a suggestion can never name a token that does not exist. The
+ * threshold is a third of the token's length (at least one edit), which
+ * suggests `setting` → `settings` while staying quiet for an unrelated word.
+ */
+function nearestSubcommand(token: string): string | undefined {
+  let best: { token: string; distance: number } | undefined;
+  for (const candidate of NAVIGATOR_SUBCOMMANDS) {
+    const name = candidate.cmd.slice(NAVIGATOR_CMD_PREFIX.length);
+    const distance = editDistance(token, name);
+    if (best === undefined || distance < best.distance) best = { token: name, distance };
+  }
+  const limit = Math.max(1, Math.floor(token.length / 3));
+  return best !== undefined && best.distance <= limit ? best.token : undefined;
+}
+
+/**
+ * The one-line warning for an unknown subcommand (Issue #134): the standard's
+ * near-miss form quotes the correction back when the token is plausibly a typo,
+ * and stays terse when it is not. A module-level builder rather than an inline
+ * `const`, because a declaration directly inside a case clause is a lint error.
+ */
+function unknownSubcommandNotice(raw: string): string {
+  const suggestion = nearestSubcommand(raw);
+  return suggestion === undefined
+    ? `pi-navigator: unknown subcommand "${raw}"`
+    : `pi-navigator: unknown subcommand "${raw}" — did you mean "${subcommandUsage(suggestion)}"?`;
+}
+
+/**
+ * Reads one host flag as a string (Issue #131). `getFlag` is typed
+ * `boolean | string | undefined`, so a value of the wrong shape is treated as
+ * absent rather than coerced: the flags are registered without a default, so
+ * "absent" is a real state the precedence chain depends on.
+ */
+function flagString(pi: ExtensionAPI, name: string): string | undefined {
+  const value = pi.getFlag(name);
+  return typeof value === "string" ? value : undefined;
+}
+
+/** Boolean twin of {@link flagString}: only a real boolean counts as passed. */
+function flagBoolean(pi: ExtensionAPI, name: string): boolean | undefined {
+  const value = pi.getFlag(name);
+  return typeof value === "boolean" ? value : undefined;
+}
+
+/**
+ * The startup layers that override a field, as a label per field id (Issue
+ * #131). The settings menu annotates its rows with this and `/navigator set`
+ * warns with it, so both read one place instead of duplicating the raw
+ * presence rules; flags beat env, so the more explicit layer wins the label.
+ */
+function collectOverrides(pi: ExtensionAPI): Record<string, string> {
+  const overrides: Record<string, string> = {};
+  const imagesFlag = flagString(pi, NAVIGATOR_IMAGES_FLAG);
+  const imagesEnv = process.env[NAVIGATOR_IMAGES_ENV];
+  if (imagesFlag !== undefined && imagesFlag.trim() !== "") overrides["images.mode"] = `--${NAVIGATOR_IMAGES_FLAG}`;
+  else if (imagesEnv !== undefined && imagesEnv.trim() !== "") overrides["images.mode"] = NAVIGATOR_IMAGES_ENV;
+  const iconsFlag = flagBoolean(pi, NAVIGATOR_ICONS_FLAG);
+  const iconsEnv = process.env[ICONS_ENV];
+  if (iconsFlag !== undefined) overrides["icons.enabled"] = `--${NAVIGATOR_ICONS_FLAG}`;
+  else if (iconsEnv !== undefined && iconsEnv.trim() !== "") overrides["icons.enabled"] = ICONS_ENV;
+  const layoutFlag = flagString(pi, NAVIGATOR_LAYOUT_FLAG);
+  const layoutEnv = process.env[NAVIGATOR_LAYOUT_ENV];
+  if (layoutFlag !== undefined && layoutFlag.trim() !== "") overrides["layout.default"] = `--${NAVIGATOR_LAYOUT_FLAG}`;
+  else if (layoutEnv !== undefined && layoutEnv.trim() !== "") overrides["layout.default"] = NAVIGATOR_LAYOUT_ENV;
+  return overrides;
+}
+
+/**
+ * `/navigator set <field> <value>` (Issue #131): the command path to the same
+ * registry and atomic writer the settings menu uses, for when the menu cannot
+ * mount (print/json) or a script wants to provision a later session.
+ * Validation is the same pure `applyFieldEdit`, so a value accepted here is
+ * accepted there, and the durable effect is the file — which is why this works
+ * headless even though `notify` is a no-op outside the TUI.
+ *
+ * A field that a startup layer shadows gets called out: writing a value the
+ * current run will ignore is otherwise a silent surprise.
+ */
+function runSet(
+  pi: ExtensionAPI,
+  ctx: ExtensionCommandContext,
+  field: string | undefined,
+  value: string | undefined,
+): void {
+  if (field === undefined || value === undefined) {
+    ctx.ui.notify("pi-navigator: usage: /navigator set <setting> <value> (see /navigator help)", "warning");
+    return;
+  }
+  const userPath = join(getAgentDir(), NAVIGATOR_SETTINGS_FILE);
+  const loaded = loadNavigatorSettings({ userPath });
+  for (const warning of loaded.warnings) ctx.ui.notify(`pi-navigator: ${warning}`, "warning");
+
+  const edited = applyFieldEdit(loaded.settings, field, value);
+  if (!edited.ok) {
+    // One line, and it always says how to call this correctly (Issue #131 AC):
+    // the field list itself is the settings doc, so point at the usage rather
+    // than dumping ids into a notification.
+    ctx.ui.notify(`pi-navigator: ${edited.error} — usage: /navigator set <setting> <value>`, "warning");
+    return;
+  }
+  try {
+    writeNavigatorSettings(userPath, edited.settings);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    ctx.ui.notify(
+      `pi-navigator: could not write settings: ${message.length <= 160 ? message : `${message.slice(0, 160)}…`}`,
+      "warning",
+    );
+    return;
+  }
+  const shadowed = collectOverrides(pi)[field];
+  ctx.ui.notify(
+    `pi-navigator: set ${field} = ${value} → ${userPath}${shadowed !== undefined ? ` (${shadowed} overrides it for this run)` : ""}`,
+    "info",
+  );
 }
 
 /**
@@ -388,7 +559,12 @@ async function runNavigator(
   ctx: ExtensionContext | ExtensionCommandContext,
   layoutOverride?: NavigatorLayout,
 ): Promise<void> {
-  if (!ctx.hasUI) {
+  // Issue #122: `mode` is the capability that matters for a custom component.
+  // RPC has hasUI=true but ctx.ui.custom is a host stub, and json/print have
+  // hasUI=false while notify is a no-op. notify still forwards in RPC, so the
+  // refusal is reachable there (json/print visibility is deliberately open —
+  // see issue #122).
+  if (!ctx.hasUI || ctx.mode !== "tui") {
     ctx.ui.notify("pi-navigator requires the interactive TUI", "warning");
     return;
   }
@@ -396,11 +572,13 @@ async function runNavigator(
   const cwd = ctx.cwd;
 
   await ctx.ui.custom<null>(
-    (tui: TuiLike, piTheme: Theme, _keybindings: unknown, done: (value: null) => void) => {
-      // Overlay-local keys (j k, /, ? q) are hardcoded by convention per the
-      // standards report section 2.5, as the reference overlay does; the
-      // injected KeybindingsManager is accepted for signature compatibility and
-      // deliberately not consulted.
+    (tui: TuiLike, piTheme: Theme, keybindings: KeybindingsManager, done: (value: null) => void) => {
+      // Narrowed keybinding policy (Issues #125/#126): host-owned actions go
+      // through the injected KeybindingsManager — cancel matches
+      // "tui.select.cancel", which covers Esc, Ctrl+C and any user remap in
+      // one call. Overlay-local letters (j k g G l h w m i n N y t r . / ?)
+      // stay literal: they have no host binding ids and are this extension's
+      // own key language (standards report section 2.5).
       const theme = makeNavigatorTheme(piTheme);
 
       // Kitty protocol probe (Issue #101, #116): one a=q query per overlay
@@ -432,6 +610,12 @@ async function runNavigator(
           images: process.env[NAVIGATOR_IMAGES_ENV],
           icons: process.env[ICONS_ENV],
           layout: process.env[NAVIGATOR_LAYOUT_ENV],
+        },
+        // Flags beat env inside the loader (Issue #131).
+        flags: {
+          images: flagString(pi, NAVIGATOR_IMAGES_FLAG),
+          icons: flagBoolean(pi, NAVIGATOR_ICONS_FLAG),
+          layout: flagString(pi, NAVIGATOR_LAYOUT_FLAG),
         },
       });
       const notifyWarning = makeWarningNotifier(ctx.ui);
@@ -641,6 +825,7 @@ async function runNavigator(
         onClose: close,
         loadFile: loadFileCached,
         loadCommit,
+        keybindings,
         refresh: () => {
           currentPollDelay = REFRESH_INTERVAL_MS;
           void resolveSupport();
@@ -837,12 +1022,16 @@ async function runNavigator(
 /**
  * /navigator settings (Issue #061): open the SettingsList menu over the FILE
  * view of the settings (loaded without env; env-shadowed rows are annotated
- * and the env still wins at the next open). Commit = atomic write → reload →
- * notify warnings; any throw becomes a bounded `{ok:false}` — the menu issues
- * the warning and reverts the row display.
+ * and the env still wins at the next open). Edits stage in the menu's draft;
+ * the Save row commits once = atomic write → reload → notify warnings; any
+ * throw becomes a bounded `{ok:false}` — the menu warns and keeps the draft
+ * for a retry. After the menu closes, the outcome is reported: info naming
+ * the count and the file on save, info "unchanged (cancelled)" on Esc (#133).
  */
 async function runSettings(pi: ExtensionAPI, ctx: ExtensionCommandContext): Promise<void> {
-  if (!ctx.hasUI || ctx.mode !== "tui" || typeof ctx.ui.custom !== "function") {
+  // Issue #122: `mode !== "tui"` is the guard; `custom` is a function in every
+  // host context, so the old typeof check was dead code and is gone.
+  if (!ctx.hasUI || ctx.mode !== "tui") {
     ctx.ui.notify("pi-navigator settings requires the interactive TUI", "warning");
     return;
   }
@@ -860,17 +1049,10 @@ async function runSettings(pi: ExtensionAPI, ctx: ExtensionCommandContext): Prom
   const fileLoaded = loadNavigatorSettings({ userPath });
   for (const warning of fileLoaded.warnings) notifyWarning(warning);
 
-  // Raw env presence decides the annotation (empty/whitespace = no override).
-  const overrides: Record<string, string> = {};
-  const imagesEnv = process.env[NAVIGATOR_IMAGES_ENV];
-  if (imagesEnv !== undefined && imagesEnv.trim() !== "") overrides["images.mode"] = NAVIGATOR_IMAGES_ENV;
-  const iconsEnv = process.env[ICONS_ENV];
-  if (iconsEnv !== undefined && iconsEnv.trim() !== "") overrides["icons.enabled"] = ICONS_ENV;
-  const layoutEnv = process.env[NAVIGATOR_LAYOUT_ENV];
-  if (layoutEnv !== undefined && layoutEnv.trim() !== "") overrides["layout.default"] = NAVIGATOR_LAYOUT_ENV;
+  const overrides = collectOverrides(pi);
 
   try {
-    await openSettingsMenu(ctx.ui, {
+    const outcome = await openSettingsMenu(ctx.ui, {
       settings: fileLoaded.settings,
       overrides,
       notes: navigatorFieldNotes({ piChafaPresent }),
@@ -887,12 +1069,38 @@ async function runSettings(pi: ExtensionAPI, ctx: ExtensionCommandContext): Prom
       },
       onWarning: (message) => ctx.ui.notify(message, "warning"),
     });
+    // Outcome feedback lands AFTER the menu closes (#133): the modal asks,
+    // the toast reports. Failures already warned from inside the menu.
+    if (outcome.kind === "saved") {
+      const changed = countChangedFields(fileLoaded.settings, outcome.settings);
+      ctx.ui.notify(`pi-navigator: settings saved (${changed} fields) \u2192 ${userPath}`, "info");
+    } else {
+      ctx.ui.notify("pi-navigator: settings unchanged (cancelled)", "info");
+    }
   } catch (error) {
     ctx.ui.notify(`pi-navigator: settings failed (${String(error)}).`, "warning");
   }
 }
 
 export default function (pi: ExtensionAPI): void {
+  // Startup overrides (Issue #131). Registered so they surface in `pi --help`
+  // (env vars never do) and WITHOUT a default: the host stores a declared
+  // default into the flag's value, and getFlag would then return it even when
+  // the user passed nothing — flattening the precedence chain
+  // (defaults ← file ← env ← flag). Read through flagString/flagBoolean.
+  pi.registerFlag(NAVIGATOR_IMAGES_FLAG, {
+    type: "string",
+    description: "pi-navigator image rendering: native, chafa, auto or off (beats PI_NAV_IMAGES and the settings file)",
+  });
+  pi.registerFlag(NAVIGATOR_ICONS_FLAG, {
+    type: "boolean",
+    description: "pi-navigator: show the Nerd Font icon column (beats PI_NAV_ICONS and the settings file)",
+  });
+  pi.registerFlag(NAVIGATOR_LAYOUT_FLAG, {
+    type: "string",
+    description: "pi-navigator overlay layout: files-git-viewer, files-viewer or git-viewer (beats PI_NAV_LAYOUT and the settings file)",
+  });
+
   // Durable help entry renderer (Issue #061): delivered via appendEntry +
   // registerEntryRenderer, never ctx.ui.notify. Restored/old entries with no
   // data fall back to an empty cwd.
@@ -915,7 +1123,17 @@ export default function (pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("navigator", {
-    description: "Open the read-only project navigator; /navigator settings opens the settings menu, /navigator help shows commands",
+    // Issue #135 L11: a one-line summary only. The subcommand grammar belongs
+    // to the usage text (/navigator help renders the full table); naming
+    // subcommands here crowds the command list, which truncates.
+    //
+    // There is deliberately no `argumentHint` field: the building-pi-extension-ui
+    // skill's contract.md documents one on registerCommand, but the host's
+    // RegisteredCommand has no such member in any version we run (verified
+    // against 0.99.2: {name, sourceInfo, description?, getArgumentCompletions?,
+    // handler}). The skill is wrong on that point, so trimming is the available
+    // fix rather than relocating the signature to a hint field.
+    description: "Open the read-only project navigator overlay; /navigator help lists subcommands",
     getArgumentCompletions: (prefix: string) => navigatorCompletions(prefix),
     handler: async (args, ctx) => {
       const parsed = parseNavigatorArgs(args);
@@ -929,12 +1147,23 @@ export default function (pi: ExtensionAPI): void {
         case "settings":
           await runSettings(pi, ctx);
           return;
+        case "set":
+          runSet(pi, ctx, parsed.field, parsed.value);
+          return;
         case "help":
           pi.appendEntry(HELP_ENTRY_TYPE, { cwd: ctx.cwd });
           return;
         case "unknown":
-          ctx.ui.notify(`pi-navigator: unknown subcommand \"${parsed.raw}\"`, "warning");
+          ctx.ui.notify(unknownSubcommandNotice(parsed.raw), "warning");
           pi.appendEntry(HELP_ENTRY_TYPE, { cwd: ctx.cwd });
+          return;
+        case "extra":
+          // The usage line is more precise than the help list here, so this
+          // path does not append a help entry (Issue #134).
+          ctx.ui.notify(
+            `pi-navigator: unexpected ${parsed.extra.length === 1 ? "argument" : "arguments"} "${parsed.extra.join(" ")}" — usage: ${subcommandUsage(parsed.sub)}`,
+            "warning",
+          );
           return;
       }
     },

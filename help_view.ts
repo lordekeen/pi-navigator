@@ -31,10 +31,27 @@ export interface HelpView {
   helpScroll: number;
 }
 
-/** Compose the in-overlay `?` modal into `lines` (3-row chrome + body). */
+/**
+ * Compose the in-overlay `?` modal into `lines` (3-row chrome + body).
+ *
+ * Deliberately has no in-box footer stating its own keys: while the modal is
+ * open the overlay's footer row switches to `MODE_HINTS.help` ("j k scroll
+ * PgUp/PgDn page  Home/End top/bottom  q Esc ? close help"), so the modal's
+ * keys are stated one row below the box instead of inside it — a documented
+ * exception to the "state your own keys in-frame" rule (Issue #135 L2). The
+ * body stops before the last line so that footer is never occluded.
+ */
 export function composeHelp(lines: string[], innerW: number, body: number, view: HelpView): void {
   const T = view.theme;
-  const boxW = Math.min(innerW - 2, 66);
+  // Key cell width derived from the table (longest key string + one separator
+  // cell) so a longer label cannot silently overflow the description column
+  // (Issue #132).
+  const keyW = Math.max(1, ...view.helpRows.map(([keys]) => visibleWidth(keys))) + 1;
+  // Grow the box to the width the rows actually need, capped by the terminal.
+  // A fixed 66-cell cap cut the longest row's meaning even on a wide terminal
+  // (#132); where the terminal is still narrower the cut stays clean (#010).
+  const descNeeded = Math.max(0, ...view.helpRows.map(([, description]) => visibleWidth(description)));
+  const boxW = Math.min(innerW - 2, Math.max(66, 4 + keyW + descNeeded));
   const visibleRows = helpVisibleRows(body, view.helpRows.length);
   const boxH = visibleRows + 3;
   const startRow = Math.max(0, Math.floor((body - boxH) / 2));
@@ -55,13 +72,13 @@ export function composeHelp(lines: string[], innerW: number, body: number, view:
       continue;
     }
     const [keys, description] = row;
-    const keyCell = T.accent(keys.padEnd(16));
-    // Row layout is " " + keyCell(16) + " " + descCell inside the boxW-2
-    // inner area, so the description gets boxW-20 columns (the prior
-    // boxW-22 cut two columns too early). hardTruncate gives the clean cut
-    // (Issue #010); strip whatever reset it injected and append our own
-    // ellipsis so the indicator stays inside the muted style.
-    const descWidth = boxW - 20;
+    const keyCell = T.accent(keys.padEnd(keyW));
+    // Row layout is " " + keyCell(keyW) + " " + descCell inside the boxW-2
+    // inner area, so the description gets boxW - 4 - keyW columns.
+    // hardTruncate gives the clean cut (Issue #010); strip whatever reset it
+    // injected and append our own ellipsis so the indicator stays inside the
+    // muted style.
+    const descWidth = boxW - 4 - keyW;
     let descCell = description;
     if (visibleWidth(description) > descWidth) {
       const cut = hardTruncate(description, Math.max(1, descWidth - 1)).replace(/\x1b\[[0-9;]*m/g, "");

@@ -422,6 +422,20 @@ describe("render width safety", () => {
     expect(lines.join("\n")).toContain("terminal too small");
   });
 
+  it("renders the empty files pane's explanatory row width-safe at every suite size (Issue #129)", () => {
+    // An empty tree explains itself instead of leaving the pane blank. The
+    // files pane only exists at 80+ columns — below LEFT_COLUMN_HIDE_BELOW
+    // (72 inner cols) the viewer takes the full width by design — so the row
+    // is asserted where the pane is, and width safety is asserted everywhere.
+    const harness = makeHarness(30);
+    harness.overlay.setTree(buildTree("/work/repo", entriesFromPaths([]), new Map()), "git");
+    for (const width of [120, 100, 80]) {
+      const lines = expectWidthSafe(harness.overlay, width);
+      expect(lines.join("\n"), `width ${width}`).toContain("no files");
+    }
+    expectWidthSafe(harness.overlay, 60);
+  });
+
   it("renders the error card width-safe", async () => {
     const harness = makeHarness(36);
     harness.overlay.setTree(buildTree("/work/repo", entriesFromPaths(["broken.ts"]), new Map()), "git");

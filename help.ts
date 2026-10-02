@@ -34,16 +34,17 @@ export const NAVIGATOR_SUBCOMMANDS: readonly {
   completionLabel: string;
   layout?: NavigatorLayout;
 }[] = [
-  { cmd: `${NAVIGATOR_CMD_PREFIX}all`, desc: "open overlay with files and git panes (default)", completionLabel: "Open files + git + viewer overlay", layout: "files-git-viewer" },
-  { cmd: `${NAVIGATOR_CMD_PREFIX}files`, desc: "open overlay with files pane only", completionLabel: "Open files + viewer overlay", layout: "files-viewer" },
-  { cmd: `${NAVIGATOR_CMD_PREFIX}git`, desc: "open overlay with git panel only", completionLabel: "Open git + viewer overlay", layout: "git-viewer" },
-  { cmd: `${NAVIGATOR_CMD_PREFIX}settings`, desc: "configure images, icons, viewer, tree, and layout behavior", completionLabel: "Open the settings menu" },
-  { cmd: `${NAVIGATOR_CMD_PREFIX}help`, desc: "show this command list", completionLabel: "Show the command list" },
+  { cmd: `${NAVIGATOR_CMD_PREFIX}all`, desc: "Open overlay with files and git panes (default)", completionLabel: "Open files + git + viewer overlay", layout: "files-git-viewer" },
+  { cmd: `${NAVIGATOR_CMD_PREFIX}files`, desc: "Open overlay with files pane only", completionLabel: "Open files + viewer overlay", layout: "files-viewer" },
+  { cmd: `${NAVIGATOR_CMD_PREFIX}git`, desc: "Open overlay with git panel only", completionLabel: "Open git + viewer overlay", layout: "git-viewer" },
+  { cmd: `${NAVIGATOR_CMD_PREFIX}settings`, desc: "Configure images, icons, viewer, tree, and layout behavior", completionLabel: "Open the settings menu" },
+  { cmd: `${NAVIGATOR_CMD_PREFIX}set`, desc: "set one config value, e.g. images.mode native", completionLabel: "Set a config value" },
+  { cmd: `${NAVIGATOR_CMD_PREFIX}help`, desc: "Show this command list", completionLabel: "Show the command list" },
 ];
 
 /** The durable /navigator help rows (overlay command first, then subcommands). */
 export const NAVIGATOR_COMMANDS: readonly { cmd: string; desc: string }[] = [
-  { cmd: "/navigator", desc: "open the read-only project navigator overlay" },
+  { cmd: "/navigator", desc: "Open the read-only project navigator overlay" },
   ...NAVIGATOR_SUBCOMMANDS.map(({ cmd, desc }) => ({ cmd, desc })),
 ];
 
@@ -63,9 +64,9 @@ export const NAVIGATOR_KEYBINDINGS: readonly HelpKeyRow[] = [
   { id: "cycle-focus", keys: "Tab / Shift+Tab", description: "cycle pane focus (visible panes)" },
   { id: "toggle-tree", keys: "t", description: "hide or show the left column" },
   { id: "move", keys: "j k / arrows", description: "move the cursor or scroll" },
-  { id: "jump", keys: "g G", description: "jump to top or bottom" },
-  { id: "half-page", keys: "Ctrl+d Ctrl+u", description: "half page" },
-  { id: "open", keys: "Enter", description: "open file / commit diff, or toggle a directory / commit family" },
+  { id: "jump", keys: "g G / Home End", description: "jump to top or bottom" },
+  { id: "half-page", keys: "Ctrl+d Ctrl+u", description: "half page; PgUp/PgDn also page" },
+  { id: "open", keys: "Enter", description: "open file, commit diff, or toggle a directory/commit" },
   { id: "expand-collapse", keys: "l h / arrows", description: "expand or collapse a directory / commit family" },
   { id: "filter-search", keys: "/", description: "filter the tree, search the file" },
   { id: "match-nav", keys: "n N", description: "next/prev match (viewer)" },
@@ -85,7 +86,15 @@ export const HELP_HEADER_PREFIX = "pi-navigator \u2014 ";
 export const HELP_COMMANDS_TITLE = "commands";
 export const HELP_HINT = "inside the overlay: press ? for keys, q to close";
 
-/** Command column width: longest command + 2 (qdrant-memory parity). */
+/**
+ * Command column width: longest command + 2 (qdrant-memory parity).
+ *
+ * `.length` is correct here and deliberately *not* `visibleWidth`: this module
+ * is pi-import-free by design (see the header), and every `cmd` is a plain
+ * ASCII literal built from `/navigator` plus a subcommand token — so code-unit
+ * length and visible width are identical for every value this can ever see.
+ * Audited as Issue #135 L9 and justified rather than changed.
+ */
 export function helpCommandColumnWidth(): number {
   return Math.max(...NAVIGATOR_COMMANDS.map((row) => row.cmd.length), 0) + 2;
 }

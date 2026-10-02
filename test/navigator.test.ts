@@ -6,7 +6,13 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Markdown, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  KeybindingsManager,
+  Markdown,
+  TUI_KEYBINDINGS,
+  type KeybindingsConfig,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 
 import { IMAGE_RESIZE_DEBOUNCE_MS } from "../constants";
 import { DEFAULT_PI_CHAFA_SUBSET, resolveChafaGeometry, type ImageSupport } from "../images";
@@ -57,6 +63,12 @@ const KEYS = {
   ctrlU: "\x15",
   ctrlN: "\x0e",
   ctrlP: "\x10",
+  ctrlC: "\x03",
+  ctrlK: "\x0b",
+  home: "\x1b[H",
+  end: "\x1b[F",
+  pageUp: "\x1b[5~",
+  pageDown: "\x1b[6~",
 } as const;
 
 /** Active chafa support snapshot for the image suites (§12.4). */
@@ -119,6 +131,7 @@ function makeHarness(
   loadCommit?: (shortHash: string) => Promise<ViewerFile>,
   imageSupport?: ImageSupport,
   initialLayout?: NavigatorLayout,
+  keybindings?: KeybindingsManager,
 ): Harness {
   const opened: string[] = [];
   const loads: Array<{ relPath: string; opts?: LoadFileOptions }> = [];
@@ -161,6 +174,7 @@ function makeHarness(
     },
     ...(imageSupport !== undefined ? { imageSupport } : {}),
     ...(initialLayout !== undefined ? { initialLayout } : {}),
+    ...(keybindings !== undefined ? { keybindings } : {}),
   };
 
   const overlay = new NavigatorOverlay(options);
@@ -355,6 +369,96 @@ describe("escape precedence (filter, then search, then close)", () => {
     expect(harness.state.closed).toBe(0); // still filtering
     harness.overlay.handleInput(KEYS.escape);
     harness.overlay.handleInput("q");
+    expect(harness.state.closed).toBe(1);
+  });
+});
+
+// ── KeybindingsManager cancel seam (Issues #125/#126) ──
+
+describe("keybindings-manager cancel (Issues #125/#126)", () => {
+  /** A manager over the host's real table, optionally with user remaps. */
+  const manager = (userBindings: KeybindingsConfig = {}): KeybindingsManager =>
+    new KeybindingsManager(TUI_KEYBINDINGS, userBindings);
+  /** Harness with the manager injected (production wiring, Issue #126). */
+  const withManager = (kb: KeybindingsManager): Harness =>
+    makeHarness(36, undefined, undefined, undefined, undefined, undefined, kb);
+
+  it("consults the manager for the cancel id, so Esc keeps working and Ctrl+C closes", () => {
+    const kb = manager();
+    const matches = vi.spyOn(kb, "matches");
+    const harness = withManager(kb);
+    harness.overlay.handleInput(KEYS.escape);
+    expect(matches).toHaveBeenCalledWith(KEYS.escape, "tui.select.cancel");
+    expect(harness.state.closed).toBe(1);
+    harness.overlay.handleInput(KEYS.ctrlC);
+    expect(harness.state.closed).toBe(2);
+  });
+
+  it("keeps Ctrl+C inert when no manager is injected (harness default)", () => {
+    const harness = makeHarness();
+    harness.overlay.handleInput(KEYS.ctrlC);
+    expect(harness.state.closed).toBe(0);
+    harness.overlay.handleInput(KEYS.escape); // the literal fallback still works
+    expect(harness.state.closed).toBe(1);
+  });
+
+  it("dismisses the help modal only, matching Esc", () => {
+    const harness = withManager(manager());
+    harness.overlay.handleInput("?");
+    expect(harness.overlay.render(120).join("\n")).toContain("cycle pane focus"); // modal open
+    harness.overlay.handleInput(KEYS.ctrlC);
+    expect(harness.state.closed).toBe(0); // overlay stays open
+    expect(harness.overlay.render(120).join("\n")).not.toContain("cycle pane focus"); // modal gone
+  });
+
+  it("clears the filter field and exits it without closing", () => {
+    const harness = withManager(manager());
+    withTree(harness, ["src/a.ts"]);
+    harness.overlay.handleInput("/");
+    harness.overlay.handleInput("a");
+    expect(harness.overlay.render(120).join("\n")).toContain("/a"); // filter bar echo
+    harness.overlay.handleInput(KEYS.ctrlC);
+    expect(harness.state.closed).toBe(0);
+    expect(harness.overlay.render(120).join("\n")).not.toContain("/a");
+  });
+
+  it("clears a committed filter, repopulating the list, without closing", () => {
+    const harness = withManager(manager());
+    withTree(harness, ["main.ts", "other.ts"]);
+    harness.overlay.handleInput("/");
+    for (const ch of ["m", "a", "i", "n"]) harness.overlay.handleInput(ch);
+    harness.overlay.handleInput(KEYS.enter); // commit the filter
+    expect(harness.overlay.render(120).join("\n")).not.toContain("other");
+    harness.overlay.handleInput(KEYS.ctrlC);
+    expect(harness.state.closed).toBe(0);
+    expect(harness.overlay.render(120).join("\n")).toContain("other");
+  });
+
+  it("clears a committed search before closing", async () => {
+    const harness = withManager(manager());
+    withTree(harness, ["src/a.ts"]);
+    harness.overlay.handleInput("j"); // src dir -> src/a.ts
+    harness.overlay.handleInput(KEYS.enter); // open the file, focus viewer
+    expect(harness.opened).toEqual(["src/a.ts"]);
+
+    harness.overlay.handleInput("/");
+    harness.overlay.handleInput("b");
+    harness.overlay.handleInput("e");
+    harness.overlay.handleInput(KEYS.enter); // commit the search
+    harness.overlay.handleInput(KEYS.ctrlC); // clears the committed search
+    expect(harness.state.closed).toBe(0);
+    // The stack is empty now: the next cancel closes the overlay. Without the
+    // fix, Ctrl+C was swallowed and this Esc would clear the search instead.
+    harness.overlay.handleInput(KEYS.escape);
+    expect(harness.state.closed).toBe(1);
+  });
+
+  it("applies a user remap of the cancel action (Issue #126)", () => {
+    // A user binding replaces the Esc/Ctrl+C defaults for the cancel id.
+    const harness = withManager(manager({ "tui.select.cancel": ["ctrl+k"] }));
+    harness.overlay.handleInput(KEYS.ctrlC);
+    expect(harness.state.closed).toBe(0); // no longer the cancel key
+    harness.overlay.handleInput(KEYS.ctrlK);
     expect(harness.state.closed).toBe(1);
   });
 });
@@ -862,7 +966,10 @@ describe("viewer keys", () => {
     harness.overlay.handleInput("h");
     harness.overlay.handleInput("l");
     const rendered = harness.overlay.render(120).join("\n"); // clamps happen in render
-    expect(rendered).toContain("w wrap  m mode");
+    // Issue #135 L1: a.ts cannot render as markdown, so the `m` hint is not
+    // advertised at all — an unavailable action carries no hint.
+    expect(rendered).toContain("w wrap");
+    expect(rendered).not.toContain("m mode");
     expect(rendered).not.toContain("h l x");
     expect(harness.state.closed).toBe(0);
   });
@@ -903,7 +1010,7 @@ describe("viewer keys", () => {
     // git focus
     harness.overlay.handleInput(KEYS.tab);
     rendered = harness.overlay.render(120).join("\n");
-    expect(rendered).toContain("g G jump");
+    expect(rendered).toContain("g G Home/End jump");
 
     // help mode
     harness.overlay.handleInput("?");
@@ -1532,7 +1639,7 @@ describe("markdown rendered view", () => {
     expect(rendered).not.toContain("m code");
   });
 
-  it("shows notice and rejects toggle on non-markdown files", async () => {
+  it("rejects the markdown toggle on non-markdown files, silently (Issue #135 L1)", async () => {
     const harness = makeHarness();
     withTree(harness, ["a.ts"]);
     harness.overlay.handleInput(KEYS.enter);
@@ -1544,11 +1651,13 @@ describe("markdown rendered view", () => {
 
     harness.overlay.handleInput("m");
     rendered = harness.overlay.render(120).join("\n");
-    expect(rendered).toContain("rendered view only available for markdown files");
+    // Issue #135 L1: an inert key is silent, like the other inapplicable keys —
+    // the footer simply stops advertising `m` for such files.
+    expect(rendered).not.toContain("rendered view only available for markdown files");
     expect(rendered).not.toContain("m code");
   });
 
-  it("shows notice and rejects toggle on commit diffs", async () => {
+  it("rejects the markdown toggle on commit diffs, silently (Issue #135 L1)", async () => {
     const harness = makeHarness(
       24,
       undefined,
@@ -1567,7 +1676,7 @@ describe("markdown rendered view", () => {
 
     harness.overlay.handleInput("m");
     const rendered = harness.overlay.render(120).join("\n");
-    expect(rendered).toContain("rendered view only available for markdown files");
+    expect(rendered).not.toContain("rendered view only available for markdown files");
     expect(rendered).not.toContain("m code");
   });
 
@@ -2462,5 +2571,325 @@ describe("native image rendering", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ── Issue #123: invalidate() clears theme-styled caches, keeps the data cache ──
+
+describe("Issue #123: invalidate() clears theme-styled caches, keeps the data cache", () => {
+  it("clears the styled viewer caches and the search-match state, keeping the data-derived width cache", async () => {
+    const harness = makeHarness();
+    withTree(harness, ["a.ts"]);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+    harness.overlay.handleInput("/");
+    harness.overlay.handleInput("a");
+    harness.overlay.render(120); // warms markedCache, rowsCache, maxLineWidthCache, searchMatchLines
+
+    const caches = harness.overlay as unknown as {
+      rowsCache: unknown;
+      markedCache: unknown;
+      mdCache: unknown;
+      maxLineWidthCache: unknown;
+      searchMatchLines: Set<number>;
+    };
+    expect(caches.rowsCache).not.toBeNull();
+    expect(caches.markedCache).not.toBeNull();
+    expect(caches.maxLineWidthCache).not.toBeNull();
+    expect(caches.searchMatchLines.size).toBeGreaterThan(0);
+
+    harness.overlay.invalidate();
+
+    // The theme-derived render state is dropped wholesale...
+    expect(caches.rowsCache).toBeNull();
+    expect(caches.markedCache).toBeNull();
+    expect(caches.mdCache).toBeNull();
+    expect(caches.searchMatchLines.size).toBe(0);
+    // ...while the data-derived caches (raw visible widths) and the file
+    // data itself are deliberately kept: no re-read, same open path.
+    expect(caches.maxLineWidthCache).not.toBeNull();
+    expect(harness.overlay.getOpenRelPath()).toBe("a.ts");
+    expect(harness.loads).toHaveLength(1);
+  });
+
+  it("re-derives search marks against the current theme after invalidate() (theme switch)", async () => {
+    // The tag flips with the theme: a stale cache would keep the old tag in
+    // the marked rows, so this asserts the marked/rows cache chain re-derives.
+    let tag = "A";
+    const harness = makeHarness(
+      24,
+      async (p) => ({ kind: "text", relPath: p, sizeBytes: 100, lineCount: 3, lines: ["alpha", "beta", "gamma"] }),
+      (color, text) => `${color}:${tag}:${text}`,
+    );
+    withTree(harness, ["a.ts"]);
+    const overlay = harness.overlay;
+    overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+    overlay.handleInput("/");
+    overlay.handleInput("a");
+    expect(overlay.render(120).join("\n")).toContain("searchMatchText:A:a");
+
+    // The host switches the theme, then tells the overlay (invalidate).
+    tag = "B";
+    overlay.invalidate();
+    const rendered = overlay.render(120).join("\n");
+    expect(rendered).toContain("searchMatchText:B:a");
+    expect(rendered).not.toContain("searchMatchText:A:a");
+    // The search state is re-derived from the styled lines on the next render.
+    expect(overlay.getSearchState()).toEqual({ query: "a", index: 0, total: 5 });
+  });
+
+  it("drops the markdown cache and renderer so rendered content re-styles, without re-reading the file", async () => {
+    const mdFile: ViewerFile = {
+      kind: "text",
+      relPath: "README.md",
+      sizeBytes: 100,
+      lineCount: 4,
+      lines: ["# Heading", "", "- bullet point", "regular text"],
+      rawText: "# Heading\n\n- bullet point\nregular text",
+    };
+    const harness = makeHarness(24, async (p) => (p === "README.md" ? mdFile : { kind: "text", relPath: p, lines: [] }));
+    withTree(harness, ["README.md"]);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+    harness.overlay.handleInput("m"); // rendered view
+    harness.overlay.render(120); // warms mdCache + mdRenderer
+
+    const spy = vi.spyOn(Markdown.prototype, "render");
+    harness.overlay.invalidate();
+    const rendered = harness.overlay.render(120).join("\n");
+    // mdCache was dropped: the markdown is re-rendered (fresh theme).
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+
+    expect(rendered).toContain("Heading");
+    expect(harness.loads).toHaveLength(1); // the file data was NOT re-read
+    expect(harness.overlay.getOpenRelPath()).toBe("README.md");
+  });
+});
+
+// ── Issue #124: selection anchors by identity across refreshes ──
+
+describe("Issue #124: selection anchors by identity across refreshes", () => {
+  it("setTree keeps the cursor on the same file when a file appears above it", () => {
+    const harness = makeHarness();
+    withTree(harness, ["a.ts", "b.ts"]);
+    const overlay = harness.overlay;
+    overlay.handleInput("j"); // b.ts
+    expect(overlay.render(120).join("\n")).toContain("2/2");
+
+    // The refresh rebuilds the tree with a file inserted above the cursor:
+    // the cursor must stay on b.ts (now row 3 of 3), not retarget onto a2.ts.
+    overlay.setTree(buildTree("/work", entriesFromPaths(["a.ts", "a2.ts", "b.ts"]), new Map()), "git");
+    expect(overlay.render(120).join("\n")).toContain("3/3");
+  });
+
+  it("setTree clamps when the selected file is removed", () => {
+    const harness = makeHarness();
+    withTree(harness, ["a.ts", "b.ts", "c.ts"]);
+    const overlay = harness.overlay;
+    overlay.handleInput("j"); // b.ts
+    overlay.setTree(buildTree("/work", entriesFromPaths(["a.ts", "c.ts"]), new Map()), "git");
+    // b.ts is gone: the cursor clamps in range (onto c.ts at row 2 of 2).
+    expect(overlay.render(120).join("\n")).toContain("2/2");
+  });
+
+  it("setTree clamps when the selected file hides behind a collapsed directory", () => {
+    const tree = buildTree("/work", entriesFromPaths(["src/deep/a.ts"]), new Map());
+    const deep = findNode(tree, "src/deep");
+    if (deep) deep.expanded = true;
+    const harness = makeHarness();
+    harness.overlay.setTree(tree, "git");
+    const overlay = harness.overlay;
+    overlay.handleInput("j");
+    overlay.handleInput("j"); // rows: src, deep, a.ts -> a.ts
+    expect(overlay.render(120).join("\n")).toContain("3/3");
+
+    // A fresh build re-collapses deep: a.ts is no longer a visible row, so
+    // the cursor clamps onto the (still visible) deep row instead of jumping
+    // to an unrelated item or going out of range.
+    const rebuilt = buildTree("/work", entriesFromPaths(["src/deep/a.ts"]), new Map());
+    overlay.setTree(rebuilt, "git");
+    expect(overlay.render(120).join("\n")).toContain("2/2");
+  });
+
+  it("setGitState keeps the cursor on the same row when rows are inserted above it", () => {
+    const harness = makeHarness();
+    withGit(harness);
+    const overlay = harness.overlay;
+    overlay.handleInput(KEYS.tab); // focus git
+    overlay.handleInput("j"); // -> the history commit row
+    expect(overlay.render(120).some((l) => l.includes("\u25b6 ") && l.includes("fix things"))).toBe(true);
+
+    // Refresh with a new unstaged file inserted ABOVE the cursor: the cursor
+    // must stay on the commit row (re-found by its shortHash identity).
+    withGit(harness, {
+      unstaged: [
+        { relPath: "new/above.ts", code: "M" },
+        { relPath: "src/pkg/changed.ts", code: "M" },
+      ],
+    });
+    const lines = overlay.render(120);
+    expect(lines.some((l) => l.includes("\u25b6 ") && l.includes("fix things"))).toBe(true);
+  });
+
+  it("setGitState clamps when the selected row is gone", () => {
+    const harness = makeHarness();
+    withGit(harness);
+    const overlay = harness.overlay;
+    overlay.handleInput(KEYS.tab); // focus git; cursor on the unstaged file
+    withGit(harness, { unstaged: [] }); // the file row is gone
+    // Clamp in range (onto the commit), never out of range or onto a group row.
+    const lines = overlay.render(120);
+    expect(lines.some((l) => l.includes("\u25b6 ") && l.includes("fix things"))).toBe(true);
+  });
+
+  it("filter refinement keeps the selected item when it still matches", () => {
+    const harness = makeHarness();
+    withTree(harness, ["main.ts", "mail.ts", "other.ts"]);
+    const overlay = harness.overlay;
+    const arrowOn = (needle: string): boolean =>
+      overlay.render(120).some((line) => line.includes("\u25b6 ") && line.includes(needle));
+
+    overlay.handleInput("/");
+    overlay.handleInput("m"); // matches mail.ts + main.ts (in that order)
+    expect(overlay.render(120).join("\n")).toContain("2 matches");
+    expect(arrowOn("mail.ts")).toBe(true);
+    overlay.handleInput(KEYS.down); // -> main.ts
+    expect(arrowOn("main.ts")).toBe(true);
+
+    // Refining the query keeps the selected item when it still matches...
+    overlay.handleInput("a"); // "ma" — both still match
+    expect(overlay.render(120).join("\n")).toContain("2 matches");
+    expect(arrowOn("main.ts")).toBe(true); // pre-fix: reset to 0 -> mail.ts
+    overlay.handleInput("i"); // "mai" — both still match
+    expect(arrowOn("main.ts")).toBe(true);
+    overlay.handleInput(KEYS.backspace); // "ma" — shorter query
+    expect(arrowOn("main.ts")).toBe(true); // pre-fix: reset to 0 -> mail.ts
+
+    // ...and clamps in range when the item stops matching (never a raw reset).
+    overlay.handleInput("n"); // "man" — no matches left
+    expect(overlay.render(120).join("\n")).toContain("0 matches");
+    expect(overlay.render(120).join("\n")).not.toContain("\u25b6 ");
+  });
+});
+
+// ── Issue #127: Home/End/PageUp/PageDown jump and page in every mode ──
+
+describe("Issue #127: Home/End/PageUp/PageDown jump and page in every mode", () => {
+  /** The files pane position counter "N/30" (else -1 when absent). */
+  const filesPos = (rendered: string): number => {
+    const m = rendered.match(/(?:^|[^0-9])(\d+)\/30/);
+    return m ? Number(m![1]) : -1;
+  };
+
+  it("files: Home/End and PageUp/PageDown are aliases of g/G and Ctrl+d/u", () => {
+    const harness = makeHarness(40); // files area 14 -> half-page step 7
+    withTree(harness, Array.from({ length: 30 }, (_, i) => `f${i}.ts`));
+    const overlay = harness.overlay;
+    const pos = () => filesPos(overlay.render(120).join("\n"));
+
+    overlay.handleInput(KEYS.home); // == g
+    expect(pos()).toBe(1);
+    overlay.handleInput("j");
+    expect(pos()).toBe(2);
+    overlay.handleInput(KEYS.end); // == G
+    expect(pos()).toBe(30);
+    overlay.handleInput(KEYS.pageUp); // == Ctrl+u
+    expect(pos()).toBe(23);
+    overlay.handleInput(KEYS.pageDown); // == Ctrl+d
+    expect(pos()).toBe(30);
+    overlay.handleInput("g");
+    expect(pos()).toBe(1);
+    overlay.handleInput(KEYS.pageDown);
+    expect(pos()).toBe(8);
+    overlay.handleInput(KEYS.ctrlU);
+    expect(pos()).toBe(1);
+    overlay.handleInput("G");
+    expect(pos()).toBe(30);
+    overlay.handleInput(KEYS.ctrlD);
+    expect(pos()).toBe(30); // clamped at the bottom
+    expect(harness.state.closed).toBe(0);
+  });
+
+  it("git: Ctrl+d/u and PageUp/PageDown page, Home/End jump (the pane's gaps)", () => {
+    const harness = makeHarness(36); // git area 10 -> half-page step 5
+    withGit(harness, {
+      unstaged: Array.from({ length: 30 }, (_, i) => ({ relPath: `f${i}.ts`, code: "M" })),
+      staged: [],
+    });
+    const overlay = harness.overlay;
+    overlay.handleInput(KEYS.tab); // focus git
+    const arrowOn = (needle: string): boolean =>
+      overlay.render(120).some((line) => line.includes("\u25b6 ") && line.includes(needle));
+
+    expect(arrowOn("f0.ts")).toBe(true);
+    overlay.handleInput(KEYS.ctrlD); // NEW: the git pane pages now too
+    expect(arrowOn("f5.ts")).toBe(true);
+    overlay.handleInput(KEYS.pageUp); // == Ctrl+u
+    expect(arrowOn("f0.ts")).toBe(true);
+    overlay.handleInput(KEYS.pageDown); // == Ctrl+d
+    expect(arrowOn("f5.ts")).toBe(true);
+    overlay.handleInput(KEYS.end); // == G -> last nav row: the commit
+    expect(arrowOn("fix things")).toBe(true);
+    overlay.handleInput(KEYS.home); // == g
+    expect(arrowOn("f0.ts")).toBe(true);
+    overlay.handleInput("G");
+    expect(arrowOn("fix things")).toBe(true);
+    overlay.handleInput("g");
+    expect(arrowOn("f0.ts")).toBe(true);
+    overlay.handleInput(KEYS.ctrlU);
+    expect(arrowOn("f0.ts")).toBe(true);
+  });
+
+  it("viewer: Home/End and PageUp/PageDown scroll like g/G and Ctrl+d/u", async () => {
+    const lines = Array.from({ length: 30 }, (_, i) => `line-${String(i).padStart(2, "0")}`);
+    const harness = makeHarness(36, async (p) => ({
+      kind: "text",
+      relPath: p,
+      sizeBytes: 100,
+      lineCount: 30,
+      lines,
+    }));
+    withTree(harness, ["a.ts"]);
+    const overlay = harness.overlay;
+    overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+    const body = () => overlay.render(120).join("\n");
+
+    overlay.handleInput(KEYS.pageDown); // half of the 24-row area
+    expect(body()).toContain("line-12");
+    expect(body()).not.toContain("line-00");
+    overlay.handleInput(KEYS.pageUp);
+    expect(body()).toContain("line-00");
+    overlay.handleInput(KEYS.end);
+    expect(body()).toContain("line-06"); // clamped: 30 lines - 24 rows
+    expect(body()).not.toContain("line-00");
+    overlay.handleInput(KEYS.home);
+    expect(body()).toContain("line-00");
+    overlay.handleInput(KEYS.ctrlD); // twins keep their exact behavior
+    expect(body()).toContain("line-12");
+    overlay.handleInput(KEYS.ctrlU);
+    expect(body()).toContain("line-00");
+  });
+
+  it("help: Home/End and PageUp/PageDown scroll the modal", () => {
+    const harness = makeHarness(24); // 19 rows, 11 visible -> maxScroll 8, step 6
+    const overlay = harness.overlay;
+    overlay.handleInput("?");
+    const body = () => overlay.render(120).join("\n");
+
+    expect(body()).toContain("cycle pane focus"); // modal row 0 visible
+    overlay.handleInput(KEYS.pageDown); // +6
+    expect(body()).not.toContain("cycle pane focus");
+    expect(body()).toContain("copy the selected path"); // row 16 now visible
+    overlay.handleInput(KEYS.pageUp);
+    expect(body()).toContain("cycle pane focus");
+    overlay.handleInput(KEYS.end);
+    expect(body()).toContain("close (Esc clears filter or search first)"); // row 18
+    overlay.handleInput(KEYS.pageDown); // already at the clamp
+    expect(body()).toContain("close (Esc clears filter or search first)");
+    overlay.handleInput(KEYS.home);
+    expect(body()).toContain("cycle pane focus");
   });
 });

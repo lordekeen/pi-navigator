@@ -141,6 +141,15 @@ export interface GitHeaderView {
   focus: Focus;
   git: GitState | null;
   treeSource: "git" | "fs" | null;
+  /**
+   * Position indicator inputs (L3). The header cannot derive these from `git`:
+   * the row model depends on which commit families are expanded, and overflow
+   * depends on the terminal. `gitCursorIndex` is 0-based over the *navigable*
+   * rows (group rows are not selectable), so it matches what j/k traverses.
+   */
+  gitCursorIndex: number;
+  gitNavCount: number;
+  gitAreaRows: number;
 }
 
 export function buildGitHeader(leftW: number, view: GitHeaderView): string {
@@ -162,6 +171,15 @@ export function buildGitHeader(leftW: number, view: GitHeaderView): string {
     }
   } else {
     info = T.dim(git?.error ?? "unavailable") + " ";
+  }
+  // L3 (audit §Low): a git list that overflows its pane says where the cursor
+  // is, matching the files header's N/M. Two deliberate limits: only on
+  // overflow (a list that fits needs no position), and only when it fits beside
+  // the label — joinLeftRight truncates the LEFT side to make room, and pane
+  // labels must never be what gets cut (the Issue #113 class).
+  if (view.gitNavCount > view.gitAreaRows) {
+    const counter = T.dim(`${Math.min(view.gitCursorIndex + 1, view.gitNavCount)}/${view.gitNavCount}`) + " ";
+    if (visibleWidth(label) + visibleWidth(info) + visibleWidth(counter) <= leftW) info += counter;
   }
   return joinLeftRight(label, info, leftW);
 }
@@ -209,7 +227,10 @@ export function buildGitRow(row: GitRow, selected: boolean, leftW: number, view:
     const indentW = 2 * row.depth;
     // Width accounting: arrow(2) + indent(2·depth) + marker(2) + hash + sep(2).
     const room = Math.max(4, leftW - 2 - indentW - 2 - visibleWidth(row.commit.shortHash) - 2);
-    const subject = T.dim(hardTruncate(row.commit.subject, room));
+    // L5 (audit §Low): the subject is the row's primary content — the text
+    // step — while the hash stays muted as secondary metadata; dim is for
+    // chrome and hints, not content.
+    const subject = T.text(hardTruncate(row.commit.subject, room));
     line = arrow + "  ".repeat(row.depth) + marker + hash + "  " + subject;
   } else {
     const arrow = selected ? T.accent(T.bold("\u25b6 ")) : "  ";
@@ -217,7 +238,8 @@ export function buildGitRow(row: GitRow, selected: boolean, leftW: number, view:
     const hash = T.muted(row.commit.shortHash);
     // Width accounting: arrow(2) + marker(2) + hash + sep(2).
     const room = Math.max(4, leftW - 2 - 2 - visibleWidth(row.commit.shortHash) - 2);
-    const subject = T.dim(hardTruncate(row.commit.subject, room));
+    // L5: same content/metadata hierarchy as the nested commit-child row.
+    const subject = T.text(hardTruncate(row.commit.subject, room));
     line = arrow + marker + hash + "  " + subject;
   }
   return selected ? T.selectedBg(padTo(line, leftW)) : padTo(line, leftW);

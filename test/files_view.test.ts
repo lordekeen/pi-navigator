@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
 
-import { buildFileRow, buildFilesHeader, buildFilesRows, type FilesViewContext } from "../files_view";
+import { buildFileRow, buildFilesHeader, buildFilesRows, filesEmptyRow, type FilesViewContext } from "../files_view";
 import { mapExtensionToIcon } from "../icons";
 import { makeNavigatorTheme } from "../theme";
 import type { FileNode } from "../types";
@@ -93,6 +93,16 @@ const srcDir = node({
   subtreeChanged: true,
   children: [utilNode, helperNode],
 });
+const docsDir = node({
+  name: "docs",
+  lowerName: "docs",
+  path: "/work/docs",
+  relPath: "docs",
+  lowerRelPath: "docs",
+  isDir: true,
+  expanded: true,
+  children: [],
+});
 const root = node({
   name: "work",
   lowerName: "work",
@@ -115,6 +125,22 @@ function ctx(partial: Partial<FilesViewContext> = {}): FilesViewContext {
     ...partial,
   };
 }
+
+describe("filesEmptyRow (Issue #129 empty state)", () => {
+  it("names the filter query as the reason when one is active", () => {
+    expect(filesEmptyRow(30, ctx({ filterQuery: "zzz" }))).toContain('no matches for "zzz"');
+  });
+
+  it("says 'no files' for a tree that is genuinely empty", () => {
+    expect(filesEmptyRow(30, ctx())).toContain("no files");
+  });
+
+  it("pads to the pane width and cuts a long query cleanly (Issue #010)", () => {
+    const row = filesEmptyRow(20, ctx({ filterQuery: "a".repeat(60) }));
+    expect(visibleWidth(row)).toBe(20);
+    expect(row).not.toMatch(/\x1b\[0m\.\.\./);
+  });
+});
 
 describe("buildFilesRows", () => {
   it("returns no rows for a null root", () => {
@@ -144,6 +170,27 @@ describe("buildFilesRows", () => {
 });
 
 describe("buildFilesHeader", () => {
+  it("hides the position counter on an empty tree instead of rendering 1/0 (Issue #129)", () => {
+    const row = buildFilesHeader(30, 0, ctx({ filesCursor: 0 }));
+    expect(row).not.toContain("1/0");
+    expect(row).not.toContain("/"); // no counter at all, but the label survives
+    expect(row).toContain("FILES");
+    expect(visibleWidth(row)).toBe(30);
+  });
+
+  it("never shows a numerator above the denominator for any cursor position (Issue #129)", () => {
+    for (const filesCursor of [0, 2, 3, 99]) {
+      const row = buildFilesHeader(30, 3, ctx({ filesCursor }));
+      const match = row.match(/(\d+)\/(\d+)/);
+      expect(match, `cursor ${filesCursor}`).not.toBeNull();
+      expect(Number(match![1])).toBeLessThanOrEqual(Number(match![2]));
+    }
+  });
+
+  it("still reports zero matches while filtering", () => {
+    expect(buildFilesHeader(30, 0, ctx({ filterQuery: "zzz" }))).toContain("0 matches");
+  });
+
   it("shows a position counter while browsing and a match counter while filtering", () => {
     const browsing = buildFilesHeader(30, 3, ctx({ filesCursor: 0 }));
     expect(browsing).toContain("1/3");
@@ -219,6 +266,47 @@ describe("buildFileRow", () => {
     // identity theme keeps the (highlighted) name intact so the full file name is rendered
     expect(row).toContain("util.ts");
     expect(visibleWidth(row)).toBeLessThanOrEqual(60); // row stays width-safe
+  });
+
+  it("marks a changed directory with a rollup • twin and leaves an unchanged one bare", () => {
+    const changedDir = buildFileRow({ kind: "dir", node: srcDir }, false, leftW, ctx());
+    expect(changedDir).toContain(" \u2022"); // badge cell: space + marker
+    const unchangedDir = buildFileRow({ kind: "dir", node: docsDir }, false, leftW, ctx());
+    expect(unchangedDir).not.toContain("\u2022");
+    // Icons-on: the twin lives in the badge cell, independent of the icon
+    // column, so it renders in both modes.
+    const withIcons = buildFileRow({ kind: "dir", node: srcDir }, false, leftW, ctx({ enableIcons: true }));
+    expect(withIcons).toContain(" \u2022");
+  });
+
+  it("survives colour stripping: • is real text (identity theme) on the warning channel (tone theme)", () => {
+    const plain = buildFileRow({ kind: "dir", node: srcDir }, false, leftW, ctx());
+    expect(plain).toContain("\u2022"); // identity theme: the glyph is genuinely there
+    const toned = buildFileRow({ kind: "dir", node: srcDir }, false, leftW, { ...ctx(), theme: toneTheme });
+    expect(toned).toContain("warning:\u2022");
+    expect(toned).toContain("warning:src");
+    const unchangedToned = buildFileRow({ kind: "dir", node: docsDir }, false, leftW, { ...ctx(), theme: toneTheme });
+    expect(unchangedToned).not.toContain("warning:");
+  });
+
+  it("keeps a changed directory row exactly leftW wide at the narrow tier", () => {
+    for (const narrow of [24, 30, 44]) {
+      const plain = buildFileRow({ kind: "dir", node: srcDir }, false, narrow, ctx());
+      expect(visibleWidth(plain)).toBe(narrow);
+      const selected = buildFileRow({ kind: "dir", node: srcDir }, true, narrow, ctx());
+      expect(visibleWidth(selected)).toBe(narrow);
+    }
+  });
+
+  it("keeps the file git-code badge behaviour unchanged and distinct from the dir twin", () => {
+    const fileRow = buildFileRow({ kind: "file", node: utilNode }, false, leftW, { ...ctx(), theme: toneTheme });
+    expect(fileRow).toContain("warning:M");
+    expect(fileRow).not.toContain("\u2022");
+    const dirRow = buildFileRow({ kind: "dir", node: srcDir }, false, leftW, ctx());
+    expect(dirRow).toContain(" \u2022");
+    expect(dirRow).not.toContain(" M"); // the twin is a bullet, never a git status code
+    const cleanFile = buildFileRow({ kind: "file", node: helperNode }, false, leftW, ctx());
+    expect(cleanFile).not.toContain("\u2022");
   });
 
   it("emits the mapped icon glyph only when the icon column is enabled", () => {

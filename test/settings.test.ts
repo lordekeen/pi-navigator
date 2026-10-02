@@ -634,7 +634,9 @@ describe("loadNavigatorSettings", () => {
     const path = join(dir, "unknown.json");
     writeFileSync(path, JSON.stringify({ version: 1, images: { mode: "chafa" }, bogus: true }), "utf8");
     const result = loadNavigatorSettings({ userPath: path });
-    expect(result.warnings).toContain('unknown setting "bogus" ignored');
+    // Issue #135 L13: the warning names the file it came from, so a user can
+    // tell a config-file problem from a PI_NAV_* env-var problem.
+    expect(result.warnings).toContain(`${path}: unknown setting "bogus" ignored`);
     expect(result.settings.images.mode).toBe("chafa");
   });
 
@@ -644,6 +646,50 @@ describe("loadNavigatorSettings", () => {
     const result = loadNavigatorSettings({ userPath: path });
     expect(result.settings.images.mode).toBe("off");
     expect(result.warnings.some((w) => w.includes("images.mode"))).toBe(true);
+  });
+
+  // ── flags (Issue #131): the most explicit layer, applied last ──
+
+  it("lets a flag beat the env var and the file", () => {
+    const path = join(dir, "flag.json");
+    writeFileSync(path, JSON.stringify(fullSettings({ images: { mode: "off" } })), "utf8");
+    const result = loadNavigatorSettings({
+      userPath: path,
+      env: { images: "chafa" },
+      flags: { images: "native" },
+    });
+    expect(result.settings.images.mode).toBe("native");
+    expect(result.sources).toContain("navigator-images");
+  });
+
+  it("applies a boolean icons flag in both directions, beating env either way", () => {
+    const path = join(dir, "flag-icons.json");
+    writeFileSync(path, JSON.stringify(fullSettings({ icons: { enabled: true } })), "utf8");
+    const off = loadNavigatorSettings({ userPath: path, env: { icons: "1" }, flags: { icons: false } });
+    expect(off.settings.icons.enabled).toBe(false);
+    const on = loadNavigatorSettings({ userPath: path, env: { icons: "0" }, flags: { icons: true } });
+    expect(on.settings.icons.enabled).toBe(true);
+  });
+
+  it("names the flag, not the env var, when a flag value is invalid", () => {
+    const result = loadNavigatorSettings({
+      userPath: join(dir, "missing.json"),
+      flags: { layout: "split", images: "sixel" },
+    });
+    expect(result.warnings.some((w) => w.includes("--navigator-layout"))).toBe(true);
+    expect(result.warnings.some((w) => w.includes("--navigator-images"))).toBe(true);
+    expect(result.warnings.some((w) => w.includes("PI_NAV_"))).toBe(false);
+  });
+
+  it("treats an absent or empty flag as no override", () => {
+    const result = loadNavigatorSettings({
+      userPath: join(dir, "missing.json"),
+      env: { images: "chafa" },
+      flags: { images: "", layout: "  " },
+    });
+    expect(result.settings.images.mode).toBe("chafa");
+    expect(result.settings.layout.default).toBe(DEFAULT_NAVIGATOR_SETTINGS.layout.default);
+    expect(result.sources).toEqual(["defaults"]);
   });
 });
 

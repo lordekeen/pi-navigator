@@ -84,6 +84,27 @@ export const NAVIGATOR_IMAGES_ENV = "PI_NAV_IMAGES";
 /** Environment override for the default layout (read once in index.ts, Issue #119). */
 export const NAVIGATOR_LAYOUT_ENV = "PI_NAV_LAYOUT";
 
+// ── CLI flags (Issue #131) ──
+//
+// Registered with pi.registerFlag so they appear in `pi --help`, which env vars
+// never do. Flags are the most explicit layer and beat the env vars
+// (precedence: defaults ← file ← env ← flag).
+//
+// They are registered WITHOUT a `default` on purpose: the host stores a
+// declared default into the flag's value, so getFlag would then return it even
+// when the user passed nothing — making "absent" indistinguishable from
+// "explicitly set" and collapsing the precedence chain. Absent must stay
+// `undefined` for the loader to tell the layers apart.
+
+/** `--navigator-images <native|chafa|auto|off>`; beats `PI_NAV_IMAGES`. */
+export const NAVIGATOR_IMAGES_FLAG = "navigator-images";
+
+/** `--navigator-icons` (boolean); beats `PI_NAV_ICONS`. */
+export const NAVIGATOR_ICONS_FLAG = "navigator-icons";
+
+/** `--navigator-layout <files-git-viewer|files-viewer|git-viewer>`; beats `PI_NAV_LAYOUT`. */
+export const NAVIGATOR_LAYOUT_FLAG = "navigator-layout";
+
 // ── Chafa / image rendering ──
 
 /** pi-chafa's config file name (read-only mirror; never written here). */
@@ -155,12 +176,21 @@ export const FAMILY_MAX_ROWS = 16;
 // ── Layout ──
 
 /** Overlay options passed to ctx.ui.custom. */
+/** Overlay height as a fraction of the terminal. Shared by the host option
+ *  below and `frame.overlayHeight`, so the box the host allocates and the frame
+ *  the component draws cannot drift apart (Issue #130). */
+export const OVERLAY_HEIGHT_RATIO = 0.85;
+/** Vertical frame margin in rows: shared by `OVERLAY_OPTIONS.margin` and the
+ *  `overlayHeight` clamp that reserves it. */
+export const OVERLAY_MARGIN_ROWS = 1;
+
 export const OVERLAY_OPTIONS = {
   width: "90%",
   minWidth: 80,
-  maxHeight: "85%",
+  // Derived from OVERLAY_HEIGHT_RATIO (rounded only against float noise).
+  maxHeight: `${Math.round(OVERLAY_HEIGHT_RATIO * 100)}%`,
   anchor: "center",
-  margin: 1,
+  margin: OVERLAY_MARGIN_ROWS,
 } as const;
 
 /** Left column: 30 percent of the inner width, clamped. */

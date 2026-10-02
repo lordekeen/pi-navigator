@@ -19,6 +19,7 @@ import {
   Markdown,
   matchesKey,
   type Focusable,
+  type KeybindingsManager,
 } from "@earendil-works/pi-tui";
 
 import {
@@ -32,13 +33,14 @@ import {
   MIN_OVERLAY_WIDTH,
 } from "./constants";
 import { NAVIGATOR_KEYBINDINGS } from "./help";
-import { buildFilesHeader, buildFileRow, buildFilesRows } from "./files_view";
+import { buildFilesHeader, buildFileRow, buildFilesRows, filesEmptyRow } from "./files_view";
 import {
   bodyRows,
   buildFooterRow,
   buildTitleRow,
   cycleFocus,
   filesArea,
+  gitArea,
   initialFocus,
   layoutPanes,
   layoutRows,
@@ -119,6 +121,13 @@ export interface NavigatorOptions {
   /** v3: open a commit's diff in the viewer. Optional — when absent, Enter on
    *  a commit falls back to toggling its family (keeps harnesses green). */
   loadCommit?: (shortHash: string) => Promise<ViewerFile>;
+  /** Host keybinding seam (Issues #125/#126): the KeybindingsManager the host
+   *  injects into the ctx.ui.custom factory. Consulted for host-owned actions
+   *  only — cancel matches "tui.select.cancel", which covers Esc, Ctrl+C and
+   *  any user remap in one call. Optional: when absent, cancel falls back to
+   *  the literal Esc match, so harnesses that construct the overlay without
+   *  it keep their exact behavior. */
+  keybindings?: KeybindingsManager;
   refresh: () => void;
   /** Opt into the Nerd Font icon column (Issue #028). Defaults to false. */
   enableIcons?: boolean;
@@ -189,6 +198,8 @@ export class NavigatorOverlay implements Focusable {
   private onClose: () => void;
   private loadFile: (relPath: string, opts?: LoadFileOptions) => Promise<ViewerFile>;
   private loadCommit: ((shortHash: string) => Promise<ViewerFile>) | undefined;
+  /** Injected host KeybindingsManager (Issues #125/#126); null in harnesses. */
+  private keybindings: KeybindingsManager | null;
   private refresh: () => void;
 
   private root: FileNode | null = null;
@@ -297,6 +308,7 @@ export class NavigatorOverlay implements Focusable {
     this.onClose = options.onClose;
     this.loadFile = options.loadFile;
     this.loadCommit = options.loadCommit;
+    this.keybindings = options.keybindings ?? null;
     this.refresh = options.refresh;
     this.enableIcons = options.enableIcons ?? false;
     this.home = options.home ?? "";
@@ -320,9 +332,22 @@ export class NavigatorOverlay implements Focusable {
    * this call, so the tree arrives ready to render (plan section 3.6 setters).
    */
   setTree(root: FileNode, treeSource: "git" | "fs"): void {
+    // Re-anchor the selection by relPath (Issue #124): a refresh rebuilding
+    // the tree with entries added/removed above the cursor must not silently
+    // retarget the cursor onto a different file. The anchor is captured
+    // before the root swaps; when the path survives — including under an
+    // active filter — alignFilesCursor refinds it, otherwise the cursor
+    // clamps in range (deleted, filtered out, or hidden by a collapsed
+    // directory).
+    const anchor = this.filesRows()[this.filesCursor]?.node.relPath;
     this.root = root;
     this.treeSource = treeSource;
-    this.filesCursor = moveCursor(this.filesRows().length, this.filesCursor, 0);
+    const rows = this.filesRows();
+    if (anchor !== undefined && rows.some((row) => row.node.relPath === anchor)) {
+      this.alignFilesCursor(anchor);
+    } else {
+      this.filesCursor = moveCursor(rows.length, this.filesCursor, 0);
+    }
     // One-time, non-blocking hint when the user opted into Nerd Font icons
     // (Issue #028): glyphs depend on a terminal Nerd Font, which pi cannot
     // detect. Fired from the setter, not render(), so the render path stays
@@ -335,10 +360,17 @@ export class NavigatorOverlay implements Focusable {
     this.touch();
   }
 
-  /** Install a new git state, keeping the git cursor in range. */
+  /** Install a new git state, keeping the git cursor on the selected row. */
   setGitState(git: GitState): void {
+    // Same identity re-anchor as setTree (Issue #124): file rows by relPath,
+    // commit rows by shortHash — both stable across refreshes. Clamp only
+    // when the row is gone.
+    const anchorRow = this.gitNavRows()[this.gitCursor];
+    const anchor = anchorRow ? this.gitRowIdentity(anchorRow) : null;
     this.git = git;
-    this.gitCursor = moveCursor(this.gitNavRows().length, this.gitCursor, 0);
+    const rows = this.gitNavRows();
+    const index = anchor !== null ? rows.findIndex((row) => this.gitRowIdentity(row) === anchor) : -1;
+    this.gitCursor = index >= 0 ? index : moveCursor(rows.length, this.gitCursor, 0);
     this.touch();
   }
 
@@ -544,8 +576,35 @@ export class NavigatorOverlay implements Focusable {
   }
 
   invalidate(): void {
+    // Theme-change notification from the host (interactive-mode onThemeChange
+    // calls ui.invalidate() on every switch). Clear the DERIVED render state
+    // that bakes the theme in, so the next render re-derives it against the
+    // theme now in force:
+    //  - cachedLines/cachedWidth: the composed frame (styled strings);
+    //  - rowsCache/markedCache: DisplayRows over search-marked, theme-styled
+    //    lines, and the marked lines themselves;
+    //  - mdCache/mdRenderer: rendered markdown (the renderer captures the
+    //    markdown theme at construction, so it must be rebuilt too);
+    //  - searchMatches/searchMatchLines/searchDirty/searchVersion: search
+    //    state derived from the styled lines (recomputed on the next render;
+    //    searchIndex is deliberately kept — the current match keeps its
+    //    place across a theme switch).
+    // Deliberately kept: the DATA-derived state. maxLineWidthCache holds raw
+    // visible line widths (ANSI escapes are zero-width, so it is
+    // theme-independent), filesRows/gitRows/gitNavRows caches hold plain
+    // row models, and the file-content cache lives in index.ts (viewerCache)
+    // — re-reading and re-hashing files is the expensive part, and the
+    // derivation above is all that must be redone to repaint.
     this.cachedWidth = undefined;
     this.cachedLines = undefined;
+    this.rowsCache = null;
+    this.markedCache = null;
+    this.mdCache = null;
+    this.mdRenderer = null;
+    this.searchMatches = [];
+    this.searchMatchLines.clear();
+    this.searchDirty = true;
+    this.searchVersion++;
   }
 
   // ── Row models ──
@@ -615,6 +674,22 @@ export class NavigatorOverlay implements Focusable {
 
   // ── Input ──
 
+  /**
+   * Host-owned cancel (Issues #125/#126): consult the injected
+   * KeybindingsManager for "tui.select.cancel" — the host's cancel action,
+   * whose default keys are Esc and Ctrl+C (pi-tui's tui.select.cancel
+   * table entry), plus any user remap. Without an injected manager
+   * (harnesses), fall back to the literal Esc match this overlay always
+   * had. Overlay-local letters (j k g G l h w m i n N y t r . / ?) stay
+   * literal — they have no host binding ids and are this extension's own
+   * key language.
+   */
+  private matchesCancel(data: string): boolean {
+    return this.keybindings !== null
+      ? this.keybindings.matches(data, "tui.select.cancel")
+      : matchesKey(data, Key.escape);
+  }
+
   handleInput(data: string): void {
     if (this.mode === "help") {
       this.handleHelpInput(data);
@@ -637,7 +712,15 @@ export class NavigatorOverlay implements Focusable {
       this.helpScroll = Math.max(0, this.helpScroll - 1);
     } else if (matchesKey(data, Key.down) || data === "j") {
       this.helpScroll = Math.min(maxScroll, this.helpScroll + 1);
-    } else if (data === "?" || data === "q" || matchesKey(data, Key.escape)) {
+    } else if (matchesKey(data, Key.home)) {
+      this.helpScroll = 0;
+    } else if (matchesKey(data, Key.end)) {
+      this.helpScroll = maxScroll;
+    } else if (matchesKey(data, Key.pageUp)) {
+      this.helpScroll = Math.max(0, this.helpScroll - this.helpPageStep());
+    } else if (matchesKey(data, Key.pageDown)) {
+      this.helpScroll = Math.min(maxScroll, this.helpScroll + this.helpPageStep());
+    } else if (data === "?" || data === "q" || this.matchesCancel(data)) {
       this.mode = "normal";
     } else {
       return;
@@ -647,7 +730,7 @@ export class NavigatorOverlay implements Focusable {
 
   private handleFilterInput(data: string): void {
     const rows = this.filesRows();
-    if (matchesKey(data, Key.escape)) {
+    if (this.matchesCancel(data)) {
       this.filterQuery = "";
       this.mode = "normal";
       this.filesCursor = 0;
@@ -655,26 +738,31 @@ export class NavigatorOverlay implements Focusable {
     } else if (matchesKey(data, Key.enter)) {
       this.mode = "normal";
     } else if (matchesKey(data, Key.backspace)) {
+      const anchor = this.filesRows()[this.filesCursor]?.node.relPath;
       this.filterQuery = deleteLastCodePoint(this.filterQuery);
-      this.filesCursor = 0;
-      this.filesScroll = 0;
+      this.keepFilterSelection(anchor);
     } else if (matchesKey(data, Key.down)) {
       this.filesCursor = Math.min(this.filesCursor + 1, Math.max(0, rows.length - 1));
     } else if (matchesKey(data, Key.up)) {
       this.filesCursor = Math.max(0, this.filesCursor - 1);
+    } else if (matchesKey(data, Key.home)) {
+      // First/last match while filtering (Issue #127).
+      this.filesCursor = 0;
+    } else if (matchesKey(data, Key.end)) {
+      this.filesCursor = moveCursor(rows.length, this.filesCursor, rows.length);
     } else {
       const printable = printableText(data);
       if (printable) {
+        const anchor = this.filesRows()[this.filesCursor]?.node.relPath;
         this.filterQuery += printable;
-        this.filesCursor = 0;
-        this.filesScroll = 0;
+        this.keepFilterSelection(anchor);
       }
     }
     this.touch();
   }
 
   private handleSearchInput(data: string): void {
-    if (matchesKey(data, Key.escape)) {
+    if (this.matchesCancel(data)) {
       this.searchQuery = "";
       this.searchMatches = [];
       this.mode = "normal";
@@ -720,7 +808,7 @@ export class NavigatorOverlay implements Focusable {
       this.onClose();
       return;
     }
-    if (matchesKey(data, Key.escape)) {
+    if (this.matchesCancel(data)) {
       if (this.filterQuery) {
         this.filterQuery = "";
         this.filesCursor = 0;
@@ -767,13 +855,13 @@ export class NavigatorOverlay implements Focusable {
       this.filesCursor = moveCursor(rows.length, this.filesCursor, -1);
     } else if (matchesKey(data, Key.down) || data === "j") {
       this.filesCursor = moveCursor(rows.length, this.filesCursor, 1);
-    } else if (data === "g") {
+    } else if (data === "g" || matchesKey(data, Key.home)) {
       this.filesCursor = 0;
-    } else if (data === "G") {
+    } else if (data === "G" || matchesKey(data, Key.end)) {
       this.filesCursor = moveCursor(rows.length, this.filesCursor, rows.length);
-    } else if (matchesKey(data, Key.ctrl("d"))) {
+    } else if (matchesKey(data, Key.ctrl("d")) || matchesKey(data, Key.pageDown)) {
       this.filesCursor = pageJump(rows.length, this.filesCursor, 1, area);
-    } else if (matchesKey(data, Key.ctrl("u"))) {
+    } else if (matchesKey(data, Key.ctrl("u")) || matchesKey(data, Key.pageUp)) {
       this.filesCursor = pageJump(rows.length, this.filesCursor, -1, area);
     } else if (matchesKey(data, Key.enter)) {
       if (current?.node.isDir) {
@@ -812,10 +900,14 @@ export class NavigatorOverlay implements Focusable {
       this.gitCursor = moveCursor(rows.length, this.gitCursor, -1);
     } else if (matchesKey(data, Key.down) || data === "j") {
       this.gitCursor = moveCursor(rows.length, this.gitCursor, 1);
-    } else if (data === "g") {
+    } else if (data === "g" || matchesKey(data, Key.home)) {
       this.gitCursor = 0;
-    } else if (data === "G") {
+    } else if (data === "G" || matchesKey(data, Key.end)) {
       this.gitCursor = moveCursor(rows.length, this.gitCursor, rows.length);
+    } else if (matchesKey(data, Key.ctrl("d")) || matchesKey(data, Key.pageDown)) {
+      this.gitCursor = pageJump(rows.length, this.gitCursor, 1, gitArea(this.getTerminalRows(), this.layout));
+    } else if (matchesKey(data, Key.ctrl("u")) || matchesKey(data, Key.pageUp)) {
+      this.gitCursor = pageJump(rows.length, this.gitCursor, -1, gitArea(this.getTerminalRows(), this.layout));
     } else if (matchesKey(data, Key.enter)) {
       const row = rows[this.gitCursor];
       if (!row) return;
@@ -907,16 +999,16 @@ export class NavigatorOverlay implements Focusable {
     } else if (matchesKey(data, Key.down) || data === "j") {
       if (nativeImage) return;
       this.viewScroll += 1;
-    } else if (matchesKey(data, Key.ctrl("d"))) {
+    } else if (matchesKey(data, Key.ctrl("d")) || matchesKey(data, Key.pageDown)) {
       if (nativeImage) return;
       this.viewScroll += half;
-    } else if (matchesKey(data, Key.ctrl("u"))) {
+    } else if (matchesKey(data, Key.ctrl("u")) || matchesKey(data, Key.pageUp)) {
       if (nativeImage) return;
       this.viewScroll = Math.max(0, this.viewScroll - half);
-    } else if (data === "g") {
+    } else if (data === "g" || matchesKey(data, Key.home)) {
       if (nativeImage) return;
       this.viewScroll = 0;
-    } else if (data === "G") {
+    } else if (data === "G" || matchesKey(data, Key.end)) {
       if (nativeImage) return;
       this.viewScroll = Number.MAX_SAFE_INTEGER;
     } else if (data === "/") {
@@ -956,9 +1048,11 @@ export class NavigatorOverlay implements Focusable {
         this.searchVersion++;
 
         this.touch();
-      } else {
-        this.showNotice("rendered view only available for markdown files");
       }
+      // Issue #135 L1: no notice when the file cannot render as markdown — an
+      // unavailable action is silent, like the other inapplicable keys here
+      // (n/N with no matches, i on a non-image, w on an image). The footer stops
+      // advertising `m` for such files instead (getFooterHint).
       return;
     } else if (data === "i") {
       // D8 toggle: render ⇄ metadata card (session-only, reset on file
@@ -1059,6 +1153,17 @@ export class NavigatorOverlay implements Focusable {
     this.searchJump = true;
   }
 
+  /**
+   * Identity of a cursor-navigable git row (Issue #124): file rows anchor by
+   * relPath, commit rows by shortHash — both stable across state refreshes.
+   * Group/header rows are not navigable and carry no identity.
+   */
+  private gitRowIdentity(row: GitRow): string | null {
+    if (row.kind === "file") return `file:${row.relPath}`;
+    if (row.kind === "commit" || row.kind === "commit-child") return `commit:${row.commit.shortHash}`;
+    return null;
+  }
+
   private alignFilesCursor(relPath: string): void {
     const rows = this.filesRows();
     const index = rows.findIndex((row) => row.node.relPath === relPath);
@@ -1066,6 +1171,25 @@ export class NavigatorOverlay implements Focusable {
       this.filesCursor = index;
       this.ensureFilesCursorVisible();
     }
+  }
+
+  /**
+   * Keep the filter selection on the path that was selected before the query
+   * changed (Issue #124): refining a query must not drop the user at the top
+   * of the list. When the path no longer matches, clamp to the nearest
+   * surviving row instead of jumping to index 0.
+   */
+  private keepFilterSelection(anchor: string | undefined): void {
+    const rows = this.filesRows();
+    if (anchor !== undefined) {
+      const index = rows.findIndex((row) => row.node.relPath === anchor);
+      if (index >= 0) {
+        this.filesCursor = index;
+        this.ensureFilesCursorVisible();
+        return;
+      }
+    }
+    this.filesCursor = moveCursor(rows.length, this.filesCursor, 0);
   }
 
   private async copyContext(): Promise<void> {
@@ -1123,6 +1247,11 @@ export class NavigatorOverlay implements Focusable {
   /** Single source of truth for the help scroll limit. */
   private helpMaxScroll(): number {
     return computeHelpMaxScroll(HELP_ROWS.length, this.helpVisibleRows());
+  }
+
+  /** Half-page step for the help modal (PageUp/PageDown aliases, Issue #127). */
+  private helpPageStep(): number {
+    return Math.max(1, Math.ceil(this.helpVisibleRows() / HALF_PAGE_DIVISOR));
   }
 
   /**
@@ -1222,7 +1351,7 @@ export class NavigatorOverlay implements Focusable {
         padTo(T.frame("\u2502") + padTo(text, barW) + T.frame("\u2502"), width);
       const lines = [
         padTo(T.frame("\u250c" + "\u2500".repeat(barW) + "\u2510"), width),
-        notice(T.warning(" terminal too small for pi-navigator ")),
+        notice(T.warning(" terminal too small for pi-navigator - resize, or press Esc ")),
         padTo(T.frame("\u2514" + "\u2500".repeat(barW) + "\u2518"), width),
       ];
       this.cachedWidth = width;
@@ -1282,6 +1411,9 @@ export class NavigatorOverlay implements Focusable {
             focus: this.focus,
             notice: this.notice,
             layout: this.layout,
+            // Issue #135 L1: the `m` hint is dropped for files that cannot
+            // render as markdown, so the footer never advertises a dead key.
+            markdownApplicable: canRenderMarkdown(this.viewFile),
           });
     lines.push(T.frame("\u2502") + footerRow + T.frame("\u2502"));
     lines.push(T.frame("\u2514" + "\u2500".repeat(innerW) + "\u2518"));
@@ -1331,7 +1463,17 @@ export class NavigatorOverlay implements Focusable {
       for (let i = 0; i < filesAreaRows; i++) {
         const index = this.filesScroll + i;
         const row = filesRowModel[index];
-        rows.push(row ? buildFileRow(row, index === this.filesCursor, leftW, filesCtx) : padTo("", leftW));
+        if (row) {
+          rows.push(buildFileRow(row, index === this.filesCursor, leftW, filesCtx));
+        } else if (i === 0 && filesRowModel.length === 0) {
+          // Issue #129: an empty tree explains itself in the first data row —
+          // the filter query is the reason when there is one. Presentation
+          // only, so the header's counts and the pane's row budget are
+          // untouched (see filesEmptyRow).
+          rows.push(filesEmptyRow(leftW, filesCtx));
+        } else {
+          rows.push(padTo("", leftW));
+        }
       }
     }
 
@@ -1344,18 +1486,28 @@ export class NavigatorOverlay implements Focusable {
 
       const gitRowModel = this.gitRows();
       const navRows = this.gitNavRows();
-      const gitArea = Math.max(1, heights.gitH - 1);
-      this.ensureGitCursorVisibleFor(gitRowModel, navRows, gitArea);
+      const gitAreaRows = Math.max(1, heights.gitH - 1);
+      this.ensureGitCursorVisibleFor(gitRowModel, navRows, gitAreaRows);
 
-      rows.push(buildGitHeader(leftW, { theme: this.T, focus: this.focus, git: this.git, treeSource: this.treeSource }));
+      rows.push(buildGitHeader(leftW, {
+        theme: this.T,
+        focus: this.focus,
+        git: this.git,
+        treeSource: this.treeSource,
+        // L3: position + overflow for the git pane's header. navRows (not the
+        // model rows) is the navigable set the cursor indexes.
+        gitCursorIndex: this.gitCursor,
+        gitNavCount: navRows.length,
+        gitAreaRows,
+      }));
       // A dim … in the last slot when git rows continue below the window, unless
       // that slot holds the selection (plan section 3.6 item 4).
-      const lastIndex = this.gitScroll + gitArea - 1;
+      const lastIndex = this.gitScroll + gitAreaRows - 1;
       const selectedRow = navRows[this.gitCursor];
       const selectedIndex = selectedRow ? gitRowModel.indexOf(selectedRow) : -1;
       const markerIndex = gitRowModel.length > lastIndex + 1 && selectedIndex !== lastIndex ? lastIndex : -1;
       const gitCtx = { theme: this.T, expanded: this.gitExpanded };
-      for (let i = 0; i < gitArea; i++) {
+      for (let i = 0; i < gitAreaRows; i++) {
         const index = this.gitScroll + i;
         if (index === markerIndex) {
           rows.push(padTo(" " + this.T.dim("\u2026"), leftW));

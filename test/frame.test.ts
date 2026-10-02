@@ -18,6 +18,7 @@ import {
   cycleFocus,
   filesArea,
   FOCUS_HINTS,
+  fitHint,
   getFooterHint,
   initialFocus,
   isImageLine,
@@ -265,6 +266,26 @@ describe("shortPath", () => {
   });
 });
 
+describe("getFooterHint markdown applicability (Issue #135 L1)", () => {
+  it("drops the `m` item from the viewer hint when the file cannot render markdown", () => {
+    const hint = getFooterHint("normal", "viewer", { markdownApplicable: false });
+    expect(hint).not.toContain("m mode");
+    expect(hint).toContain("w wrap");
+    expect(hint).toContain("/ search");
+    // Removing an item leaves neither a fragment nor a doubled separator.
+    expect(hint).not.toContain("  m ");
+    expect(hint).not.toContain("   ");
+  });
+
+  it("keeps it when the file can render markdown, or when applicability is unknown", () => {
+    expect(getFooterHint("normal", "viewer", { markdownApplicable: true })).toContain("m mode");
+    expect(getFooterHint("normal", "viewer")).toContain("m mode");
+    // Other focuses and modes are unaffected either way.
+    expect(getFooterHint("normal", "files", { markdownApplicable: false })).toBe(FOCUS_HINTS.files);
+    expect(getFooterHint("filter", "viewer", { markdownApplicable: false })).toBe(MODE_HINTS.filter);
+  });
+});
+
 describe("getFooterHint", () => {
   it("normal mode picks the focus hint; modal modes pick the mode hint", () => {
     expect(getFooterHint("normal", "files")).toBe(FOCUS_HINTS.files);
@@ -304,6 +325,25 @@ describe("buildTitleRow", () => {
   });
 });
 
+describe("fitHint (Issue #135 L4)", () => {
+  const items = FOCUS_HINTS.files.split("  ");
+
+  it("returns the hint unchanged when it fits", () => {
+    expect(fitHint(FOCUS_HINTS.files, 200)).toBe(FOCUS_HINTS.files);
+  });
+
+  it("keeps only whole items, never a fragment", () => {
+    const fitted = fitHint(FOCUS_HINTS.files, 30);
+    expect(visibleWidth(fitted)).toBeLessThanOrEqual(30);
+    expect(fitted).not.toBe("");
+    for (const item of fitted.split("  ")) expect(items).toContain(item);
+  });
+
+  it("returns an empty string when not even the first item fits", () => {
+    expect(fitHint(FOCUS_HINTS.files, 3)).toBe("");
+  });
+});
+
 describe("buildFooterRow", () => {
   it("shows the notice instead of pane labels when a notice is set", () => {
     const row = buildFooterRow(98, {
@@ -315,6 +355,25 @@ describe("buildFooterRow", () => {
     expect(row).toContain("terminal too small");
     expect(row).not.toContain("viewer");
     expect(visibleWidth(row)).toBeLessThanOrEqual(98);
+  });
+
+  it("drops whole hint items at 80 columns rather than cutting one mid-phrase (Issue #135 L4)", () => {
+    // innerW 78 is an 80-column terminal. Before the fit, joinLeftRight cut the
+    // hint mid-item to make room for the pane labels. The identity theme is
+    // required here: toneTheme's "channel:text" tags count as visible width, so
+    // the budget arithmetic would be measured against inflated labels.
+    const row = buildFooterRow(78, { theme: identityTheme, mode: "normal", focus: "files", notice: null });
+    expect(visibleWidth(row)).toBeLessThanOrEqual(78);
+    // The pane labels keep their place on the right...
+    expect(row).toContain("files");
+    expect(row).toContain("viewer");
+    // ...and no hint item appears in fragment form.
+    expect(row).not.toContain("q clos");
+  });
+
+  it("keeps the hint intact when it fits (no change at 100 columns)", () => {
+    const row = buildFooterRow(98, { theme: identityTheme, mode: "normal", focus: "files", notice: null });
+    expect(row).toContain(FOCUS_HINTS.files);
   });
 
   it("labels the panes and accents the focused one via the theme", () => {

@@ -39,21 +39,25 @@ export function styleCommitMessage(message: CommitMessage, T: NavigatorTheme): s
 }
 
 /**
- * Style one diff line by its leading characters:
+ * Style one diff line by its leading characters. Added, removed and context
+ * lines use the host's dedicated diff roles (`toolDiffAdded` /
+ * `toolDiffRemoved` / `toolDiffContext`) rather than the generic
+ * success/error/text tokens, which mean other things elsewhere in the overlay
+ * and are not what a theme styles diffs with (Issue #135 L7).
  *
  * - `+++` / `---` file headers → muted
- * - `+`   added line → success
- * - `-`   removed line → error
+ * - `+`   added line → diffAdded
+ * - `-`   removed line → diffRemoved
  * - `@@`  hunk header → accent
  * - `diff` / `index` / `new file` / `deleted file` / `Binary files` meta → muted
- * - anything else (context) → text
+ * - anything else (context) → diffContext
  */
 export function styleDiffLines(lines: string[], T: NavigatorTheme): string[] {
   const out: string[] = [];
   for (const line of lines) {
     if (line.startsWith("+++ ") || line.startsWith("--- ")) out.push(T.muted(line));
-    else if (line.startsWith("+")) out.push(T.success(line));
-    else if (line.startsWith("-")) out.push(T.error(line));
+    else if (line.startsWith("+")) out.push(T.diffAdded(line));
+    else if (line.startsWith("-")) out.push(T.diffRemoved(line));
     else if (line.startsWith("@@")) out.push(T.accent(line));
     else if (
       line.startsWith("diff ") ||
@@ -64,7 +68,7 @@ export function styleDiffLines(lines: string[], T: NavigatorTheme): string[] {
     ) {
       out.push(T.muted(line));
     } else {
-      out.push(T.text(line));
+      out.push(T.diffContext(line));
     }
   }
   return out;

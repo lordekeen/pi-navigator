@@ -27,6 +27,9 @@ const ALL_TOKENS = [
   "searchMatch",
   "searchCurrent",
   "frame",
+  "diffAdded",
+  "diffRemoved",
+  "diffContext",
 ] as const;
 
 function makeTaggingTheme(): { T: NavigatorTheme; used: Set<string> } {
@@ -43,23 +46,24 @@ function makeTaggingTheme(): { T: NavigatorTheme; used: Set<string> } {
 
 /** Strip the fake theme's tag wrappers so raw content can be compared. */
 function stripTagging(s: string): string {
-  return s.replace(/<\/?[a-z]+>/g, "");
+  // [A-Za-z], not [a-z]: token names are camelCase (`diffAdded`).
+  return s.replace(/<\/?[A-Za-z]+>/g, "");
 }
 
 describe("styleDiffLines classification", () => {
   it.each([
-    ["+++ b/src/a.ts", "muted"], // file header (with space) → muted, not success
-    ["--- a/src/a.ts", "muted"], // file header (with space) → muted, not error
-    ["+added line", "success"],
-    ["-removed line", "error"],
+    ["+++ b/src/a.ts", "muted"], // file header (with space) → muted, not diffAdded
+    ["--- a/src/a.ts", "muted"], // file header (with space) → muted, not diffRemoved
+    ["+added line", "diffAdded"],
+    ["-removed line", "diffRemoved"],
     ["@@ -12,7 +12,8 @@ fn()", "accent"],
     ["diff --git a/src/a.ts b/src/a.ts", "muted"],
     ["index abc1234..def5678 100644", "muted"],
     ["new file mode 100644", "muted"],
     ["deleted file mode 100644", "muted"],
     ["Binary files a/img.png and b/img.png differ", "muted"],
-    ["context line stays plain", "text"],
-    ["", "text"], // empty string is a context line, not a crash
+    ["context line stays plain", "diffContext"],
+    ["", "diffContext"], // empty string is a context line, not a crash
   ])("classifies %j as %s", (line, token) => {
     const { T } = makeTaggingTheme();
     const out = styleDiffLines([line], T);
@@ -67,11 +71,11 @@ describe("styleDiffLines classification", () => {
   });
 
   it.each([
-    ["+++", "success"], // "+++ " (with space) is the header; bare +++ is an add
-    ["---", "error"], // same for bare ---
-    ["+++", "success"],
-    ["---nospace", "error"],
-    ["+ +", "success"], // leading + wins over what follows
+    ["+++", "diffAdded"], // "+++ " (with space) is the header; bare +++ is an add
+    ["---", "diffRemoved"], // same for bare ---
+    ["+++", "diffAdded"],
+    ["---nospace", "diffRemoved"],
+    ["+ +", "diffAdded"], // leading + wins over what follows
     ["@@", "accent"], // bare @@ still a hunk header
     ["@@@ triple", "accent"], // startsWith("@@") is satisfied by @@@
   ])("prefix edge %j → %s", (line, token) => {
@@ -81,12 +85,12 @@ describe("styleDiffLines classification", () => {
   });
 
   it.each([
-    ["a + b", "text"], // + mid-line is not an added line
-    ['const x = "-1"', "text"], // - inside a string literal is not a removal
-    ["  + indented add", "text"], // classification is leading-character only
-    ["@ home", "text"], // @ not followed by @@ is context
-    ["diff", "text"], // bare "diff" without trailing space is context
-    ["index", "text"],
+    ["a + b", "diffContext"], // + mid-line is not an added line
+    ['const x = "-1"', "diffContext"], // - inside a string literal is not a removal
+    ["  + indented add", "diffContext"], // classification is leading-character only
+    ["@ home", "diffContext"], // @ not followed by @@ is context
+    ["diff", "diffContext"], // bare "diff" without trailing space is context
+    ["index", "diffContext"],
   ])("does not misclassify %j (stays %s)", (line, token) => {
     const { T } = makeTaggingTheme();
     const out = styleDiffLines([line], T);
@@ -123,8 +127,8 @@ describe("styleDiffLines structure", () => {
     const out = styleDiffLines(["+first++last"], T);
     const styled = out[0] ?? "";
     expect(stripTagging(styled)).toBe("+first++last");
-    expect(styled.startsWith("<success>+"), "first char survives the wrap").toBe(true);
-    expect(styled.endsWith("last</success>"), "last char survives the wrap").toBe(true);
+    expect(styled.startsWith("<diffAdded>+"), "first char survives the wrap").toBe(true);
+    expect(styled.endsWith("last</diffAdded>"), "last char survives the wrap").toBe(true);
   });
 
   it("injects no hardcoded ANSI: the fake theme adds tags only, so any \\x1b in output would come from the module", () => {
@@ -142,12 +146,12 @@ describe("styleDiffLines structure", () => {
       "--- a/x", // muted
       "+++ b/x", // muted
       "@@ -1 +1 @@", // accent
-      "-gone", // error
-      "+here", // success
-      "same", // text
+      "-gone", // diffRemoved
+      "+here", // diffAdded
+      "same", // diffContext
     ];
     styleDiffLines(input, T);
-    expect([...used].sort()).toEqual(["accent", "error", "muted", "success", "text"].sort());
+    expect([...used].sort()).toEqual(["accent", "diffAdded", "diffContext", "diffRemoved", "muted"].sort());
   });
 });
 

@@ -1,15 +1,29 @@
 /**
  * settings_menu.ts suites (Issue #061): the pure buildSettingItems mapping
  * (values, env-override annotations) and end-to-end integration against the
- * real pi-tui SettingsList — Enter/Space cycles persist through commit, a
- * failed commit reverts the row display and warns, Esc closes with zero
- * commits. No filesystem, no process.env.
+ * real pi-tui SettingsList — Enter/Space stages edits into an in-memory
+ * draft (zero commits), the trailing Save row commits the draft exactly
+ * once, a failed save warns and keeps the draft, Esc discards with zero
+ * commits, and the frame footer announces the draft while it differs from
+ * the loaded file. No filesystem, no process.env.
  */
 
 import { describe, expect, it, vi } from "vitest";
 
+import { visibleWidth } from "@earendil-works/pi-tui";
+
 import { NAVIGATOR_CONFIG_FIELDS, type NavigatorConfigField, type NavigatorSettings } from "../settings";
-import { buildSettingItems, buildSettingsMenuTheme, navigatorFieldNotes, openSettingsMenu, type SettingsMenuDeps, type SettingsMenuTheme, type SettingsMenuUi } from "../settings_menu";
+import {
+  buildSettingItems,
+  buildSettingsMenuTheme,
+  countChangedFields,
+  navigatorFieldNotes,
+  openSettingsMenu,
+  type SettingsMenuDeps,
+  type SettingsMenuOutcome,
+  type SettingsMenuTheme,
+  type SettingsMenuUi,
+} from "../settings_menu";
 
 interface ComponentLike {
   render(width: number): string[];
@@ -54,6 +68,7 @@ const KEYS = {
  */
 function makeUiHarness() {
   let component: ComponentLike | undefined;
+  let outcome: SettingsMenuOutcome | undefined;
   let resolveReady!: () => void;
   let resolveClosed!: () => void;
   const ready = new Promise<void>((resolve) => { resolveReady = resolve; });
@@ -63,22 +78,34 @@ function makeUiHarness() {
     custom: <T>(
       factory: (tui: unknown, th: SettingsMenuTheme, keybindings: unknown, done: (result: T) => void) => unknown,
     ): Promise<T> => {
-      const result = factory({}, theme, {}, () => resolveClosed());
+      const result = factory({}, theme, {}, (value?: T) => {
+        outcome = value as SettingsMenuOutcome | undefined;
+        resolveClosed();
+      });
       component = result as ComponentLike;
       resolveReady();
       return closed as unknown as Promise<T>;
     },
   };
-  return { ui, ready, closed, getComponent: (): ComponentLike | undefined => component };
+  return { ui, ready, closed, getComponent: (): ComponentLike | undefined => component, getOutcome: (): SettingsMenuOutcome | undefined => outcome };
 }
 
-async function openMenu(deps: SettingsMenuDeps): Promise<{ component: ComponentLike; closed: Promise<void> }> {
+async function openMenu(
+  deps: SettingsMenuDeps,
+): Promise<{ component: ComponentLike; closed: Promise<void>; outcome: () => SettingsMenuOutcome | undefined }> {
   const harness = makeUiHarness();
   const menu = openSettingsMenu(harness.ui, deps);
   await harness.ready;
   const component = harness.getComponent();
   if (component === undefined) throw new Error("menu component was not created");
-  return { component, closed: harness.closed.then(() => menu) };
+  return {
+    component,
+    closed: (async () => {
+      await harness.closed;
+      await menu;
+    })(),
+    outcome: harness.getOutcome,
+  };
 }
 
 describe("buildSettingItems", () => {
@@ -215,65 +242,171 @@ describe("buildSettingsMenuTheme (host settings-list roles)", () => {
 });
 
 describe("settings menu integration (real SettingsList)", () => {
-  it("cycles a value and persists each change through commit", async () => {
+  it("stages each edit without committing and saves the draft exactly once on the Save row (#121)", async () => {
     const commit = vi.fn((next: NavigatorSettings): CommitResult => ({ ok: true, settings: next }));
     const onWarning = vi.fn();
-    const { component, closed } = await openMenu({ settings: fullSettings(), overrides: {}, commit, onWarning });
+    const { component, closed, outcome } = await openMenu({ settings: fullSettings(), overrides: {}, commit, onWarning });
 
-    component.handleInput?.(KEYS.enter); // images.mode off -> chafa
-    expect(commit).toHaveBeenCalledTimes(1);
-    expect(commit.mock.calls[0]![0]!.images.mode).toBe("chafa");
+    component.handleInput?.(KEYS.enter); // images.mode off -> chafa (staged only)
+    expect(commit).not.toHaveBeenCalled();
 
-    component.handleInput?.(KEYS.enter); // chafa -> native (the saved value now drives the cycle)
-    expect(commit).toHaveBeenCalledTimes(2);
-    expect(commit.mock.calls[1]![0]!.images.mode).toBe("native");
-    expect(onWarning).not.toHaveBeenCalled();
+    component.handleInput?.(KEYS.enter); // chafa -> native (the draft drives the cycle)
+    expect(commit).not.toHaveBeenCalled();
 
     component.handleInput?.(KEYS.down); // icons.enabled
-    component.handleInput?.(KEYS.enter); // false -> true
-    expect(commit).toHaveBeenCalledTimes(3);
-    expect(commit.mock.calls[2]![0]!.icons.enabled).toBe(true);
+    component.handleInput?.(KEYS.enter); // false -> true (staged only)
+    expect(commit).not.toHaveBeenCalled();
+    expect(onWarning).not.toHaveBeenCalled();
 
-    component.handleInput?.(KEYS.escape);
+    // The dirty frame announces the draft.
+    const dirtyLines = component.render(80);
+    expect(dirtyLines.join("\n")).toContain("unsaved changes");
+
+    // The trailing Save row is the explicit confirm.
+    expect(dirtyLines.some((line) => line.includes("save and go back"))).toBe(true);
+    for (let i = 0; i < 5; i++) component.handleInput?.(KEYS.down); // to the Save row
+    component.handleInput?.(KEYS.enter); // Save: one commit with the whole draft
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(commit.mock.calls[0]![0]!.images.mode).toBe("native");
+    expect(commit.mock.calls[0]![0]!.icons.enabled).toBe(true);
+
     await closed;
-    expect(commit).toHaveBeenCalledTimes(3);
+    expect(outcome()).toEqual({ kind: "saved", settings: commit.mock.calls[0]![0] });
   });
 
-  it("warns and reverts the row display when commit fails", async () => {
+  it("warns on a failed save, keeps the draft, and stays open for a retry", async () => {
     const commit = vi.fn((_next: NavigatorSettings): CommitResult => ({ ok: false, error: "disk full" }));
     const onWarning = vi.fn();
-    const { component, closed } = await openMenu({ settings: fullSettings(), overrides: {}, commit, onWarning });
+    const { component, closed, outcome } = await openMenu({ settings: fullSettings(), overrides: {}, commit, onWarning });
 
-    component.handleInput?.(KEYS.enter); // images.mode off -> chafa, commit fails
+    component.handleInput?.(KEYS.enter); // images.mode off -> chafa: staged, no commit yet
+    expect(commit).not.toHaveBeenCalled();
+
+    for (let i = 0; i < 6; i++) component.handleInput?.(KEYS.down); // to the Save row
+    component.handleInput?.(KEYS.enter); // Save fails: warn, stay open, keep the draft
     expect(commit).toHaveBeenCalledTimes(1);
     expect(onWarning).toHaveBeenCalledTimes(1);
-    expect(onWarning.mock.calls[0]?.[0]).toContain("images.mode");
     expect(onWarning.mock.calls[0]?.[0]).toContain("disk full");
 
-    // Row display reverted: the first row still shows "off".
+    // The draft is retained: the row still shows the staged value.
     const lines = component.render(80);
     const row = lines.find((line) => line.includes("Image rendering"));
-    expect(row).toBeDefined();
-    expect(row ?? "").toContain("off");
+    expect(row ?? "").toContain("chafa");
 
-    // Cycling again starts from the reverted value, so commit runs again.
+    // Retrying Save calls commit again.
     component.handleInput?.(KEYS.enter);
     expect(commit).toHaveBeenCalledTimes(2);
-    expect(commit.mock.calls[1]![0]!.images.mode).toBe("chafa");
 
-    component.handleInput?.(KEYS.escape);
+    component.handleInput?.(KEYS.escape); // abort: the file never saw the draft
     await closed;
+    expect(outcome()).toEqual({ kind: "cancelled" });
   });
 
-  it("closes on Esc with zero commits", async () => {
+  it("Esc discards staged edits with zero commits — the file never sees the draft (#121)", async () => {
+    const commit = vi.fn((next: NavigatorSettings): CommitResult => ({ ok: true, settings: next }));
+    const onWarning = vi.fn();
+    const { component, closed, outcome } = await openMenu({ settings: fullSettings(), overrides: {}, commit, onWarning });
+
+    component.handleInput?.(KEYS.enter); // images.mode off -> chafa
+    component.handleInput?.(KEYS.enter); // chafa -> native
+    component.handleInput?.(KEYS.down);
+    component.handleInput?.(KEYS.enter); // icons.enabled -> on
+    expect(commit).not.toHaveBeenCalled();
+
+    component.handleInput?.(KEYS.escape); // cancel: discard the draft
+    await closed;
+    expect(commit).not.toHaveBeenCalled();
+    expect(onWarning).not.toHaveBeenCalled();
+    expect(outcome()).toEqual({ kind: "cancelled" });
+  });
+
+  it("closes on Esc with zero commits and reports a cancelled outcome", async () => {
     const commit = vi.fn((_next: NavigatorSettings): CommitResult => ({ ok: true, settings: _next }));
     const onWarning = vi.fn();
-    const { component, closed } = await openMenu({ settings: fullSettings(), overrides: {}, commit, onWarning });
+    const { component, closed, outcome } = await openMenu({ settings: fullSettings(), overrides: {}, commit, onWarning });
 
     component.handleInput?.(KEYS.escape);
     await closed;
     expect(commit).not.toHaveBeenCalled();
     expect(onWarning).not.toHaveBeenCalled();
+    expect(outcome()).toEqual({ kind: "cancelled" });
+  });
+
+  it("announces the draft only while staged values differ from the loaded file (#121)", async () => {
+    const commit = vi.fn((next: NavigatorSettings): CommitResult => ({ ok: true, settings: next }));
+    const onWarning = vi.fn();
+    const { component, closed } = await openMenu({ settings: fullSettings(), overrides: {}, commit, onWarning });
+
+    const clean = component.render(80);
+    expect(clean.join("\n")).toContain("changes apply the next time /navigator opens");
+    expect(clean.join("\n")).not.toContain("unsaved changes");
+
+    component.handleInput?.(KEYS.enter); // off -> chafa: draft differs
+    let lines = component.render(80);
+    expect(lines.join("\n")).toContain("unsaved changes");
+    expect(lines.join("\n")).not.toContain("changes apply the next time");
+
+    // Cycling back to the original value restores the clean footer.
+    component.handleInput?.(KEYS.enter); // chafa -> native
+    component.handleInput?.(KEYS.enter); // native -> auto
+    component.handleInput?.(KEYS.enter); // auto -> off: draft equals the loaded file
+    lines = component.render(80);
+    expect(lines.join("\n")).toContain("changes apply the next time /navigator opens");
+    expect(lines.join("\n")).not.toContain("unsaved changes");
+    expect(commit).not.toHaveBeenCalled();
+
+    // The dirty footer stays width-safe even at the narrowest suite size.
+    component.handleInput?.(KEYS.enter); // dirty again
+    for (const line of component.render(44)) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(44);
+    }
+
+    component.handleInput?.(KEYS.escape);
+    await closed;
+  });
+
+  it("warns and reverts the row display when a staged value fails field validation", async () => {
+    const numberField: NavigatorConfigField = {
+      id: "viewer.tabWidth",
+      path: ["viewer", "tabWidth"],
+      kind: "number",
+      section: "Viewer",
+      label: "Tab width",
+      description: "Spaces per tab stop",
+      min: 1,
+      max: 8,
+      default: 4,
+      live: false,
+    };
+    (NAVIGATOR_CONFIG_FIELDS as any).push(numberField);
+    try {
+      const commit = vi.fn((next: NavigatorSettings): CommitResult => ({ ok: true, settings: next }));
+      const onWarning = vi.fn();
+      const { component, closed, outcome } = await openMenu({ settings: fullSettings(), overrides: {}, commit, onWarning });
+
+      // Rows: 6 registry fields + the pushed number field + the Save row.
+      for (let i = 0; i < 6; i++) component.handleInput?.(KEYS.down); // to the number row
+      component.handleInput?.(KEYS.enter); // open the number input submenu
+      for (const ch of "abc") component.handleInput?.(ch);
+      component.handleInput?.(KEYS.enter); // submit the invalid value
+
+      expect(commit).not.toHaveBeenCalled();
+      expect(onWarning).toHaveBeenCalledTimes(1);
+      expect(onWarning.mock.calls[0]?.[0]).toContain("viewer.tabWidth");
+      expect(onWarning.mock.calls[0]?.[0]).toContain("invalid number");
+
+      // Row display reverted: the row still shows the pre-edit value.
+      const lines = component.render(80);
+      const row = lines.find((line) => line.includes("Tab width"));
+      expect(row ?? "").toContain("4");
+
+      component.handleInput?.(KEYS.escape); // close the submenu
+      component.handleInput?.(KEYS.escape); // cancel the menu
+      await closed;
+      expect(outcome()).toEqual({ kind: "cancelled" });
+    } finally {
+      (NAVIGATOR_CONFIG_FIELDS as any).pop();
+    }
   });
 
   it("frames with full-width rules and forwards in-list mouse rows to the SettingsList", async () => {
@@ -302,7 +435,7 @@ describe("settings menu integration (real SettingsList)", () => {
   it("clears mousePressedIndex when mouse is released outside list bounds", async () => {
     const commit = vi.fn((next: NavigatorSettings): CommitResult => ({ ok: true, settings: next }));
     const onWarning = vi.fn();
-    const { component, closed } = await openMenu({ settings: fullSettings(), overrides: {}, commit, onWarning });
+    const { component, closed, outcome } = await openMenu({ settings: fullSettings(), overrides: {}, commit, onWarning });
     const lines = component.render(80);
     // Press on second item (y=6 in frame coords)
     component.handleMouse?.({ type: "press", button: "left", y: 6, height: lines.length });
@@ -310,26 +443,32 @@ describe("settings menu integration (real SettingsList)", () => {
     component.handleMouse?.({ type: "release", button: "left", y: 0, height: lines.length });
     // Now click on first item (y=5 in frame coords)
     component.handleMouse?.({ type: "click", button: "left", y: 5, height: lines.length });
-    expect(commit).toHaveBeenCalledTimes(1);
-    expect(commit.mock.calls[0]![0]!.images.mode).toBe("chafa");
+    // The click stages the value; nothing is written until the Save row.
+    expect(commit).not.toHaveBeenCalled();
+    const row = component.render(80).find((line) => line.includes("Image rendering"));
+    expect(row ?? "").toContain("chafa");
     component.handleInput?.(KEYS.escape);
     await closed;
+    expect(outcome()).toEqual({ kind: "cancelled" });
   });
 
-  it("catches exception thrown by commit and reverts row display", async () => {
+  it("catches an exception thrown by commit on Save, keeps the draft, and warns", async () => {
     const commit = vi.fn(() => {
       throw new Error("EACCES: permission denied");
     });
     const onWarning = vi.fn();
     const { component, closed } = await openMenu({ settings: fullSettings(), overrides: {}, commit, onWarning });
-    component.handleInput?.(KEYS.enter);
+    component.handleInput?.(KEYS.enter); // stage only: no commit, no throw
+    expect(commit).not.toHaveBeenCalled();
+    for (let i = 0; i < 6; i++) component.handleInput?.(KEYS.down); // to the Save row
+    component.handleInput?.(KEYS.enter); // Save throws
     expect(commit).toHaveBeenCalledTimes(1);
-    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining("failed to save images.mode"));
+    expect(onWarning).toHaveBeenCalledWith(expect.stringContaining("failed to save settings"));
     expect(onWarning).toHaveBeenCalledWith(expect.stringContaining("permission denied"));
-    // Display reverted: the row still shows "off"
+    // The draft is kept: the row still shows the staged value.
     const lines = component.render(80);
     const row = lines.find((line) => line.includes("Image rendering"));
-    expect(row).toContain("off");
+    expect(row).toContain("chafa");
     component.handleInput?.(KEYS.escape);
     await closed;
   });
@@ -381,5 +520,17 @@ describe("settings menu integration (real SettingsList)", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]).toHaveLength(1);
     expect(calls[0]?.[1]).toBeUndefined();
+  });
+});
+
+describe("countChangedFields (Issue #121 draft accounting)", () => {
+  it("counts exactly the registry fields whose values differ", () => {
+    expect(countChangedFields(fullSettings(), markedUpSettings())).toBe(6);
+    expect(countChangedFields(fullSettings(), fullSettings())).toBe(0);
+  });
+
+  it("ignores non-registry differences such as version", () => {
+    const extra = { ...fullSettings(), version: 99 } as NavigatorSettings;
+    expect(countChangedFields(fullSettings(), extra)).toBe(0);
   });
 });

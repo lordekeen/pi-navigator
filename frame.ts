@@ -16,6 +16,8 @@ import {
   LEFT_COLUMN_MAX,
   LEFT_COLUMN_MIN,
   LEFT_COLUMN_RATIO,
+  OVERLAY_HEIGHT_RATIO,
+  OVERLAY_MARGIN_ROWS,
 } from "./constants";
 import type { NavigatorTheme } from "./theme";
 import type { Focus, GitState, InputMode, NavigatorLayout } from "./types";
@@ -39,12 +41,20 @@ export function truncateAndWidth(text: string, maxWidth: number): { text: string
 
 /**
  * Height in rows, bounded by the terminal so the overlay never overflows it.
- * Deliberately free to fall below MIN_OVERLAY_HEIGHT: that is what makes the
- * compact "terminal too small" notice reachable (plan section 6).
+ *
+ * One source of truth for the ratio: `OVERLAY_OPTIONS.maxHeight` is derived
+ * from the same `OVERLAY_HEIGHT_RATIO`, so the box the host allocates and the
+ * frame drawn here cannot drift apart (Issue #130).
+ *
+ * `rows - OVERLAY_MARGIN_ROWS * 2` reserves the host's vertical margin (one row
+ * top and bottom), and letting the result fall below MIN_OVERLAY_HEIGHT is
+ * deliberate: that is what makes the compact "terminal too small" notice
+ * reachable (plan section 6).
  */
 export function overlayHeight(termRows: number): number {
   const rows = termRows || 24;
-  return Math.max(0, Math.min(Math.floor(rows * 0.85), rows - 2));
+  const bounded = Math.max(0, rows - OVERLAY_MARGIN_ROWS * 2);
+  return Math.max(0, Math.min(Math.floor(rows * OVERLAY_HEIGHT_RATIO), bounded));
 }
 
 export function bodyRows(overlayH: number): number {
@@ -68,6 +78,16 @@ export function filesArea(termRows: number, layout: NavigatorLayout): number {
   const overlayH = overlayHeight(termRows);
   const body = bodyRows(overlayH);
   return Math.max(2, layoutRows(body, layout).filesH - 1);
+}
+
+/** Git-pane scroll area height for the current terminal size and layout
+ *  (Issue #127): the git pane's paging step needs the same figure the render
+ *  path computes, so it is derived here rather than duplicated at the call
+ *  site. Mirrors `filesArea`. */
+export function gitArea(termRows: number, layout: NavigatorLayout): number {
+  const overlayH = overlayHeight(termRows);
+  const body = bodyRows(overlayH);
+  return Math.max(2, layoutRows(body, layout).gitH - 1);
 }
 
 /** Viewer-pane content area height for the current terminal size. */
@@ -202,18 +222,29 @@ export const FOCUS_HINTS: Record<Focus, string> = {
   // Width budget: the longest hint plus the pane labels must fit the inner
   // width at a 100-column terminal (98) so the focus indicator never gets
   // truncated off the footer (render test enforces this at 120, 100, 80).
-  files: "j k move  Enter open  Tab  / filter  . hidden  y copy  ? help  q close",
-  git: "j k move  Enter open file / diff  l h family  g G jump  Tab  y copy  ? help  q close",
-  viewer: "j k scroll  Ctrl+d/u  w wrap  m mode  / search  n N  Tab  ? help  q close",
+  // Issue #127 added the Home/End and PgUp/PgDn aliases; the footer is a
+  // curated subset (the help modal lists every binding), so hints that no
+  // longer fit were dropped whole rather than left to truncate mid-phrase.
+  files: "j k move  Enter open  g G Home/End  Tab  / filter  . hidden  ? help  q close",
+  git: "j k move  Enter open/diff  l h family  g G Home/End jump  ? help  q close",
+  viewer: "j k scroll  Ctrl+d/u PgUp/PgDn  w wrap  m mode  / search  ? help  q close",
 };
 
 export const MODE_HINTS: Record<Exclude<InputMode, "normal">, string> = {
-  filter: "type to filter  up/down move  Enter apply  Esc clear",
+  filter: "type to filter  up/down move  Home/End first/last  Enter apply  Esc clear",
   search: "type to search  up/down match  Enter apply  Esc clear",
-  help: "j k scroll  q Esc ? close help",
+  help: "j k scroll  PgUp/PgDn page  Home/End top/bottom  q Esc ? close help",
 };
 
-export function getFooterHint(mode: InputMode, focus: Focus): string {
+/** The viewer hint item that only applies to files that can render as markdown
+ *  (Issue #135 L1); removed from the footer when they cannot. */
+const VIEWER_MARKDOWN_HINT_ITEM = "m mode";
+
+export function getFooterHint(
+  mode: InputMode,
+  focus: Focus,
+  opts: { markdownApplicable?: boolean | undefined } = {},
+): string {
   switch (mode) {
     case "help":
       return MODE_HINTS.help;
@@ -221,8 +252,20 @@ export function getFooterHint(mode: InputMode, focus: Focus): string {
       return MODE_HINTS.filter;
     case "search":
       return MODE_HINTS.search;
-    case "normal":
-      return FOCUS_HINTS[focus];
+    case "normal": {
+      const hint = FOCUS_HINTS[focus];
+      // Issue #135 L1: an unavailable action is not advertised. For a file that
+      // cannot render as markdown the `m` key is inert, so its item leaves the
+      // hint rather than promising a toggle that will not happen. The items are
+      // "  "-separated, so removing one cannot leave a fragment behind.
+      if (focus === "viewer" && opts.markdownApplicable === false) {
+        return hint
+          .split("  ")
+          .filter((item) => item !== VIEWER_MARKDOWN_HINT_ITEM)
+          .join("  ");
+      }
+      return hint;
+    }
   }
 }
 
@@ -244,7 +287,7 @@ export function buildTitleRow(innerW: number, view: TitleRowView): string {
   const counters: string[] = [];
   if (git?.available) {
     if (git.ahead > 0) counters.push(T.success(`\u2191${git.ahead}`));
-    if (git.behind > 0) counters.push(T.error(`\u2193${git.behind}`));
+    if (git.behind > 0) counters.push(T.warning(`\u2193${git.behind}`));
     const changed = git.unstaged.length + git.staged.length;
     if (changed > 0) counters.push(T.dim(`${changed} changed`));
   }
@@ -260,6 +303,30 @@ export interface FooterView {
   /** The overlay's layout; omitted means the default three-pane split
    *  (Issue #119) — the pane labels drop the panes the layout lacks. */
   layout?: NavigatorLayout;
+  /** Whether the open file can render as markdown (Issue #135 L1). `false`
+   *  removes the `m` item from the viewer hint, because an unavailable action
+   *  must not be advertised; omit it when unknown (harnesses, no file open). */
+  markdownApplicable?: boolean | undefined;
+}
+
+/**
+ * Fits a footer hint to a width budget by dropping whole items (Issue #135 L4).
+ *
+ * The hint tables are "  "-separated items, so a line that does not fit can
+ * shed trailing items instead of being cut mid-phrase — which is what the audit
+ * flagged at 80 columns, where `joinLeftRight` truncated the hint to make room
+ * for the pane labels. Returns "" when not even the first item fits; the caller
+ * pads the row back to width.
+ */
+export function fitHint(hint: string, budget: number): string {
+  if (visibleWidth(hint) <= budget) return hint;
+  const kept: string[] = [];
+  for (const item of hint.split("  ")) {
+    const next = [...kept, item].join("  ");
+    if (visibleWidth(next) > budget) break;
+    kept.push(item);
+  }
+  return kept.join("  ");
 }
 
 /**
@@ -269,8 +336,6 @@ export interface FooterView {
  */
 export function buildFooterRow(innerW: number, view: FooterView): string {
   const T = view.theme;
-  const hint = getFooterHint(view.mode, view.focus);
-  const left = " " + T.dim(hint);
   let right = "";
   if (view.notice) {
     right = " " + T.warning(view.notice) + " ";
@@ -283,5 +348,15 @@ export function buildFooterRow(innerW: number, view: FooterView): string {
       panes.map(([pane, label]) => (view.focus === pane ? T.accent(T.bold(label)) : T.dim(label))).join("  ") +
       " ";
   }
+  // Issue #135 L4: fit the hint to what the row has left, dropping whole items
+  // rather than letting joinLeftRight cut one mid-phrase. The budget mirrors
+  // joinLeftRight's own accounting (the right segment plus one gap cell, and
+  // the hint's own leading space) so the hints can never be the reason the
+  // focus indicator or the notice is what disappears.
+  const hint = fitHint(
+    getFooterHint(view.mode, view.focus, { markdownApplicable: view.markdownApplicable }),
+    Math.max(0, innerW - visibleWidth(right) - 2),
+  );
+  const left = " " + T.dim(hint);
   return joinLeftRight(left, right, innerW);
 }

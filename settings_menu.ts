@@ -6,12 +6,16 @@
  * layer wraps `SettingsList` in a host-framed wrapper following the settings-panel
  * convention (top/bottom full-width rule in the `border` token, like pi's
  * own `/settings` and pi-overseer). Mouse events are forwarded to the list
- * with y translated past the frame chrome. The menu renders as a plain
- * (non-overlay) `ctx.ui.custom` component, so it docks in the editor
- * area on/above the message textbox like pi's own `/settings` selector and
- * the reference extensions — the transcript stays visible. The module never
- * touches the filesystem (fs stays in settings.ts/index.ts) and hardcodes no
- * colors — the SettingsListTheme is built from the injected pi `Theme` tokens.
+ * with y translated past the frame chrome. Edits are staged in an in-memory
+ * draft; the trailing Save row commits it exactly once and Esc discards it
+ * (pi-tui's SettingsList has no form-level confirm callback — only per-change
+ * `onChange` and `onCancel` — so the confirm is the host's own "save and go
+ * back" row pattern). The menu renders as a plain (non-overlay)
+ * `ctx.ui.custom` component, so it docks in the editor area on/above the
+ * message textbox like pi's own `/settings` selector and the reference
+ * extensions — the transcript stays visible. The module never touches the
+ * filesystem (fs stays in settings.ts/index.ts) and hardcodes no colors — the
+ * SettingsListTheme is built from the injected pi `Theme` tokens.
  */
 
 import {
@@ -139,6 +143,24 @@ export interface SettingsMenuDeps {
   termRows?: number;
 }
 
+/** What the caller reports AFTER the menu closes (Issue #133). */
+export type SettingsMenuOutcome =
+  | { kind: "saved"; settings: NavigatorSettings }
+  | { kind: "cancelled" };
+
+/**
+ * Count registry fields whose value differs between two settings objects
+ * (the saved-message count: pre-open file state vs committed state). Only
+ * registry fields count — version and unknown extras never do.
+ */
+export function countChangedFields(a: NavigatorSettings, b: NavigatorSettings): number {
+  let changed = 0;
+  for (const field of NAVIGATOR_CONFIG_FIELDS) {
+    if (fieldValue(a, field.path, field.default) !== fieldValue(b, field.path, field.default)) changed += 1;
+  }
+  return changed;
+}
+
 /**
  * Host settings-list theme roles (pi's `getSettingsListTheme`): unselected
  * labels stay plain, unselected values are muted, the selection is accent.
@@ -159,6 +181,13 @@ export type SettingsListThemeLike = SettingsListTheme;
 const FRAME_HEADER_ROWS = 3;
 /** Host frame rule glyph (pi's DynamicBorder, pi-overseer's BorderLine). */
 const FRAME_RULE = "\u2500";
+/** Footer while the draft equals the persisted settings (text is test-pinned). */
+const CLEAN_FOOTER = "changes apply the next time /navigator opens";
+/**
+ * Footer while the draft differs: the frame states the unsaved state so a
+ * dirty menu is never silent (Issue #121 acceptance criterion).
+ */
+const DIRTY_FOOTER = "unsaved changes \u2014 Enter on Save writes them \u00b7 Esc discards";
 
 /**
  * Host-framed wrapper: top/bottom rules in the border token, the title row,
@@ -171,15 +200,22 @@ const FRAME_RULE = "\u2500";
 class SettingsMenuFrame implements Component {
   private readonly list: SettingsList;
   private readonly title: string;
-  private readonly footer: string;
+  private readonly theme: SettingsMenuTheme;
+  private readonly footerText: () => string;
   private readonly truncate: (text: string, maxWidth: number) => string;
   private readonly rule: (text: string) => string;
   private listHeight = 0;
 
-  constructor(list: SettingsList, theme: SettingsMenuTheme, truncate: (text: string, maxWidth: number) => string) {
+  constructor(
+    list: SettingsList,
+    theme: SettingsMenuTheme,
+    truncate: (text: string, maxWidth: number) => string,
+    footerText: () => string,
+  ) {
     this.list = list;
     this.title = theme.fg("accent", theme.bold("pi-navigator \u00b7 settings"));
-    this.footer = theme.fg("dim", "changes apply the next time /navigator opens");
+    this.theme = theme;
+    this.footerText = footerText;
     this.truncate = truncate;
     this.rule = (text) => theme.fg("border", text);
   }
@@ -188,13 +224,14 @@ class SettingsMenuFrame implements Component {
     const rule = this.truncate(this.rule(FRAME_RULE.repeat(Math.max(1, width))), width);
     const listLines = this.list.render(width);
     this.listHeight = listLines.length;
+    const footer = this.theme.fg("dim", this.footerText());
     return [
       rule,
       this.truncate(this.title, width),
       "",
       ...listLines,
       "",
-      this.truncate(this.footer, width),
+      this.truncate(footer, width),
       rule,
     ];
   }
@@ -231,17 +268,30 @@ class SettingsMenuFrame implements Component {
   }
 }
 
+/** The staged draft's file is written only when this row is activated. */
+const SAVE_ROW_ID = "save";
+const SAVE_ROW_LABEL = "Save";
+const SAVE_ROW_VALUE = "save and go back";
+
 /**
- * Open the settings menu in the editor dock. Esc → the SettingsList's
- * onCancel → done() and nothing is written. Every edit goes through
- * `applyFieldEdit` then `commit`; failures warn and revert the row display,
- * successes adopt the committed settings and refresh every row (normalization
- * may canonicalize more than the edited field).
+ * Open the settings menu in the editor dock. Edits are staged in an
+ * in-memory draft (`applyFieldEdit` on `current`); `deps.commit` runs once,
+ * when the trailing Save row is activated — pi-tui's SettingsList offers no
+ * form-level confirm callback, so the confirm is the host's own "save and go
+ * back" row pattern (`pi-tui/dist/components/settings-list.d.ts` exposes only
+ * `onChange` + `onCancel`; pi's own settings-selector uses a Save row for
+ * staged flows). Esc discards the draft via `onCancel` and returns a
+ * "cancelled" outcome, so an aborted session leaves the settings file
+ * byte-identical (#121). Field-validation failures warn and revert the row
+ * display; a failed save warns, keeps the draft, and stays open for a retry.
+ * The outcome carries the committed settings so the caller reports count and
+ * file AFTER the modal closes (#133) — nothing renders inside it.
  */
-export async function openSettingsMenu(ui: SettingsMenuUi, deps: SettingsMenuDeps): Promise<void> {
+export async function openSettingsMenu(ui: SettingsMenuUi, deps: SettingsMenuDeps): Promise<SettingsMenuOutcome> {
   const truncate = (text: string, width: number): string => truncateToWidth(text, width, "");
 
   let current = deps.settings;
+  const dirty = (): boolean => countChangedFields(deps.settings, current) > 0;
 
   const refreshRows = (items: SettingItem[], list: SettingsList): void => {
     const rows = buildSettingItems(current, deps.overrides, deps.notes);
@@ -256,7 +306,7 @@ export async function openSettingsMenu(ui: SettingsMenuUi, deps: SettingsMenuDep
     }
   };
 
-  await ui.custom<void>(
+  return ui.custom<SettingsMenuOutcome>(
     (_tui, theme, _keybindings, done) => {
       const settingsTheme = buildSettingsMenuTheme(theme);
 
@@ -268,25 +318,45 @@ export async function openSettingsMenu(ui: SettingsMenuUi, deps: SettingsMenuDep
         values: [...data.values],
         submenu: data.submenu,
       }));
+      // The explicit confirm row: Enter on it writes the staged draft exactly
+      // once and closes; Esc stays the only cancel path.
+      items.push({
+        id: SAVE_ROW_ID,
+        label: SAVE_ROW_LABEL,
+        description: "Write all changes to the settings file and close",
+        currentValue: SAVE_ROW_VALUE,
+        values: [SAVE_ROW_VALUE],
+      });
+
+      const saveAndClose = (): void => {
+        try {
+          const committed = deps.commit(current);
+          if (!committed.ok) {
+            deps.onWarning(`pi-navigator: ${committed.error}`);
+            return;
+          }
+          done({ kind: "saved", settings: committed.settings });
+        } catch (err) {
+          deps.onWarning(`pi-navigator: failed to save settings: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      };
 
       const onChange = (id: string, rawValue: string): void => {
+        if (id === SAVE_ROW_ID) {
+          saveAndClose();
+          return;
+        }
         try {
           const edited = applyFieldEdit(current, id, rawValue);
           if (!edited.ok) {
             deps.onWarning(`pi-navigator: ${edited.error}`);
-            refreshRows(items, settingsList); // revert display to the still-current value
+            refreshRows(items, settingsList); // revert display to the staged value
             return;
           }
-          const committed = deps.commit(edited.settings);
-          if (!committed.ok) {
-            deps.onWarning(`pi-navigator: ${id}: ${committed.error}`);
-            refreshRows(items, settingsList); // revert display to the still-current value
-            return;
-          }
-          current = committed.settings;
-          refreshRows(items, settingsList); // normalization may canonicalize more rows
+          current = edited.settings;
+          refreshRows(items, settingsList); // the draft value now drives the row display
         } catch (err) {
-          deps.onWarning(`pi-navigator: failed to save ${id}: ${err instanceof Error ? err.message : String(err)}`);
+          deps.onWarning(`pi-navigator: failed to edit ${id}: ${err instanceof Error ? err.message : String(err)}`);
           refreshRows(items, settingsList);
         }
       };
@@ -294,10 +364,15 @@ export async function openSettingsMenu(ui: SettingsMenuUi, deps: SettingsMenuDep
       const termRows = deps.termRows ?? (typeof process.stdout?.rows === "number" && process.stdout.rows > 0 ? process.stdout.rows : 24);
       const maxVisible = Math.max(3, Math.min(10, termRows - 6));
 
-      const settingsList = new SettingsList(items, maxVisible, settingsTheme, onChange, () => done(), {
-        enableSearch: true,
-      });
-      return new SettingsMenuFrame(settingsList, theme, truncate);
+      const settingsList = new SettingsList(
+        items,
+        maxVisible,
+        settingsTheme,
+        onChange,
+        () => done({ kind: "cancelled" }),
+        { enableSearch: true },
+      );
+      return new SettingsMenuFrame(settingsList, theme, truncate, () => (dirty() ? DIRTY_FOOTER : CLEAN_FOOTER));
     },
   );
 }
