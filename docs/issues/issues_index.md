@@ -8,8 +8,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
-| **Pending / Open** | 1 | 2 | 2 | **5** |
-| **Resolved** | 21 | 51 | 61 | **133** |
+| **Pending / Open** | 1 | 2 | 1 | **4** |
+| **Resolved** | 21 | 51 | 62 | **134** |
 | **Total** | **22** | **53** | **63** | **138** |
 
 ---
@@ -22,7 +22,6 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | [#067](067-typed-config-registry-paths.md) | Typed Config Registry Paths (`path` is `readonly string[]`) | Technical Debt / Type Safety | Low | `settings.ts` | **Deferred** — tracked, not scheduled: the compile-time path/default check is not worth the rework at five fields. Revisit when the schema grows (~15+ fields or a third level), `live: true` lands, the byte-pinned serialize test is relaxed, or a defect escapes that a type check would have caught |
 | [#069](069-native-image-rendering.md) | Native Terminal Image Rendering (kitty / iTerm2 via pi-tui) | Feature | Medium | `images.ts` / `viewer_view.ts` / `index.ts` | Open — implemented in v0.8.0 (spec [`native-image-rendering.md`](../specs/native-image-rendering.md)); awaiting the live-terminal QA checklist ([`qa-evidence.md`](../plans/qa-evidence.md)) before close |
 | [#136](136-viewer-cache-stale-syntax-theme.md) | Syntax Highlighting Stays Stale After a Theme Switch (the `viewerCache` Seam) | Bug / Theming | Medium | `viewer.ts` / `index.ts` / `navigator.ts` | Open — `viewerCache` stores already-highlighted lines keyed on relPath+mtime, with no theme in the key, so a cache hit serves the previous theme's syntax colours; split out of #123, which owned only the overlay-derived caches |
-| [#138](138-git-header-label-truncated.md) | Git Header Truncates the `GIT` Label to `GI` at 120 Columns | Bug / UI Consistency | Low | `git_view.ts` / `frame.ts` | Open — live QA finding from [#137](137-e-style-chrome-migration.md): the counter guard in `buildGitHeader` omits the gap cell `joinLeftRight` reserves, so at `leftW = 31` the guard passes (31 ≤ 31) while `maxLeft` is 3 and `hardTruncate` shaves `" GIT"` to `GI`. Intact at 140 columns; `git_view.ts` is untouched by #137 — pre-existing |
 
 ---
 
@@ -30,6 +29,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | ID | Title | Type | Severity | Resolution Summary | Status |
 | :--- | :--- | :--- | :--- | :--- | :---: |
+| [#138](138-git-header-label-truncated.md) | Git Header Truncates the `GIT` Label to `GI` at 120 Columns | Bug / UI Consistency | Low | The counter guard in `buildGitHeader` omitted the one gap cell `joinLeftRight` reserves, so at `leftW = 31` it passed (4 + 22 + 5 = 31) while `maxLeft` was 3 and `hardTruncate` shaved `" GIT"` to `GI`. The guard now includes the gap: the counter is dropped and the label stays whole (verified live at 120 columns; intact from `leftW = 32`). +1 case pinning the 31/32 boundary. version 0.14.1. | **Resolved** |
 | [#137](137-e-style-chrome-migration.md) | E-Style Chrome Migration (Typed Hint Pairs, Title Pill, Rounded Frame, Viewer Scrollbar + Readout) | Feature / UI Consistency | Medium | The E-variant mock's chrome in six pieces: typed `HintPair` tables rendered `dim(keys) + muted(label)` joined by ` · ` (label-less items gained minimal labels; #135 L1 still drops `m mode` whole), a `╭── pi-navigator ──…╮` title pill with the old title row demoted to a path/git subtitle, rounded corners on all four bordered surfaces, an overflow-only `showing X–Y of Z` header readout, a proportional `│`/`█` scrollbar in the frame's right border driven by the same clamp as the content, and `q Esc close` hardcoded from the default cancel binding. Out of scope, recorded in the issue: §4.2 focus border-segment, files/git scrollbars, settings-panel restyle, mouse interaction, hint wrap, the `❯` glyph, severity-coloured modal borders. version 0.14.0. | **Resolved** |
 | [#134](134-argument-and-completion-handling.md) | Argument Completion Polarity, Dropped Trailing Tokens, No Near-Miss Recovery | Bug / UX | Medium | Completions always return an array (`[]` = "I have nothing"; the old `null` returned our own argument slot to another provider). The parser knows each subcommand's arity — `set` takes two values, nothing else takes any — and rejects anything beyond it as `{ kind: "extra" }`, answered with a one-line usage and no mount. A near miss quotes the correction back (`did you mean "/navigator settings"?`), with candidates drawn from the one subcommand table and a threshold that keeps unrelated tokens silent. | **Resolved** |
 | [#135](135-ui-audit-polish-batch.md) | UI Compliance Audit Polish Batch (13 Low Findings) | Technical Debt / Polish | Low | All thirteen L items delivered. Notable: L1 made `m` silent and dropped its footer hint for non-markdown files; L2 and L9 resolved into documentation instead of code (the modal states keys via the overlay footer by design; `help.ts` is pi-import-free so `.length` is correct — the audit's own recommendation was wrong there); L4 added whole-item hint fitting at 80 columns; L7 moved diffs onto the host's `toolDiff*` roles. | **Resolved** |
@@ -85,7 +85,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | [#087](087-settings-config-field-unused-properties.md) | `NavigatorConfigField` Interface Declares Unused and Dead Properties | Technical Debt / Code Hygiene | Low | Added JSDoc comments documenting intended usage and reservation of `description`, `min`, `max`, and `options` fields. | **Resolved** |
 | [#088](088-settings-parse-image-mode-lowercased-warning.md) | `parseImageMode` Warning Uses Lowercased Input Contrary to `parseIconMode` | Bug / UI Consistency | Low | Passed original `trimmed` string to `parseTruthyEnv` in `parseImageMode` to preserve user casing in warning notifications. +1 case. | **Resolved** |
 | [#089](089-settings-menu-lazy-import-pitui-defeated.md) | Lazy Dynamic Import of `pi-tui` in Settings Menu Is Defeated by Static Import in `index.ts` | Technical Debt / Code Hygiene | Low | Replaced dynamic import of `pi-tui` with static top-level imports in `settings_menu.ts` and removed mirror interfaces. | **Resolved** |
-| [#090](090-tree-walktree-abort-entire-traversal.md) | `walkTree` Abort Semantics Terminates Entire Traversal Rather Than Skipping Subtree | Technical Debt / API Design | Low | Added `WalkAction` type (`boolean | "prune" | "stop"`) to `walkTree` in `tree.ts`, supporting subtree pruning and full abort. +2 cases. | **Resolved** |
+| [#090](090-tree-walktree-abort-entire-traversal.md) | `walkTree` Abort Semantics Terminates Entire Traversal Rather Than Skipping Subtree | Technical Debt / API Design | Low | Added `WalkAction` type (`boolean \| "prune" \| "stop"`) to `walkTree` in `tree.ts`, supporting subtree pruning and full abort. +2 cases. | **Resolved** |
 | [#091](091-viewer-unicode-smart-case-search.md) | Smart-Case Search Fails to Detect Non-ASCII Unicode Uppercase Characters | Bug | Medium | Used `/\p{Lu}/u.test(query)` for Unicode-aware uppercase detection in `markMatches` and `searchLines`. +4 cases. | **Resolved** |
 | [#092](092-test-commit-family-cap-false-positive.md) | Obsolete v2 Commit-Family Row Cap Test Passes Ineffectively Under v3 Semantics | Technical Debt / Test Quality | Low | Updated test fixture in `test/navigator.test.ts` to use an octopus merge with 20 direct parents, asserting 16 child rows and truncation notice. | **Resolved** |
 | [#093](093-test-search-index-clamping-masked.md) | Search Index Clamping Test Masked by Re-typing Query in `navigator.test.ts` | Technical Debt / Test Quality | Low | Added public `getSearchState()` method to `NavigatorOverlay` and asserted clamped search index directly upon `m` toggle without query re-entry. | **Resolved** |
@@ -169,7 +169,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 ## 📂 Issues by Category
 
 ### Bug Fixes & UI Consistency
-- [#138: Git Header Truncates the `GIT` Label to `GI` at 120 Columns](138-git-header-label-truncated.md) *(open)*
+- [#138: Git Header Truncates the `GIT` Label to `GI` at 120 Columns](138-git-header-label-truncated.md) *(resolved)*
 - [#136: Syntax Highlighting Stays Stale After a Theme Switch (the `viewerCache` Seam)](136-viewer-cache-stale-syntax-theme.md) *(open)*
 - [#121: Settings Menu's "Esc to cancel" Does Not Cancel — Edits Persist Immediately](121-settings-esc-cancel-live-apply.md) *(resolved)*
 - [#122: `/navigator` Guard Fails Silently in Every Non-TUI Mode](122-nav-guard-silent-non-tui-modes.md) *(resolved)*

@@ -1,6 +1,6 @@
 # Issue #138: Git Header Truncates the `GIT` Label to `GI` at 120 Columns
 
-- **Status**: Pending
+- **Status**: Resolved
 - **Type**: Bug / UI Consistency
 - **Severity**: Low
 - **Components**: [`git_view.ts`](../../git_view.ts) (`buildGitHeader`), [`frame.ts`](../../frame.ts) (`joinLeftRight`)
@@ -66,3 +66,16 @@ the label survives the join; alternatively shrink the counter's own budget first
 - Live QA evidence: [`qa-evidence.md`](../plans/qa-evidence.md) § "E-style chrome (#137)"
 - Composer: [`joinLeftRight`](../../frame.ts) (#010 truncation convention)
 - Same defect class one level up: [#113](113-git-group-row-ignores-leftw.md)
+
+## Resolution
+
+The counter guard now includes the gap cell `joinLeftRight` reserves:
+
+```ts
+// git_view.ts — before: … + visibleWidth(counter) <= leftW
+if (visibleWidth(label) + visibleWidth(info) + visibleWidth(counter) + 1 <= leftW) info += counter;
+```
+
+At the reported 120-column layout (`leftW = 31`) the arithmetic is now `4 + 22 + 5 + 1 = 32 > 31`, so the position counter is dropped and the label renders `GIT`; at `leftW = 32` all three segments plus the gap fit and the counter returns. No other header state moved and the counter's own width is unchanged.
+
+Pinned by `test/git_view.test.ts` — "keeps the label whole at the exact counter threshold (Issue #138)" drives the 31/32 boundary with the live fixture (clean worktree, `1/20`): the label survives, the counter yields at 31, returns at 32, and both rows are width-exact. +1 case. `npm run typecheck` and `npm test` green (20 suites, 802 cases). version 0.14.1.

@@ -179,7 +179,12 @@ export function buildGitHeader(leftW: number, view: GitHeaderView): string {
   // labels must never be what gets cut (the Issue #113 class).
   if (view.gitNavCount > view.gitAreaRows) {
     const counter = T.dim(`${Math.min(view.gitCursorIndex + 1, view.gitNavCount)}/${view.gitNavCount}`) + " ";
-    if (visibleWidth(label) + visibleWidth(info) + visibleWidth(counter) <= leftW) info += counter;
+    // Issue #138: the composer reserves one gap cell between the segments
+    // (`joinLeftRight`: maxLeft = width - rightW - 1), so the counter must fit
+    // label + info + counter + gap — not just the three segments. Without the
+    // gap the guard passed at leftW 31 while maxLeft was 3, and hardTruncate
+    // shaved the label to "GI"; the counter is dropped instead.
+    if (visibleWidth(label) + visibleWidth(info) + visibleWidth(counter) + 1 <= leftW) info += counter;
   }
   return joinLeftRight(label, info, leftW);
 }

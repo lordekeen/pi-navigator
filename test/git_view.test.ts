@@ -193,6 +193,21 @@ describe("buildGitHeader", () => {
     expect(visibleWidth(narrow)).toBe(28);
   });
 
+  it("keeps the label whole at the exact counter threshold (Issue #138)", () => {
+    // Live 120-column case: label " GIT" (4) + "0 unstaged · 0 staged " (22) +
+    // "1/20 " (5) = 31, which passed the old guard at leftW 31, while the
+    // composer's gap cell made maxLeft 3 and hardTruncate shaved the label to
+    // "GI". The guard now includes the gap, so the counter yields instead.
+    const tight = headerAt(31, { gitCursorIndex: 0, gitNavCount: 20, gitAreaRows: 6 });
+    expect(tight).toContain("GIT");
+    expect(tight).not.toContain("1/20");
+    expect(visibleWidth(tight)).toBe(31);
+    // One column wider, all three segments plus the gap fit — label intact.
+    const fits = headerAt(32, { gitCursorIndex: 0, gitNavCount: 20, gitAreaRows: 6 });
+    expect(fits).toContain("GIT");
+    expect(fits).toContain("1/20");
+  });
+
   it("shows unstaged/staged counters when available", () => {
     const row = header(
       gitState({

@@ -239,7 +239,7 @@ Findings:
    single string), so the ~84-cell budget at inner width 106 sheds the trailing pair. It returns
    at ≥121 columns and is unaffected in git/viewer focus. Accepted; the help modal carries the
    binding.
-2. **[#138](../issues/138-git-header-label-truncated.md) filed** — at exactly 120 columns the git
+2. **[#138](../issues/138-git-header-label-truncated.md) filed and fixed in 0.14.1** — at exactly 120 columns the git
    header renders `GI` instead of `GIT`: the counter guard in `buildGitHeader` omits the gap cell
    `joinLeftRight` reserves (31 ≤ 31 passes, `maxLeft` is 3 vs `" GIT"` 4, so `hardTruncate` cuts
    it). Intact at 140 columns; `git_view.ts` is untouched by #137 — pre-existing.
