@@ -8,9 +8,9 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
-| **Pending / Open** | 1 | 2 | 1 | **4** |
+| **Pending / Open** | 1 | 2 | 2 | **5** |
 | **Resolved** | 21 | 51 | 61 | **133** |
-| **Total** | **22** | **53** | **62** | **137** |
+| **Total** | **22** | **53** | **63** | **138** |
 
 ---
 
@@ -22,6 +22,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | [#067](067-typed-config-registry-paths.md) | Typed Config Registry Paths (`path` is `readonly string[]`) | Technical Debt / Type Safety | Low | `settings.ts` | **Deferred** — tracked, not scheduled: the compile-time path/default check is not worth the rework at five fields. Revisit when the schema grows (~15+ fields or a third level), `live: true` lands, the byte-pinned serialize test is relaxed, or a defect escapes that a type check would have caught |
 | [#069](069-native-image-rendering.md) | Native Terminal Image Rendering (kitty / iTerm2 via pi-tui) | Feature | Medium | `images.ts` / `viewer_view.ts` / `index.ts` | Open — implemented in v0.8.0 (spec [`native-image-rendering.md`](../specs/native-image-rendering.md)); awaiting the live-terminal QA checklist ([`qa-evidence.md`](../plans/qa-evidence.md)) before close |
 | [#136](136-viewer-cache-stale-syntax-theme.md) | Syntax Highlighting Stays Stale After a Theme Switch (the `viewerCache` Seam) | Bug / Theming | Medium | `viewer.ts` / `index.ts` / `navigator.ts` | Open — `viewerCache` stores already-highlighted lines keyed on relPath+mtime, with no theme in the key, so a cache hit serves the previous theme's syntax colours; split out of #123, which owned only the overlay-derived caches |
+| [#138](138-git-header-label-truncated.md) | Git Header Truncates the `GIT` Label to `GI` at 120 Columns | Bug / UI Consistency | Low | `git_view.ts` / `frame.ts` | Open — live QA finding from [#137](137-e-style-chrome-migration.md): the counter guard in `buildGitHeader` omits the gap cell `joinLeftRight` reserves, so at `leftW = 31` the guard passes (31 ≤ 31) while `maxLeft` is 3 and `hardTruncate` shaves `" GIT"` to `GI`. Intact at 140 columns; `git_view.ts` is untouched by #137 — pre-existing |
 
 ---
 
@@ -168,6 +169,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 ## 📂 Issues by Category
 
 ### Bug Fixes & UI Consistency
+- [#138: Git Header Truncates the `GIT` Label to `GI` at 120 Columns](138-git-header-label-truncated.md) *(open)*
 - [#136: Syntax Highlighting Stays Stale After a Theme Switch (the `viewerCache` Seam)](136-viewer-cache-stale-syntax-theme.md) *(open)*
 - [#121: Settings Menu's "Esc to cancel" Does Not Cancel — Edits Persist Immediately](121-settings-esc-cancel-live-apply.md) *(resolved)*
 - [#122: `/navigator` Guard Fails Silently in Every Non-TUI Mode](122-nav-guard-silent-non-tui-modes.md) *(resolved)*

@@ -199,3 +199,53 @@ WezTerm, Warp), `images.mode: "native"` in `~/.pi/agent/pi-navigator.json`
 If any check fails, file the failing behavior on #069 before closing; the spec's
 §16.1 fallbacks (image-aware compositing / upstream pi-tui exception) are the
 first candidates.
+
+## E-style chrome (#137) — live drive (Linux, tmux 3.7c, pi 1.0.1, 0.14.0 path install)
+
+Environment: extension registered as a path install at **0.14.0** (`pi install .`), revision
+`c582b8b`; driven in a detached tmux pane at 120×36, 140×40, 80×24 and 40×13 with
+`capture-pane` for evidence, then a second session with `pi --use-theme light`. Both sessions
+were killed afterwards; no persisted state changed — `theme` in `~/.pi/agent/settings.json`
+stayed `system`.
+
+Verified live (dark theme, 120×36 unless noted):
+
+- **Pill + subtitle**: `╭── pi-navigator ──…╮` in the top border with the accent-bold name; the
+  row below is the path/git subtitle; junction tees stay sharp (`├ ┤`).
+- **Hints**: pairs render `dim(keys) + muted(label)` joined by ` · `; `m mode` is absent while
+  `navigator.ts` is open (non-markdown) — #135 L1 confirmed live.
+- **Readout**: `74.3 KB · 1850L · showing 1–24 of 1850`, reflowing with the pane height
+  (`1823–1836` at 80×24) and reaching `showing 1823–1850 of 1850` at the bottom.
+- **Scrollbar**: thumb `█` in the frame's right border, one cell at
+  `thumbH = max(1, round(24²/1850))`, moving to the last content row at the bottom; track rows
+  read as `│`.
+- **Search interaction**: entering `/` replaces the header with the search bar and the readout
+  is gone by design — typing `/theme` in viewer focus searched the file (25 matches), i.e.
+  overlay mode isolation holds even for strings that look like host commands.
+- **Help modal**: rounded box composited inside the frame; `q Esc  close (…first)` row intact.
+- **Filter placeholder** derives from the pair tables: `type to filter · up/down move ·
+  Home/End first/last · Enter apply · Esc clear`.
+- **80×24**: width-safe; pairs dropped whole (`/ search`, `? help`, `q Esc close` gone) — no
+  mid-phrase truncation.
+- **40×13**: rounded refusal notice (`terminal too small for pi-navigator`; the remedy text is
+  cut by the 38-cell box — pre-existing).
+- **`--use-theme light`** (separate session): identical chrome; SGRs are pi's light true-color
+  values (e.g. accent `38;2;116;89;180`); the settings file was untouched.
+
+Findings:
+
+1. **Files-focus footer drops `q Esc close` at 120 columns** — design consequence, not a bug:
+   the files pair table measures 97 plain cells after the pair/`·` conversion (76 as the old
+   single string), so the ~84-cell budget at inner width 106 sheds the trailing pair. It returns
+   at ≥121 columns and is unaffected in git/viewer focus. Accepted; the help modal carries the
+   binding.
+2. **[#138](../issues/138-git-header-label-truncated.md) filed** — at exactly 120 columns the git
+   header renders `GI` instead of `GIT`: the counter guard in `buildGitHeader` omits the gap cell
+   `joinLeftRight` reserves (31 ≤ 31 passes, `maxLeft` is 3 vs `" GIT"` 4, so `hardTruncate` cuts
+   it). Intact at 140 columns; `git_view.ts` is untouched by #137 — pre-existing.
+
+Automated companions at the same revision: `npm run typecheck` clean, `npm test` 20 suites /
+801 cases green.
+
+Not covered by this live pass: IME/CJK input, mouse, and the kitty/iTerm2 native image paths
+(unchanged by this work — see the #069 checklist above).
