@@ -9,8 +9,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
 | **Pending / Open** | 1 | 2 | 1 | **4** |
-| **Resolved** | 21 | 51 | 62 | **134** |
-| **Total** | **22** | **53** | **63** | **138** |
+| **Resolved** | 21 | 51 | 63 | **135** |
+| **Total** | **22** | **53** | **64** | **139** |
 
 ---
 
@@ -29,6 +29,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | ID | Title | Type | Severity | Resolution Summary | Status |
 | :--- | :--- | :--- | :--- | :--- | :---: |
+| [#139](139-completion-labels-show-token.md) | Subcommand Completions Are Labelled With a Sentence Instead of the Token | Bug / UX | Low | `navigatorCompletions` mapped the table's descriptive `completionLabel` into the host's `label` field, so the popup row name displaced the token the user was typing (`set` and `help` did not contain it at all). Items now label with the token and carry the sentence as `description`; the column was renamed `completionDescription` to match. Selection was always correct (`value` is inserted). +rewritten projection/prefix assertions, including a `label === value` sweep. version 0.14.2. | **Resolved** |
 | [#138](138-git-header-label-truncated.md) | Git Header Truncates the `GIT` Label to `GI` at 120 Columns | Bug / UI Consistency | Low | The counter guard in `buildGitHeader` omitted the one gap cell `joinLeftRight` reserves, so at `leftW = 31` it passed (4 + 22 + 5 = 31) while `maxLeft` was 3 and `hardTruncate` shaved `" GIT"` to `GI`. The guard now includes the gap: the counter is dropped and the label stays whole (verified live at 120 columns; intact from `leftW = 32`). +1 case pinning the 31/32 boundary. version 0.14.1. | **Resolved** |
 | [#137](137-e-style-chrome-migration.md) | E-Style Chrome Migration (Typed Hint Pairs, Title Pill, Rounded Frame, Viewer Scrollbar + Readout) | Feature / UI Consistency | Medium | The E-variant mock's chrome in six pieces: typed `HintPair` tables rendered `dim(keys) + muted(label)` joined by ` · ` (label-less items gained minimal labels; #135 L1 still drops `m mode` whole), a `╭── pi-navigator ──…╮` title pill with the old title row demoted to a path/git subtitle, rounded corners on all four bordered surfaces, an overflow-only `showing X–Y of Z` header readout, a proportional `│`/`█` scrollbar in the frame's right border driven by the same clamp as the content, and `q Esc close` hardcoded from the default cancel binding. Out of scope, recorded in the issue: §4.2 focus border-segment, files/git scrollbars, settings-panel restyle, mouse interaction, hint wrap, the `❯` glyph, severity-coloured modal borders. version 0.14.0. | **Resolved** |
 | [#134](134-argument-and-completion-handling.md) | Argument Completion Polarity, Dropped Trailing Tokens, No Near-Miss Recovery | Bug / UX | Medium | Completions always return an array (`[]` = "I have nothing"; the old `null` returned our own argument slot to another provider). The parser knows each subcommand's arity — `set` takes two values, nothing else takes any — and rejects anything beyond it as `{ kind: "extra" }`, answered with a one-line usage and no mount. A near miss quotes the correction back (`did you mean "/navigator settings"?`), with candidates drawn from the one subcommand table and a threshold that keeps unrelated tokens silent. | **Resolved** |
@@ -169,6 +170,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 ## 📂 Issues by Category
 
 ### Bug Fixes & UI Consistency
+- [#139: Subcommand Completions Are Labelled With a Sentence Instead of the Token](139-completion-labels-show-token.md) *(resolved)*
 - [#138: Git Header Truncates the `GIT` Label to `GI` at 120 Columns](138-git-header-label-truncated.md) *(resolved)*
 - [#136: Syntax Highlighting Stays Stale After a Theme Switch (the `viewerCache` Seam)](136-viewer-cache-stale-syntax-theme.md) *(open)*
 - [#121: Settings Menu's "Esc to cancel" Does Not Cancel — Edits Persist Immediately](121-settings-esc-cancel-live-apply.md) *(resolved)*

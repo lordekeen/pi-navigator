@@ -154,11 +154,11 @@ describe("parseNavigatorArgs", () => {
 describe("navigatorCompletions", () => {
   it("projects NAVIGATOR_SUBCOMMANDS verbatim, in table order", () => {
     expect(navigatorCompletions("")).toEqual(
-      NAVIGATOR_SUBCOMMANDS.map((sub) => ({
-        value: sub.cmd.slice(NAVIGATOR_CMD_PREFIX.length),
-        label: sub.completionLabel,
-        description: sub.desc,
-      })),
+      NAVIGATOR_SUBCOMMANDS.map((sub) => {
+        const token = sub.cmd.slice(NAVIGATOR_CMD_PREFIX.length);
+        // Issue #139: label = the token, description = the sentence.
+        return { value: token, label: token, description: sub.completionDescription };
+      }),
     );
     const rows = navigatorCompletions("");
     expect(rows).not.toBeNull();
@@ -169,14 +169,14 @@ describe("navigatorCompletions", () => {
   it("filters by prefix and returns an empty array for no match (Issue #134)", () => {
     // "se" prefixes both settings and set (Issue #131).
     expect(navigatorCompletions("se")).toEqual([
-      { value: "settings", label: "Open the settings menu", description: "Configure images, icons, viewer, tree, and layout behavior" },
-      { value: "set", label: "Set a config value", description: "set one config value, e.g. images.mode native" },
+      { value: "settings", label: "settings", description: "Open the settings menu" },
+      { value: "set", label: "set", description: "Set a config value" },
     ]);
     expect(navigatorCompletions("he")).toEqual([
-      { value: "help", label: "Show the command list", description: "Show this command list" },
+      { value: "help", label: "help", description: "Show the command list" },
     ]);
     expect(navigatorCompletions("f")).toEqual([
-      { value: "files", label: "Open files + viewer overlay", description: "Open overlay with files pane only" },
+      { value: "files", label: "files", description: "Open files + viewer overlay" },
     ]);
     expect(navigatorCompletions("zz")).toEqual([]);
   });

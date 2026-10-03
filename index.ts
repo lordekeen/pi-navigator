@@ -264,11 +264,13 @@ export function parseNavigatorArgs(args: string): ParsedNavigatorArgs {
  * argument list.
  */
 export function navigatorCompletions(prefix: string): { value: string; label: string; description: string }[] {
-  return NAVIGATOR_SUBCOMMANDS.map((sub) => ({
-    value: sub.cmd.slice(NAVIGATOR_CMD_PREFIX.length),
-    label: sub.completionLabel,
-    description: sub.desc,
-  })).filter((item) => item.value.startsWith(prefix));
+  return NAVIGATOR_SUBCOMMANDS.map((sub) => {
+    // Issue #139: the popup row is labelled with the token the user is typing;
+    // the descriptive sentence is the description column. The host labels its
+    // own command and theme items with the value the same way.
+    const token = sub.cmd.slice(NAVIGATOR_CMD_PREFIX.length);
+    return { value: token, label: token, description: sub.completionDescription };
+  }).filter((item) => item.value.startsWith(prefix));
 }
 
 /**

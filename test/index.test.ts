@@ -166,23 +166,25 @@ describe("navigatorCompletions (Issue #095)", () => {
     expect(values).toEqual(["all", "files", "git", "settings", "set", "help"]);
   });
 
-  it("exposes the layout openers' completion labels and descriptions", () => {
+  it("labels every completion with its token and describes the layout (Issue #139)", () => {
     const completions = navigatorCompletions("");
     expect(completions![0]).toEqual({
       value: "all",
-      label: "Open files + git + viewer overlay",
-      description: "Open overlay with files and git panes (default)",
+      label: "all",
+      description: "Open files + git + viewer overlay",
     });
     expect(completions![1]).toEqual({
       value: "files",
-      label: "Open files + viewer overlay",
-      description: "Open overlay with files pane only",
+      label: "files",
+      description: "Open files + viewer overlay",
     });
     expect(completions![2]).toEqual({
       value: "git",
-      label: "Open git + viewer overlay",
-      description: "Open overlay with git panel only",
+      label: "git",
+      description: "Open git + viewer overlay",
     });
+    // The popup row name is what the user is typing, everywhere.
+    for (const item of completions!) expect(item.label).toBe(item.value);
   });
 
   it("filters completions by prefix", () => {

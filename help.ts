@@ -22,24 +22,26 @@ export const NAVIGATOR_CMD_PREFIX = "/navigator ";
 /**
  * The /navigator subcommands — one table driving the /navigator help rows,
  * the argument completions, and the arg parser together so the three cannot
- * drift (Issue #063 finding 5). `cmd` is the full command string;
- * `completionLabel` is the completion popup label; `desc` is shared verbatim
- * by the help rows and the completions. Rows carrying a `layout` open that
+ * drift (Issue #063 finding 5). `cmd` is the full command string; `desc` is
+ * shared verbatim by the help rows; the completion popup labels each item with
+ * the subcommand token itself and renders `completionDescription` as its
+ * secondary column (Issue #139 — the host labels its own command and theme
+ * items with the value the same way). Rows carrying a `layout` open that
  * layout directly (Issue #119) — one-open selections that never write
  * settings; bare /navigator resolves the layout.default setting instead.
  */
 export const NAVIGATOR_SUBCOMMANDS: readonly {
   cmd: string;
   desc: string;
-  completionLabel: string;
+  completionDescription: string;
   layout?: NavigatorLayout;
 }[] = [
-  { cmd: `${NAVIGATOR_CMD_PREFIX}all`, desc: "Open overlay with files and git panes (default)", completionLabel: "Open files + git + viewer overlay", layout: "files-git-viewer" },
-  { cmd: `${NAVIGATOR_CMD_PREFIX}files`, desc: "Open overlay with files pane only", completionLabel: "Open files + viewer overlay", layout: "files-viewer" },
-  { cmd: `${NAVIGATOR_CMD_PREFIX}git`, desc: "Open overlay with git panel only", completionLabel: "Open git + viewer overlay", layout: "git-viewer" },
-  { cmd: `${NAVIGATOR_CMD_PREFIX}settings`, desc: "Configure images, icons, viewer, tree, and layout behavior", completionLabel: "Open the settings menu" },
-  { cmd: `${NAVIGATOR_CMD_PREFIX}set`, desc: "set one config value, e.g. images.mode native", completionLabel: "Set a config value" },
-  { cmd: `${NAVIGATOR_CMD_PREFIX}help`, desc: "Show this command list", completionLabel: "Show the command list" },
+  { cmd: `${NAVIGATOR_CMD_PREFIX}all`, desc: "Open overlay with files and git panes (default)", completionDescription: "Open files + git + viewer overlay", layout: "files-git-viewer" },
+  { cmd: `${NAVIGATOR_CMD_PREFIX}files`, desc: "Open overlay with files pane only", completionDescription: "Open files + viewer overlay", layout: "files-viewer" },
+  { cmd: `${NAVIGATOR_CMD_PREFIX}git`, desc: "Open overlay with git panel only", completionDescription: "Open git + viewer overlay", layout: "git-viewer" },
+  { cmd: `${NAVIGATOR_CMD_PREFIX}settings`, desc: "Configure images, icons, viewer, tree, and layout behavior", completionDescription: "Open the settings menu" },
+  { cmd: `${NAVIGATOR_CMD_PREFIX}set`, desc: "set one config value, e.g. images.mode native", completionDescription: "Set a config value" },
+  { cmd: `${NAVIGATOR_CMD_PREFIX}help`, desc: "Show this command list", completionDescription: "Show the command list" },
 ];
 
 /** The durable /navigator help rows (overlay command first, then subcommands). */
