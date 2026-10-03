@@ -11,7 +11,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 
 import type { NavigatorTheme } from "./theme";
 import { hardTruncate } from "./viewer";
-import { padTo } from "./frame";
+import { FRAME_CORNERS, padTo } from "./frame";
 
 /** Help rows that fit. Shared by the input clamp and the renderer. */
 export function helpVisibleRows(body: number, helpRowsLength: number): number {
@@ -63,7 +63,7 @@ export function composeHelp(lines: string[], innerW: number, body: number, view:
     const padded = padTo(text, boxW - 2);
     return T.frame("\u2502") + padded + T.frame("\u2502");
   };
-  modal.push(T.frame("\u250c" + "\u2500".repeat(boxW - 2) + "\u2510"));
+  modal.push(T.frame(FRAME_CORNERS.tl + "\u2500".repeat(boxW - 2) + FRAME_CORNERS.tr));
   modal.push(inner(" " + T.accent(T.bold("pi-navigator \u2014 keys"))));
   for (let i = 0; i < visibleRows; i++) {
     const row = view.helpRows[scroll + i];
@@ -86,7 +86,7 @@ export function composeHelp(lines: string[], innerW: number, body: number, view:
     }
     modal.push(inner(" " + keyCell + " " + T.muted(descCell)));
   }
-  modal.push(T.frame("\u2514" + "\u2500".repeat(boxW - 2) + "\u2518"));
+  modal.push(T.frame(FRAME_CORNERS.bl + "\u2500".repeat(boxW - 2) + FRAME_CORNERS.br));
 
   for (let i = 0; i < modal.length; i++) {
     const target = 3 + startRow + i; // lines[0..2] are top, title, separator

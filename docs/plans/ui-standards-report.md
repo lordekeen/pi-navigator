@@ -117,8 +117,8 @@ This is the baseline UX for pi-navigator. Extracted patterns:
 
 Frame ([`overlay.ts`](../references/pi-skill-gate-main/overlay.ts:761)):
 
-- Outer box drawn manually: `┌` + `─` repeated innerW + `┐`, body lines as `│` + content padded to innerW + `│`, closing `└─┘`. Border characters styled `dim`.
-- Title row: accent bold product name, dim project label, dim counts summary.
+- Outer box drawn manually: `┌` + `─` repeated innerW + `┐`, body lines as `│` + content padded to innerW + `│`, closing `└─┘`. Border characters styled `dim` in the reference; pi-navigator draws its frame with the host's `borderMuted` role instead (Issue #135 L6). The E-style chrome (Issue [#137](../issues/137-e-style-chrome-migration.md)) rounds every bordered surface's corners (`╭ ╮ ╰ ╯`; strokes and tees unchanged) and moves the product name into a top-border pill: `╭── pi-navigator ──…╮`.
+- Title row: accent bold product name, dim project label, dim counts summary in the reference; pi-navigator's row is a subtitle carrying the path and the git branch/counters only — the product name lives in the pill (Issue [#137](../issues/137-e-style-chrome-migration.md) §2).
 - Horizontal separator rows built with `│` + `─`.repeat(innerW) + `│`.
 - Column split: `detailW = innerW - sidebarW - 1`, vertical divider owned by the sidebar rows.
 - Sidebar width: natural width from longest row plus a 4 column offset, capped at `max(14, 30% of terminal width)` ([`overlay.ts`](../references/pi-skill-gate-main/overlay.ts:471)).
@@ -130,7 +130,7 @@ Interaction model:
 
 - Escape precedence: clear active filter first, then close ([`overlay.ts`](../references/pi-skill-gate-main/overlay.ts:323)).
 - Search mode is modal: printable characters append to the query, Enter commits the filter but keeps it, Escape clears it ([`overlay.ts`](../references/pi-skill-gate-main/overlay.ts:217)).
-- Footer shows contextual key hints; help is a full modal listing all keys.
+- Footer shows contextual key hints; help is a full modal listing all keys. pi-navigator renders the hints as typed key/label pairs — `dim(keys) + muted(" label")` joined by a dim ` · `, the pi-main `keyHint()` shape — advertising both `q` and the cancel key on the close pair (`q Esc close`), with pairs dropped whole when the width runs short (Issues [#137](../issues/137-e-style-chrome-migration.md) §1/§5, [#135](../issues/135-ui-audit-polish-batch.md) L4).
 - State lives in a plain class with `invalidate()` and `render(width)`; the extension wires `handleInput` to call the class method and then `tui.requestRender()` ([`index.ts`](../references/pi-skill-gate-main/index.ts:455)).
 
 ### 3.2 files-widget — functional baseline and UX deficits
@@ -171,10 +171,10 @@ Rejected: emoji inside rows, annotation rail complexity, modal compose boxes.
 ### 4.1 Frame and regions
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│ pi-navigator  ~/project   branch: main +2 -0   M:4  S:2  U:3        │
+╭── pi-navigator ──────────────────────────────────────────────────────╮
+│ ~/project   branch: main +2 -0   M:4  S:2  U:3                       │
 │─────────────────┬────────────────────────────────────────────────────│
-│ FILES           │ src/index.ts                            80x  120L  │
+│ FILES           │ src/index.ts  2.1 KB · 120L · showing 1–24 of 120  │
 │ ▼ src           │   1 │ import { foo } from "./bar";                 │
 │   index.ts  M   │   2 │                                             │
 │   util.ts   ??  │   3 │ export function main() {                     │
@@ -186,15 +186,16 @@ Rejected: emoji inside rows, annotation rail complexity, modal compose boxes.
 │ History         │                                                     │
 │  a1b2c3d  msg   │                                                     │
 │─────────────────┴────────────────────────────────────────────────────│
-│ j k move  Enter open  Tab pane  / filter  ? help  q close            │
-└──────────────────────────────────────────────────────────────────────┘
+│ j k move · Enter open · Tab pane · / filter · ? help · q Esc close   │
+╰──────────────────────────────────────────────────────────────────────╯
 ```
 
 - Overlay: `width: "90%"`, `minWidth: 80`, `maxHeight: "85%"`, `anchor: "center"`, `margin: 1`.
 - Left column: 30 percent of inner width, clamped to 24 to 44 columns; contains FILES (flex) and GIT (fixed share of the column, minimum 6 rows); hidden entirely when the terminal is narrower than the responsive threshold, mirroring plannotator.
-- Right pane: opened file, line-number gutter right-aligned and dim, `│` separator, code with pi-highlighted lines. Gutter stays fixed during horizontal scroll; tabs expanded to spaces before highlighting, matching pi's own `read` renderer.
-- Title bar: extension name accent bold, cwd dim, branch accent, ahead and behind counters, change counters using success, warning, and dim tokens.
-- Footer: focus-dependent key hints, same pattern as skill-gate and plannotator.
+- Right pane: opened file, line-number gutter right-aligned and dim, `│` separator, code with pi-highlighted lines. Gutter stays fixed during horizontal scroll; tabs expanded to spaces before highlighting, matching pi's own `read` renderer. The header's meta block (size · line count · mode flags) ends with a `showing X–Y of Z` position readout whenever the content overflows the pane (Issue [#137](../issues/137-e-style-chrome-migration.md) §3).
+- Viewer scrollbar: the frame's right border column doubles as the scrollbar over the viewer's content rows only — track `│` in the `scrollbarTrack` role, proportional thumb `█` in `scrollbarThumb`, sized `thumbH = max(1, round(count²/total))` and positioned `thumbStart = round(scroll / max(1, total − count) · (count − thumbH))`. Display-only: no timers, no fade, no mouse handling; hidden while the help modal is open (Issue [#137](../issues/137-e-style-chrome-migration.md) §4).
+- Title bar (top border + subtitle row): rounded corners with the product name in an accent-bold pill, `╭── pi-navigator ──…╮`; the row below is the subtitle — cwd dim, branch accent, ahead/behind counters (success/warning), changed counter (dim) (Issue [#137](../issues/137-e-style-chrome-migration.md) §2).
+- Footer: focus-dependent key hints, same pattern as skill-gate and plannotator — typed key/label pairs rendered `dim(keys) + muted(" label")` and joined by a dim ` · `, the close pair advertising the cancel key (`q Esc close`), pairs dropped whole to fit the width (Issue [#137](../issues/137-e-style-chrome-migration.md) §1/§5).
 
 ### 4.2 Focus and keyboard model
 

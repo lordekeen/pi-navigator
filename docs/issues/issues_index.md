@@ -9,8 +9,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
 | **Pending / Open** | 1 | 2 | 1 | **4** |
-| **Resolved** | 21 | 50 | 61 | **132** |
-| **Total** | **22** | **52** | **62** | **136** |
+| **Resolved** | 21 | 51 | 61 | **133** |
+| **Total** | **22** | **53** | **62** | **137** |
 
 ---
 
@@ -29,6 +29,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | ID | Title | Type | Severity | Resolution Summary | Status |
 | :--- | :--- | :--- | :--- | :--- | :---: |
+| [#137](137-e-style-chrome-migration.md) | E-Style Chrome Migration (Typed Hint Pairs, Title Pill, Rounded Frame, Viewer Scrollbar + Readout) | Feature / UI Consistency | Medium | The E-variant mock's chrome in six pieces: typed `HintPair` tables rendered `dim(keys) + muted(label)` joined by ` · ` (label-less items gained minimal labels; #135 L1 still drops `m mode` whole), a `╭── pi-navigator ──…╮` title pill with the old title row demoted to a path/git subtitle, rounded corners on all four bordered surfaces, an overflow-only `showing X–Y of Z` header readout, a proportional `│`/`█` scrollbar in the frame's right border driven by the same clamp as the content, and `q Esc close` hardcoded from the default cancel binding. Out of scope, recorded in the issue: §4.2 focus border-segment, files/git scrollbars, settings-panel restyle, mouse interaction, hint wrap, the `❯` glyph, severity-coloured modal borders. version 0.14.0. | **Resolved** |
 | [#134](134-argument-and-completion-handling.md) | Argument Completion Polarity, Dropped Trailing Tokens, No Near-Miss Recovery | Bug / UX | Medium | Completions always return an array (`[]` = "I have nothing"; the old `null` returned our own argument slot to another provider). The parser knows each subcommand's arity — `set` takes two values, nothing else takes any — and rejects anything beyond it as `{ kind: "extra" }`, answered with a one-line usage and no mount. A near miss quotes the correction back (`did you mean "/navigator settings"?`), with candidates drawn from the one subcommand table and a threshold that keeps unrelated tokens silent. | **Resolved** |
 | [#135](135-ui-audit-polish-batch.md) | UI Compliance Audit Polish Batch (13 Low Findings) | Technical Debt / Polish | Low | All thirteen L items delivered. Notable: L1 made `m` silent and dropped its footer hint for non-markdown files; L2 and L9 resolved into documentation instead of code (the modal states keys via the overlay footer by design; `help.ts` is pi-import-free so `.length` is correct — the audit's own recommendation was wrong there); L4 added whole-item hint fitting at 80 columns; L7 moved diffs onto the host's `toolDiff*` roles. | **Resolved** |
 | [#128](128-directory-changes-colour-only.md) | Directory "Contains Changes" Signalled by Colour Alone | Bug / Accessibility | Medium | A changed directory carries a `•` in the badge cell file rows already reserve for git codes, in the same warning tone — the colour is now reinforcement rather than the sole carrier. It reuses that reserved cell (columns never shift), is punctuation rather than a letter (cannot be misread as a status code), is appended after the body budget so the name loses cells first, and needs no Nerd Font. | **Resolved** |
@@ -258,6 +259,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#054: Redundant `getRenderedMarkdownLines` Invocation in `buildRightRows`](054-redundant-rendered-markdown-line-call.md) *(resolved)*
 
 ### User Experience & Keyboard Navigation
+- [#137: E-Style Chrome Migration (Typed Hint Pairs, Title Pill, Rounded Frame, Viewer Scrollbar + Readout)](137-e-style-chrome-migration.md) *(resolved)*
 - [#125: `Ctrl+C` Does Nothing While the Overlay Is Open](125-ctrl-c-does-nothing.md) *(resolved)*
 - [#126: Injected `KeybindingsManager` Ignored; User Key Remapping Never Applies](126-keybindings-manager-ignored.md) *(resolved)*
 - [#127: No `Home`/`End`/`PageUp`/`PageDown` in Any Mode](127-missing-home-end-page-keys.md) *(resolved)*

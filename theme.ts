@@ -24,6 +24,10 @@ export interface NavigatorTheme {
   searchCurrent(t: string): string;
   /** Frame borders. */
   frame(t: string): string;
+  /** Viewer scrollbar: the unfilled track (Issue #137). */
+  scrollbarTrack(t: string): string;
+  /** Viewer scrollbar: the proportional thumb (Issue #137). */
+  scrollbarThumb(t: string): string;
   /** Added diff line. */
   diffAdded(t: string): string;
   /** Removed diff line. */
@@ -52,6 +56,11 @@ export function makeNavigatorTheme(theme: Theme): NavigatorTheme {
       return typeof theme.underline === "function" ? theme.underline(match) : match;
     },
     frame: (t) => theme.fg("borderMuted", t),
+    // Dedicated scrollbar roles (Issue #137 §4). Both are optional host tokens:
+    // the Theme constructor backfills them (track ← muted, thumb ← text) for
+    // themes that do not declare them, so fg() never throws here.
+    scrollbarTrack: (t) => theme.fg("scrollbarTrack", t),
+    scrollbarThumb: (t) => theme.fg("scrollbarThumb", t),
     // Dedicated host diff roles. The generic success/error/text tokens mean
     // other things elsewhere in the overlay, and a theme that styles diffs
     // specifically (toolDiff*) would otherwise never reach this view (#135 L7).

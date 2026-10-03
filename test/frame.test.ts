@@ -15,10 +15,12 @@ import {
   bodyRows,
   buildFooterRow,
   buildTitleRow,
+  buildTopBorder,
   cycleFocus,
   filesArea,
   FOCUS_HINTS,
   fitHint,
+  FRAME_CORNERS,
   getFooterHint,
   initialFocus,
   isImageLine,
@@ -29,12 +31,14 @@ import {
   MODE_HINTS,
   overlayHeight,
   padTo,
+  plainHint,
   shortPath,
   splitRows,
   truncateAndWidth,
   useLeftColumn,
   viewerArea,
   visiblePanes,
+  type HintPair,
 } from "../frame";
 import { makeNavigatorTheme } from "../theme";
 import { NAVIGATOR_LAYOUTS, type Focus, type GitState, type NavigatorLayout } from "../types";
@@ -267,19 +271,24 @@ describe("shortPath", () => {
 });
 
 describe("getFooterHint markdown applicability (Issue #135 L1)", () => {
-  it("drops the `m` item from the viewer hint when the file cannot render markdown", () => {
+  it("drops the `m` pair from the viewer hint when the file cannot render markdown", () => {
     const hint = getFooterHint("normal", "viewer", { markdownApplicable: false });
-    expect(hint).not.toContain("m mode");
-    expect(hint).toContain("w wrap");
-    expect(hint).toContain("/ search");
-    // Removing an item leaves neither a fragment nor a doubled separator.
-    expect(hint).not.toContain("  m ");
-    expect(hint).not.toContain("   ");
+    expect(hint).not.toContainEqual({ keys: "m", label: "mode" });
+    expect(hint).toContainEqual({ keys: "w", label: "wrap" });
+    expect(hint).toContainEqual({ keys: "/", label: "search" });
+    // Removing a pair leaves neither a fragment nor a doubled separator.
+    const text = plainHint(hint);
+    expect(text).not.toContain("mode");
+    expect(text).not.toContain("\u00b7 \u00b7");
+    expect(text).not.toContain("  ");
   });
 
   it("keeps it when the file can render markdown, or when applicability is unknown", () => {
-    expect(getFooterHint("normal", "viewer", { markdownApplicable: true })).toContain("m mode");
-    expect(getFooterHint("normal", "viewer")).toContain("m mode");
+    expect(getFooterHint("normal", "viewer", { markdownApplicable: true })).toContainEqual({
+      keys: "m",
+      label: "mode",
+    });
+    expect(getFooterHint("normal", "viewer")).toContainEqual({ keys: "m", label: "mode" });
     // Other focuses and modes are unaffected either way.
     expect(getFooterHint("normal", "files", { markdownApplicable: false })).toBe(FOCUS_HINTS.files);
     expect(getFooterHint("filter", "viewer", { markdownApplicable: false })).toBe(MODE_HINTS.filter);
@@ -295,20 +304,58 @@ describe("getFooterHint", () => {
     expect(getFooterHint("filter", "files")).toBe(MODE_HINTS.filter);
     expect(getFooterHint("search", "viewer")).toBe(MODE_HINTS.search);
   });
+
+  it("hint tables are typed keys/label pairs carrying the same items (Issue #137 §1)", () => {
+    expect(FOCUS_HINTS.files[0]).toEqual({ keys: "j k", label: "move" });
+    // Label-less items gained the minimal action label.
+    expect(FOCUS_HINTS.files).toContainEqual({ keys: "g G Home/End", label: "jump" });
+    expect(FOCUS_HINTS.files).toContainEqual({ keys: "Tab", label: "pane" });
+    expect(FOCUS_HINTS.viewer).toContainEqual({ keys: "Ctrl+d/u PgUp/PgDn", label: "page" });
+    // Split items keep their keys on the left and action on the right.
+    expect(FOCUS_HINTS.git).toContainEqual({ keys: "Enter", label: "open/diff" });
+    expect(MODE_HINTS.search).toContainEqual({ keys: "type", label: "to search" });
+    expect(MODE_HINTS.filter).toContainEqual({ keys: "type", label: "to filter" });
+    expect(MODE_HINTS.help).toContainEqual({ keys: "q Esc ?", label: "close help" });
+    for (const pairs of Object.values(FOCUS_HINTS)) {
+      for (const pair of pairs) {
+        expect(pair.keys).toBe(pair.keys.trim());
+        expect(pair.label).toBe(pair.label.trim());
+        expect(pair.label.length).toBeGreaterThan(0);
+      }
+    }
+  });
+});
+
+describe("plainHint (Issue #137 §1)", () => {
+  it("joins `keys label` pairs with ' · ' for placeholder text", () => {
+    const pairs: HintPair[] = [
+      { keys: "type", label: "to search" },
+      { keys: "Esc", label: "clear" },
+    ];
+    expect(plainHint(pairs)).toBe("type to search \u00b7 Esc clear");
+    expect(plainHint([])).toBe("");
+    expect(plainHint(MODE_HINTS.help)).toBe(
+      "j k scroll \u00b7 PgUp/PgDn page \u00b7 Home/End top/bottom \u00b7 q Esc ? close help",
+    );
+  });
 });
 
 describe("buildTitleRow", () => {
-  it("renders branch + counters at innerW 98 and fits the width", () => {
+  it("renders the subtitle row (path + branch/counters) at innerW 98 and fits the width", () => {
     const row = buildTitleRow(98, {
       theme: identityTheme,
       cwd: "/work/repo",
       home: "/home/u",
       git: gitState({ ahead: 2, behind: 1, unstaged: [{ relPath: "a.ts", code: "M" }, { relPath: "b.ts", code: "M" }, { relPath: "c.ts", code: "M" }] }),
     });
+    expect(row).toContain("/work/repo");
     expect(row).toContain("main");
     expect(row).toContain("\u21912");
     expect(row).toContain("\u21931");
     expect(row).toContain("3 changed");
+    // Issue #137 §2: the product name moved to the top-border pill; the
+    // subtitle row must not repeat it.
+    expect(row).not.toContain("pi-navigator");
     expect(visibleWidth(row)).toBeLessThanOrEqual(98);
   });
 
@@ -325,22 +372,25 @@ describe("buildTitleRow", () => {
   });
 });
 
-describe("fitHint (Issue #135 L4)", () => {
-  const items = FOCUS_HINTS.files.split("  ");
+describe("fitHint (Issue #135 L4, pair-aware since #137)", () => {
+  const pairs = FOCUS_HINTS.files;
 
-  it("returns the hint unchanged when it fits", () => {
-    expect(fitHint(FOCUS_HINTS.files, 200)).toBe(FOCUS_HINTS.files);
+  it("returns the pairs unchanged when they fit", () => {
+    expect(fitHint(pairs, 200)).toBe(pairs);
   });
 
-  it("keeps only whole items, never a fragment", () => {
-    const fitted = fitHint(FOCUS_HINTS.files, 30);
-    expect(visibleWidth(fitted)).toBeLessThanOrEqual(30);
-    expect(fitted).not.toBe("");
-    for (const item of fitted.split("  ")) expect(items).toContain(item);
+  it("keeps only whole trailing pairs, never a fragment", () => {
+    const fitted = fitHint(pairs, 30);
+    expect(visibleWidth(plainHint(fitted))).toBeLessThanOrEqual(30);
+    expect(fitted.length).toBeGreaterThan(0);
+    for (const pair of fitted) expect(pairs).toContain(pair);
+    // The pair's two cells always travel together.
+    expect(fitted[0]).toEqual({ keys: "j k", label: "move" });
   });
 
-  it("returns an empty string when not even the first item fits", () => {
-    expect(fitHint(FOCUS_HINTS.files, 3)).toBe("");
+  it("returns an empty list when not even the first pair fits", () => {
+    expect(fitHint(pairs, 3)).toEqual([]);
+    expect(fitHint(pairs, 0)).toEqual([]);
   });
 });
 
@@ -357,7 +407,7 @@ describe("buildFooterRow", () => {
     expect(visibleWidth(row)).toBeLessThanOrEqual(98);
   });
 
-  it("drops whole hint items at 80 columns rather than cutting one mid-phrase (Issue #135 L4)", () => {
+  it("drops whole trailing pairs at 80 columns rather than cutting one mid-phrase (Issue #135 L4, #137 §1)", () => {
     // innerW 78 is an 80-column terminal. Before the fit, joinLeftRight cut the
     // hint mid-item to make room for the pane labels. The identity theme is
     // required here: toneTheme's "channel:text" tags count as visible width, so
@@ -367,13 +417,56 @@ describe("buildFooterRow", () => {
     // The pane labels keep their place on the right...
     expect(row).toContain("files");
     expect(row).toContain("viewer");
-    // ...and no hint item appears in fragment form.
-    expect(row).not.toContain("q clos");
+    // ...the pairs that fit stay whole...
+    expect(row).toContain("Tab pane");
+    // ...and the first pair that does not fit takes the tail with it.
+    expect(row).not.toContain("/ filter");
+    expect(row).not.toContain("q close");
   });
 
-  it("keeps the hint intact when it fits (no change at 100 columns)", () => {
-    const row = buildFooterRow(98, { theme: identityTheme, mode: "normal", focus: "files", notice: null });
-    expect(row).toContain(FOCUS_HINTS.files);
+  it("keeps the pairs intact when they fit (innerW 119) and sheds them whole at 98", () => {
+    // The typed pairs render a few cells wider than the old two-space items,
+    // and the close pair now bakes in the default cancel key (#137 §5):
+    // the full files hint fits at innerW 119 but not at innerW 98, where it
+    // sheds trailing pairs as units.
+    const wide = buildFooterRow(119, { theme: identityTheme, mode: "normal", focus: "files", notice: null });
+    expect(wide).toContain(plainHint(FOCUS_HINTS.files));
+    const hundred = buildFooterRow(98, { theme: identityTheme, mode: "normal", focus: "files", notice: null });
+    expect(hundred).toContain(". hidden");
+    expect(hundred).not.toContain("? help");
+    expect(visibleWidth(hundred)).toBeLessThanOrEqual(98);
+  });
+
+  it("advertises the default cancel key in the close pair of every focus table (Issue #137 §5)", () => {
+    // `Esc` is baked into the tables — the default cancel binding, matching
+    // help.ts — so a rendered footer shows `q Esc close` when the pair fits.
+    for (const focus of ["files", "git", "viewer"] as const) {
+      expect(FOCUS_HINTS[focus]).toContainEqual({ keys: "q Esc", label: "close" });
+    }
+    const row = buildFooterRow(120, { theme: identityTheme, mode: "normal", focus: "files", notice: null });
+    expect(row).toContain("q Esc close");
+    // The help-mode hint keeps its own close wording.
+    const help = buildFooterRow(120, { theme: identityTheme, mode: "help", focus: "files", notice: null });
+    expect(help).toContain("q Esc ? close help");
+  });
+
+  it("counts the baked-in `Esc` in the close pair's budget, dropping the pair whole when it no longer fits (Issue #137 §5)", () => {
+    // "j k move · q close" is 18 cells and fits a budget of 18; the same
+    // pairs with the baked-in key are "j k move · q Esc close" — 22 — and
+    // the pair leaves whole rather than being cut mid-phrase.
+    const plain = [
+      { keys: "j k", label: "move" },
+      { keys: "q", label: "close" },
+    ];
+    expect(visibleWidth(plainHint(plain))).toBe(18);
+    expect(fitHint(plain, 18)).toEqual(plain);
+    const baked = [
+      { keys: "j k", label: "move" },
+      { keys: "q Esc", label: "close" },
+    ];
+    expect(visibleWidth(plainHint(baked))).toBe(22);
+    expect(fitHint(baked, 18)).toEqual([{ keys: "j k", label: "move" }]);
+    expect(fitHint(baked, 22)).toEqual(baked);
   });
 
   it("labels the panes and accents the focused one via the theme", () => {
@@ -387,7 +480,7 @@ describe("buildFooterRow", () => {
     expect(row).toContain("dim:files");
     expect(row).toContain("dim:viewer");
     // joinLeftRight guarantees the right side (pane labels) and truncates the
-    // left (the 84-cell git hint cannot fit at innerW 98 next to the labels),
+    // left (the full git hint cannot fit at innerW 98 next to the labels),
     // so the contract is width-safety plus an intact pane-label segment — not
     // the untruncated hint.
     expect(row).toContain("dim:files  accent:git  dim:viewer");
@@ -408,5 +501,41 @@ describe("buildFooterRow", () => {
     expect(gitViewer).toContain("accent:git  dim:viewer");
     expect(gitViewer).not.toContain("files");
     expect(visibleWidth(gitViewer)).toBeLessThanOrEqual(120);
+  });
+});
+
+describe("buildTopBorder (Issue #137 §2)", () => {
+  it("exports the shared rounded corner set for every bordered surface", () => {
+    expect(FRAME_CORNERS).toEqual({ tl: "\u256d", tr: "\u256e", bl: "\u2570", br: "\u256f" });
+  });
+
+  it("draws the title pill in the top border with a total width of innerW + 2", () => {
+    const row = buildTopBorder(98, { theme: identityTheme, title: "pi-navigator" });
+    expect(row.startsWith("\u256d\u2500\u2500")).toBe(true);
+    expect(row).toContain(" pi-navigator ");
+    expect(row.endsWith("\u256e")).toBe(true);
+    expect(visibleWidth(row)).toBe(100);
+    // fill = innerW - 2 - visibleWidth(" pi-navigator ")
+    expect(row).toBe("\u256d\u2500\u2500 pi-navigator " + "\u2500".repeat(98 - 2 - 14) + "\u256e");
+  });
+
+  it("degrades to a plain rounded border when the pill cannot fit (fill < 1)", () => {
+    const row = buildTopBorder(12, { theme: identityTheme, title: "pi-navigator" });
+    expect(row).toBe("\u256d" + "\u2500".repeat(12) + "\u256e");
+    expect(row).not.toContain("pi-navigator");
+    // The smallest pill: fill === 1 at innerW 17.
+    const tight = buildTopBorder(17, { theme: identityTheme, title: "pi-navigator" });
+    expect(tight).toBe("\u256d\u2500\u2500 pi-navigator \u2500\u256e");
+    expect(visibleWidth(tight)).toBe(19);
+  });
+
+  it("measures the pill with visibleWidth (wide characters never overflow) and styles through the theme", () => {
+    const wide = buildTopBorder(20, { theme: identityTheme, title: "\u65e5\u672c\u8a9e" });
+    expect(visibleWidth(wide)).toBe(22); // not `.length`: 3 chars are 6 cells.
+    const row = buildTopBorder(40, { theme: identityTheme, title: "pi-navigator" });
+    expect(visibleWidth(row)).toBe(42);
+    const styled = buildTopBorder(40, { theme: toneTheme, title: "pi-navigator" });
+    expect(styled).toContain("accent: pi-navigator ");
+    expect(styled).not.toContain("\x1b");
   });
 });

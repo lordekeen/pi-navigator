@@ -16,7 +16,7 @@ import type { NavigatorTheme } from "./theme";
 import type { Focus, SearchMatch, ViewerFile } from "./types";
 import { NATIVE_IMAGE_MIME } from "./constants";
 import { formatSize, hardTruncate, isMarkdownPath, extOf, sliceStyled, type DisplayRow } from "./viewer";
-import { isImageLine, joinLeftRight, MODE_HINTS, padTo, shortPath, truncateAndWidth } from "./frame";
+import { FRAME_CORNERS, isImageLine, joinLeftRight, MODE_HINTS, padTo, plainHint, shortPath, truncateAndWidth } from "./frame";
 
 /** Markdown files get an alternative rendered view (Issue #053). */
 export function canRenderMarkdown(file: ViewerFile | null): boolean {
@@ -98,6 +98,11 @@ export interface ViewerPaneView {
   digits: number;
   /** Already-clamped vertical scroll offset (all content branches). */
   viewScroll: number;
+  /** Viewport readout for the header (Issue #137 §3): `null` unless the
+   *  text-like content overflows the pane (`total > contentArea`); card,
+   *  loading, empty and image-card branches never set it. `end` is the last
+   *  visible row (1-based, inclusive). */
+  scrollInfo: { start: number; end: number; total: number } | null;
   /** Word-wrap flag (header meta). */
   wrap: boolean;
   /** Horizontal scroll offset (header meta). */
@@ -245,6 +250,13 @@ export function buildViewerHeader(view: ViewerPaneView, rightW: number): string 
     if (!view.renderMarkdown && view.wrap) meta.push("wrap");
     if (view.hscroll > 0) meta.push(`col ${view.hscroll + 1}`);
     if (view.loading) meta.push("loading\u2026");
+    // Issue #137 §3: the position readout is the last meta item, plain
+    // numbers with an en dash and no thousands separators. The meta block
+    // below renders as one dim `·`-joined span — no separate styling here.
+    if (view.scrollInfo) {
+      const { start, end, total } = view.scrollInfo;
+      meta.push(`showing ${start}\u2013${end} of ${total}`);
+    }
   } else if (view.loading && currentPath !== "(no file)") {
     meta.push("loading\u2026");
   }
@@ -275,7 +287,7 @@ export function buildInputBar(query: string, placeholder: string, info: string |
 export function buildSearchBar(view: ViewerPaneView, rightW: number): string {
   return buildInputBar(
     view.searchQuery,
-    MODE_HINTS.search,
+    plainHint(MODE_HINTS.search),
     view.searchQuery
       ? `${view.searchMatches.length === 0 ? 0 : view.searchIndex + 1}/${view.searchMatches.length} matches`
       : null,
@@ -291,7 +303,7 @@ export interface FilterBarView extends InputBarView {
 
 /** Filter bar: drawn in the footer row area while filtering. */
 export function buildFilterBar(width: number, view: FilterBarView): string {
-  return buildInputBar(view.filterQuery, MODE_HINTS.filter, view.filterQuery ? `${view.matchCount} matches` : null, width, view);
+  return buildInputBar(view.filterQuery, plainHint(MODE_HINTS.filter), view.filterQuery ? `${view.matchCount} matches` : null, width, view);
 }
 
 export function buildCard(file: ViewerFile, rightW: number, area: number, view: ViewerPaneView): string[] {
@@ -318,7 +330,7 @@ export function buildCard(file: ViewerFile, rightW: number, area: number, view: 
   const borderRow = (left: string, fill: string, right: string) =>
     blank(T.frame(left + fill.repeat(Math.max(0, boxW - 2)) + right));
   for (let i = 0; i < topPad; i++) out.push(blank(""));
-  out.push(borderRow("\u250c", "\u2500", "\u2510"));
+  out.push(borderRow(FRAME_CORNERS.tl, "\u2500", FRAME_CORNERS.tr));
   // Interior = 1 space + " title " + padding = contentWidth, so the title row
   // is exactly as wide as the border rows (boxW = contentWidth + 2).
   const titlePad = Math.max(0, contentWidth - visibleWidth(title) - 3);
@@ -332,7 +344,7 @@ export function buildCard(file: ViewerFile, rightW: number, area: number, view: 
       blank(T.frame("\u2502") + " " + T.muted(cell.text) + " ".repeat(Math.max(0, contentWidth - 1 - cell.width)) + T.frame("\u2502")),
     );
   }
-  out.push(borderRow("\u2514", "\u2500", "\u2518"));
+  out.push(borderRow(FRAME_CORNERS.bl, "\u2500", FRAME_CORNERS.br));
   while (out.length < area) out.push(padTo("", rightW));
   return out.slice(0, area).map((row) => padTo(row, rightW));
 }

@@ -38,8 +38,10 @@ import {
   bodyRows,
   buildFooterRow,
   buildTitleRow,
+  buildTopBorder,
   cycleFocus,
   filesArea,
+  FRAME_CORNERS,
   gitArea,
   initialFocus,
   layoutPanes,
@@ -295,6 +297,23 @@ export class NavigatorOverlay implements Focusable {
   private imageAsCard = false;
   /** Pane snapshot recorded by the last layout pass (pure bookkeeping, §7.5). */
   private lastViewerLayout: { cols: number; rows: number } | null = null;
+  /**
+   * Viewer scrollbar window recorded by buildRightRows during a render pass
+   * (Issue #137 §4): the frame's right border column draws the track/thumb
+   * from this record so the thumb cannot drift from the clamp applied to
+   * `viewScroll`. Transient — recomputed on every pass, never cached, so
+   * `invalidate()` has nothing to clear for it.
+   */
+  private viewerScrollWindow: {
+    /** Body-relative index of the first scrollable content row. */
+    rowOffset: number;
+    /** Scrollable content rows drawn (the viewer window height). */
+    count: number;
+    /** The clamped scroll offset the content was drawn at. */
+    scroll: number;
+    /** Total content rows (rendered-markdown lines or wrapped display rows). */
+    total: number;
+  } | null = null;
   /** Debounced re-render timer (D10); cleared by dispose(). */
   private reflowTimer: ReturnType<typeof setTimeout> | null = null;
   /** Fingerprint of the last installed support (setImageSupport upgrade detection). */
@@ -1350,9 +1369,9 @@ export class NavigatorOverlay implements Focusable {
       const notice = (text: string) =>
         padTo(T.frame("\u2502") + padTo(text, barW) + T.frame("\u2502"), width);
       const lines = [
-        padTo(T.frame("\u250c" + "\u2500".repeat(barW) + "\u2510"), width),
+        padTo(T.frame(FRAME_CORNERS.tl + "\u2500".repeat(barW) + FRAME_CORNERS.tr), width),
         notice(T.warning(" terminal too small for pi-navigator - resize, or press Esc ")),
-        padTo(T.frame("\u2514" + "\u2500".repeat(barW) + "\u2518"), width),
+        padTo(T.frame(FRAME_CORNERS.bl + "\u2500".repeat(barW) + FRAME_CORNERS.br), width),
       ];
       this.cachedWidth = width;
       this.cachedLines = lines;
@@ -1373,7 +1392,9 @@ export class NavigatorOverlay implements Focusable {
     this.maybeScheduleResizeReflow();
 
     const lines: string[] = [];
-    lines.push(T.frame("\u250c" + "\u2500".repeat(innerW) + "\u2510"));
+    // Issue #137 §2: the top border carries the product-name pill; the row
+    // below is the subtitle (path + git), not a second title.
+    lines.push(buildTopBorder(innerW, { theme: T, title: "pi-navigator" }));
     lines.push(
       T.frame("\u2502") +
         buildTitleRow(innerW, { theme: T, cwd: this.cwd, git: this.git, home: this.home }) +
@@ -1381,17 +1402,37 @@ export class NavigatorOverlay implements Focusable {
     );
     lines.push(T.frame("\u251c" + "\u2500".repeat(innerW) + "\u2524"));
 
+    // Issue #137 §4: the frame's right border column doubles as the viewer
+    // scrollbar while the text-like content overflows. Display-only — no
+    // timers, no fade, no mouse handling — and hidden while the help modal is
+    // open (it composes over the body). The window was recorded by
+    // buildRightRows above, so the thumb cannot drift from the clamp.
+    const scrollWindow = this.mode === "help" ? null : this.viewerScrollWindow;
+    const rightBorder = (i: number): string => {
+      if (!scrollWindow) return T.frame("\u2502");
+      const rel = i - scrollWindow.rowOffset;
+      if (rel < 0 || rel >= scrollWindow.count) return T.frame("\u2502");
+      const thumbH = Math.max(1, Math.round((scrollWindow.count * scrollWindow.count) / scrollWindow.total));
+      const thumbStart = Math.round(
+        (scrollWindow.scroll / Math.max(1, scrollWindow.total - scrollWindow.count)) *
+          (scrollWindow.count - thumbH),
+      );
+      return rel >= thumbStart && rel < thumbStart + thumbH
+        ? T.scrollbarThumb("\u2588")
+        : T.scrollbarTrack("\u2502");
+    };
+
     for (let i = 0; i < body; i++) {
       if (!leftRows) {
-        lines.push(T.frame("\u2502") + rightRows[i] + T.frame("\u2502"));
+        lines.push(T.frame("\u2502") + rightRows[i] + rightBorder(i));
         continue;
       }
       if (showSeparator && i === filesH) {
         lines.push(
-          T.frame("\u251c") + T.frame("\u2500".repeat(leftW)) + T.frame("\u2524") + rightRows[i] + T.frame("\u2502"),
+          T.frame("\u251c") + T.frame("\u2500".repeat(leftW)) + T.frame("\u2524") + rightRows[i] + rightBorder(i),
         );
       } else {
-        lines.push(T.frame("\u2502") + leftRows[i] + T.frame("\u2502") + rightRows[i] + T.frame("\u2502"));
+        lines.push(T.frame("\u2502") + leftRows[i] + T.frame("\u2502") + rightRows[i] + rightBorder(i));
       }
     }
 
@@ -1416,7 +1457,7 @@ export class NavigatorOverlay implements Focusable {
             markdownApplicable: canRenderMarkdown(this.viewFile),
           });
     lines.push(T.frame("\u2502") + footerRow + T.frame("\u2502"));
-    lines.push(T.frame("\u2514" + "\u2500".repeat(innerW) + "\u2518"));
+    lines.push(T.frame(FRAME_CORNERS.bl + "\u2500".repeat(innerW) + FRAME_CORNERS.br));
 
     if (this.mode === "help") {
       // Same limit the input handler clamps against, written back so the
@@ -1576,6 +1617,10 @@ export class NavigatorOverlay implements Focusable {
     let mdContent: Array<string | null> | null = null;
     let display: DisplayRow[] | null = null;
     let imageLines: string[] | null = null;
+    // Issue #137 §4: the scrollbar window is recomputed every render pass;
+    // reset first so a branch that stops overflowing cannot leave the last
+    // frame's thumb behind.
+    this.viewerScrollWindow = null;
 
     if (file) {
       const renderedImage =
@@ -1602,7 +1647,7 @@ export class NavigatorOverlay implements Focusable {
         }
         imageLines = imageRows;
       } else if (!isCard) {
-        const { contentArea } = paneContentArea(area, file, this.diskChanged);
+        const { noticeRows, contentArea } = paneContentArea(area, file, this.diskChanged);
 
         if (useRendered && mdLines) {
           if (this.searchJump && this.searchMatches.length > 0) {
@@ -1613,6 +1658,13 @@ export class NavigatorOverlay implements Focusable {
             this.searchJump = false;
           }
           this.viewScroll = Math.max(0, Math.min(this.viewScroll, Math.max(0, mdLines.length - contentArea)));
+          // Issue #137 §3/§4: the same clamp that positions the content also
+          // positions the header readout and the border scrollbar; a window
+          // that fits (`total <= count`) has neither.
+          this.viewerScrollWindow =
+            mdLines.length > contentArea
+              ? { rowOffset: 1 + noticeRows, count: contentArea, scroll: this.viewScroll, total: mdLines.length }
+              : null;
 
           const currentMatch =
             this.searchMatches.length > 0
@@ -1661,6 +1713,10 @@ export class NavigatorOverlay implements Focusable {
             this.searchJump = false;
           }
           this.viewScroll = Math.max(0, Math.min(this.viewScroll, Math.max(0, display.length - contentArea)));
+          this.viewerScrollWindow =
+            display.length > contentArea
+              ? { rowOffset: 1 + noticeRows, count: contentArea, scroll: this.viewScroll, total: display.length }
+              : null;
         }
       }
     }
@@ -1682,6 +1738,18 @@ export class NavigatorOverlay implements Focusable {
       display,
       digits,
       viewScroll: this.viewScroll,
+      // Issue #137 §3: computed from the same clamped window the body rows
+      // were drawn at, so the readout cannot disagree with the content.
+      scrollInfo: this.viewerScrollWindow
+        ? {
+            start: this.viewerScrollWindow.scroll + 1,
+            end: Math.min(
+              this.viewerScrollWindow.scroll + this.viewerScrollWindow.count,
+              this.viewerScrollWindow.total,
+            ),
+            total: this.viewerScrollWindow.total,
+          }
+        : null,
       wrap: this.viewWrap,
       // Post-clamp by construction (Issue #065): the text branch above has
       // already clamped this.viewHscroll, so the badge reports the same offset

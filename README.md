@@ -79,13 +79,13 @@ Icons depend on a terminal Nerd Font — without one, glyphs render as placehold
 
 `/navigator <anything else>` warns and shows the help list. `settings` requires the interactive TUI; in other modes it warns and does nothing. `set` needs no UI at all and works in every mode (see [Configuration](#configuration)).
 
-Layout: the left column holds the files tree and the git panel (`files-git-viewer`, the default), the files tree alone (`files-viewer`), or the git panel alone (`git-viewer`); the file viewer sits on the right in every layout, and contextual key hints live in the footer. A layout is chosen when the overlay opens — by the direct command, or by `layout.default`/`PI_NAV_LAYOUT` for bare `/navigator` — and is fixed for that overlay's lifetime; it never switches mid-session and the direct commands never write settings.
+Layout: the left column holds the files tree and the git panel (`files-git-viewer`, the default), the files tree alone (`files-viewer`), or the git panel alone (`git-viewer`); the file viewer sits on the right in every layout, and contextual key hints live in the footer — typed key/label pairs (`dim` keys, `muted` labels, joined by ` · `), with the close pair advertising the cancel key (`q Esc close`). The frame is rounded (`╭ ╮ ╰ ╯`) with the product name in a pill on the top border, the row below is a path/git subtitle, and an overflowing viewer shows a `showing 1–25 of 120` readout in its header plus a proportional scrollbar in the frame's right border. A layout is chosen when the overlay opens — by the direct command, or by `layout.default`/`PI_NAV_LAYOUT` for bare `/navigator` — and is fixed for that overlay's lifetime; it never switches mid-session and the direct commands never write settings.
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│ pi-navigator  ~/project   main ↑2 ↓1   4 changed                     │
+╭── pi-navigator ──────────────────────────────────────────────────────╮
+│ ~/project   main ↑2 ↓1   4 changed                                   │
 │─────────────────┬────────────────────────────────────────────────────│
-│ FILES      12/86│ src/main.ts                          2.1 KB · 44L   │
+│ FILES      12/86│ src/main.ts  2.1 KB · 120L · showing 1–25 of 120   │
 │ ▶ src           │   1 │ // comment                                     │
 │   main.ts   M   │   2 │ import { loadTree } from "./utils";           │
 │   utils.ts  ?   │   3 │                                               │
@@ -96,8 +96,8 @@ Layout: the left column holds the files tree and the git panel (`files-git-viewe
 │ Staged (2)      │                                                     │
 │ History (20)    │                                                     │
 │─────────────────┴────────────────────────────────────────────────────│
-│ j k move  Enter open  Tab pane  / filter  . hidden  ? help   q close │
-└──────────────────────────────────────────────────────────────────────┘
+│ j k move · Enter open · Tab pane · / filter · ? help · q Esc close   │
+╰──────────────────────────────────────────────────────────────────────╯
 ```
 
 ## Keys

@@ -37,7 +37,7 @@ import type { NavigatorLayout } from "../types";
 import type { NavigatorSettings } from "../settings";
 import { openSettingsMenu, type SettingsMenuDeps, type SettingsMenuTheme, type SettingsMenuUi } from "../settings_menu";
 import { DEFAULT_PI_CHAFA_SUBSET, type ImageSupport } from "../images";
-import { makeNavigatorTheme } from "../theme";
+import { makeNavigatorTheme, type NavigatorTheme } from "../theme";
 import { buildTree, entriesFromPaths } from "../tree";
 import type { GitState, ViewerFile } from "../types";
 import type { LoadFileOptions } from "../viewer";
@@ -1137,5 +1137,215 @@ describe("native image render width safety (§12.4)", () => {
     // sequence: the loader is never asked for an image at that size.
     const narrow = overlay.render(MIN_OVERLAY_WIDTH - 1);
     expect(narrow.join("\n")).not.toContain(NATIVE_SEQ);
+  });
+});
+
+// ── E-style chrome (Issue #137): typed hint pairs, title pill, rounded
+// corners, the viewer scrollbar in the right border, and the position readout.
+
+describe("E-style chrome (Issue #137)", () => {
+  const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
+
+  const chromeTheme = makeNavigatorTheme({
+    fg: (_color: string, text: string) => text,
+    bg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+    underline: (text: string) => text,
+    inverse: (text: string) => text,
+  } as never);
+
+  /** Same shape, every fg call tagged so a token's channel is observable. */
+  const toneChromeTheme = makeNavigatorTheme({
+    fg: (color: string, text: string) => `fg:${color}(${text})`,
+    bg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+    underline: (text: string) => text,
+    inverse: (text: string) => text,
+  } as never);
+
+  function chromeOverlay(
+    rows: number,
+    theme: NavigatorTheme = chromeTheme,
+    view: { lines?: string[]; kind?: "text" | "error" | "truncated" } = {},
+  ): NavigatorOverlay {
+    const lines = view.lines ?? ["alpha", "beta", "gamma"];
+    const kind = view.kind ?? "text";
+    const overlay = new NavigatorOverlay({
+      cwd: "/work/repo",
+      theme,
+      getTerminalRows: () => rows,
+      requestRender: () => undefined,
+      onClose: () => undefined,
+      loadFile: async (relPath: string): Promise<ViewerFile> => {
+        if (kind === "text") {
+          return { kind, relPath, sizeBytes: 4096, lineCount: lines.length, lines: [...lines] };
+        }
+        if (kind === "truncated") {
+          return {
+            kind,
+            relPath,
+            sizeBytes: 4096,
+            lineCount: lines.length,
+            lines: [...lines],
+            notice: "showing the first 100 lines",
+          };
+        }
+        return { kind, relPath, lines: [], message: "cannot read file (deleted or permission denied)" };
+      },
+      refresh: () => undefined,
+    });
+    overlay.setTree(buildTree("/work/repo", entriesFromPaths(["a.ts"]), new Map()), "git");
+    overlay.setGitState({
+      available: true,
+      branch: "main",
+      detached: false,
+      ahead: 0,
+      behind: 0,
+      unstaged: [],
+      staged: [],
+      history: [],
+      refreshedAt: 0,
+    });
+    return overlay;
+  }
+
+  /** A 100-line file: at 36 rows the viewer window is 24 rows, so it overflows. */
+  const longFile = { lines: Array.from({ length: 100 }, (_, i) => `line ${i}`) };
+
+  it("rounds the outer frame and the refusal notice corners (Issue #137 §2)", () => {
+    const overlay = chromeOverlay(36);
+    const lines = overlay.render(120);
+    expect(stripAnsi(lines[0]!)).toMatch(/^\u256d\u2500\u2500 pi-navigator .*\u256e$/);
+    expect(stripAnsi(lines[lines.length - 1]!)).toBe("\u2570" + "\u2500".repeat(118) + "\u256f");
+
+    const refusal = chromeOverlay(MIN_OVERLAY_HEIGHT - 1);
+    const notice = refusal.render(120).map(stripAnsi);
+    expect(notice[0]).toBe("\u256d" + "\u2500".repeat(118) + "\u256e");
+    expect(notice[notice.length - 1]).toBe("\u2570" + "\u2500".repeat(118) + "\u256f");
+    expect(notice.join("\n")).toContain("terminal too small");
+  });
+
+  it("draws the product-name pill in the top border and keeps it out of the subtitle row (Issue #137 §2)", () => {
+    const overlay = chromeOverlay(36);
+    const lines = overlay.render(120);
+    const top = stripAnsi(lines[0]!);
+    // fill = innerW - 2 - visibleWidth(" pi-navigator ") = 118 - 2 - 14 = 102.
+    expect(top).toBe("\u256d\u2500\u2500 pi-navigator " + "\u2500".repeat(102) + "\u256e");
+    expect(visibleWidth(lines[0]!)).toBe(120);
+    const subtitle = stripAnsi(lines[1]!);
+    expect(subtitle).toContain("/work/repo");
+    expect(subtitle).toContain("main");
+    expect(subtitle).not.toContain("pi-navigator");
+  });
+
+  it("rounds the help modal corners (Issue #137 §2)", () => {
+    const overlay = chromeOverlay(36);
+    overlay.handleInput("?");
+    const body = overlay.render(120).map(stripAnsi).slice(3, -3);
+    expect(body.some((line) => line.includes("\u256d"))).toBe(true);
+    expect(body.some((line) => line.includes("\u2570"))).toBe(true);
+  });
+
+  it("rounds the metadata-card corners (Issue #137 §2)", async () => {
+    const overlay = chromeOverlay(36, chromeTheme, { kind: "error" });
+    await overlay.openRelPath("a.ts");
+    const body = overlay.render(120).map(stripAnsi).slice(3, -3);
+    expect(body.some((line) => line.includes("\u256d"))).toBe(true);
+    expect(body.some((line) => line.includes("\u2570"))).toBe(true);
+    expect(body.join("\n")).toContain("Cannot read");
+  });
+
+  it("shows the position readout only on overflow, with the clamped numbers (Issue #137 §3)", async () => {
+    const overlay = chromeOverlay(36, chromeTheme, longFile);
+    await overlay.openRelPath("a.ts");
+    expect(stripAnsi(overlay.render(120).join("\n"))).toContain("showing 1\u201324 of 100");
+    overlay.handleInput(KEYS.tab); // files -> git
+    overlay.handleInput(KEYS.tab); // git -> viewer
+    overlay.handleInput(KEYS.down);
+    expect(stripAnsi(overlay.render(120).join("\n"))).toContain("showing 2\u201325 of 100");
+    overlay.handleInput("G"); // bottom: clamped to total - count = 76
+    expect(stripAnsi(overlay.render(120).join("\n"))).toContain("showing 77\u2013100 of 100");
+
+    const short = chromeOverlay(36);
+    await short.openRelPath("a.ts");
+    expect(stripAnsi(short.render(120).join("\n"))).not.toContain("showing ");
+  });
+
+  it("draws a proportional scrollbar thumb on the viewer's right border (Issue #137 §4)", async () => {
+    const overlay = chromeOverlay(36, chromeTheme, longFile);
+    await overlay.openRelPath("a.ts");
+    // count = 24 content rows, total = 100 → thumbH = round(24²/100) = 6,
+    // thumbStart = 0 at the top; content rows are body rows 1..24 = lines[4..27].
+    let lines = overlay.render(120).map(stripAnsi);
+    expect(lines.slice(4, 10).every((line) => line.endsWith("\u2588"))).toBe(true);
+    expect(lines.slice(10, 28).some((line) => line.endsWith("\u2588"))).toBe(false);
+
+    overlay.handleInput(KEYS.tab);
+    overlay.handleInput(KEYS.tab);
+    overlay.handleInput("G");
+    lines = overlay.render(120).map(stripAnsi);
+    // At the bottom (scroll 76): thumbStart = round(76/76 * 18) = 18, so the
+    // last six content rows (lines[22..27]) carry the thumb.
+    const thumbRows = lines.map((line, i) => (line.endsWith("\u2588") ? i : -1)).filter((i) => i >= 0);
+    expect(thumbRows).toEqual([22, 23, 24, 25, 26, 27]);
+  });
+
+  it("suppresses the scrollbar when nothing overflows, for cards, and while help is open (Issue #137 §4)", async () => {
+    const noThumb = (overlay: NavigatorOverlay): boolean =>
+      overlay.render(120).every((line) => !stripAnsi(line).includes("\u2588"));
+
+    const short = chromeOverlay(36);
+    await short.openRelPath("a.ts");
+    expect(noThumb(short)).toBe(true); // total 3 ≤ count 24
+
+    const card = chromeOverlay(36, chromeTheme, { kind: "error" });
+    await card.openRelPath("a.ts");
+    expect(noThumb(card)).toBe(true); // non-text branch
+
+    const overflowing = chromeOverlay(36, chromeTheme, longFile);
+    await overflowing.openRelPath("a.ts");
+    expect(noThumb(overflowing)).toBe(false);
+    overflowing.handleInput("?");
+    expect(noThumb(overflowing)).toBe(true); // modal open
+  });
+
+  it("starts the scrollbar after the notice rows, not on the viewer header (Issue #137 §4)", async () => {
+    // A truncated file: one notice row above the content, so the content rows
+    // are body rows 2..24 (lines[5..27]) and count is 23, not 24.
+    const overlay = chromeOverlay(36, chromeTheme, { ...longFile, kind: "truncated" });
+    await overlay.openRelPath("a.ts");
+    const lines = overlay.render(120).map(stripAnsi);
+    expect(lines[4]).toContain("showing the first 100 lines");
+    expect(lines[4]!.endsWith("\u2588")).toBe(false); // notice row is not a track row
+    // thumbH = max(1, round(23²/100)) = 5, thumbStart = 0 → the first five
+    // content rows (lines[5..9]) carry the thumb.
+    expect(lines.slice(5, 10).every((line) => line.endsWith("\u2588"))).toBe(true);
+    expect(lines[10]!.includes("\u2588")).toBe(false);
+    expect(lines.join("\n")).toContain("showing 1\u201323 of 100");
+  });
+
+  it("styles the track and the thumb through the scrollbar theme tokens (Issue #137 §4)", async () => {
+    const overlay = chromeOverlay(36, toneChromeTheme, longFile);
+    await overlay.openRelPath("a.ts");
+    const joined = overlay.render(120).join("\n");
+    expect(joined).toContain("fg:scrollbarTrack(\u2502)");
+    expect(joined).toContain("fg:scrollbarThumb(\u2588)");
+  });
+
+  it("advertises the default cancel key on the real overlay's close hint (Issue #137 §5)", () => {
+    const overlay = chromeOverlay(36);
+    // Rendered wide so the close pair survives fitHint; frame.test.ts pins
+    // the composition of the baked-in pair.
+    const lines = overlay.render(200);
+    const footer = stripAnsi(lines[lines.length - 2]!);
+    expect(footer).toContain("q Esc close");
+  });
+
+  it("stays width-safe with the new chrome at 120/100/80 and in the narrow refusal (Issue #137)", async () => {
+    const overlay = chromeOverlay(36, chromeTheme, longFile);
+    await overlay.openRelPath("a.ts");
+    for (const width of [120, 100, 80]) expectWidthSafe(overlay, width);
+    const refusal = chromeOverlay(MIN_OVERLAY_HEIGHT - 1);
+    for (const width of [120, MIN_OVERLAY_WIDTH - 1]) expectWidthSafe(refusal, width);
   });
 });

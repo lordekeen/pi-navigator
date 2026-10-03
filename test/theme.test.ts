@@ -48,6 +48,8 @@ const TOKEN_MAP: Record<keyof NavigatorTheme, string> = {
   searchMatch: "bg:searchMatchBg(fg:searchMatchText(<x>))",
   searchCurrent: "underline(bg:searchMatchBg(fg:searchMatchText(<x>)))",
   frame: "fg:borderMuted(<x>)",
+  scrollbarTrack: "fg:scrollbarTrack(<x>)",
+  scrollbarThumb: "fg:scrollbarThumb(<x>)",
   diffAdded: "fg:toolDiffAdded(<x>)",
   diffRemoved: "fg:toolDiffRemoved(<x>)",
   diffContext: "fg:toolDiffContext(<x>)",

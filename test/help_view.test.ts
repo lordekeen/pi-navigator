@@ -57,8 +57,8 @@ describe("composeHelp", () => {
     expect(modified).toHaveLength(24);
     expect(modified[0]).toBe(3); // top border row
     expect(modified.at(-1)).toBe(26); // bottom border row
-    expect(lines[3]!.includes("\u250c")).toBe(true);
-    expect(lines[26]!.includes("\u2514")).toBe(true);
+    expect(lines[3]!.includes("\u256d")).toBe(true);
+    expect(lines[26]!.includes("\u2570")).toBe(true);
     for (const row of modified) {
       const lineRow = lines[row]!;
       expect(lineRow.startsWith("\u2502")).toBe(true);

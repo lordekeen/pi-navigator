@@ -189,19 +189,19 @@ Agents must never introduce `fontFamily: sans-serif`/`serif`, `fontSize` in `px`
 
 The overlay is a centered box bounded by `OVERLAY_OPTIONS` (width 90%, min 80, max height 85% — derived from `OVERLAY_HEIGHT_RATIO` in `constants.ts`, anchor center, margin 1 row). `frame.overlayHeight()` uses that same ratio and reserves `OVERLAY_MARGIN_ROWS` top and bottom, so the height the host allocates and the frame the component draws into it cannot drift (Issue #130); it is deliberately free to fall below the frame floor, which is what makes the compact "terminal too small" refusal notice reachable. Inside:
 
-1. **Top border** — `┌─┐`
-2. **Title row** — `pi-navigator` + cwd short path (left) · branch + ahead/behind + changed counters (right)
+1. **Top border** — `╭─╮` with the product name in an accent-bold pill (`╭── pi-navigator ──…╮`, Issue #137 §2)
+2. **Subtitle row** — cwd short path (left) · branch + ahead/behind + changed counters (right); the product name lives in the top-border pill
 3. **Separator** — `├─┤`
 4. **Body** (`overlayHeight - 5` rows) — split into a left column (files + git, ~30% clamped 24–44) and a right column (viewer). Below `LEFT_COLUMN_HIDE_BELOW` (72 inner cols) the left column is hidden and the viewer takes the full width.
-5. **Footer** — context hint (left) · pane labels `files git viewer` with the focused one accented (right)
+5. **Footer** — context hint (left) as typed key/label pairs (`dim` keys, `muted` labels, ` · `-joined; the close pair advertises the default cancel key, `q Esc close`) · pane labels `files git viewer` with the focused one accented (right) (Issue #137 §1/§5)
 
 **Spacing** is cell-granular: `xs` (1px) for inline glyph separation, `sm` (2px) for the gutter/border gap, `md` (4px) for inter-pane separators. There is no large whitespace padding — density is the point. Below `MIN_OVERLAY_WIDTH` (40) or `MIN_OVERLAY_HEIGHT` (13) a compact "terminal too small" notice replaces the frame.
 
-**Shapes:** everything is `rounded: none` — sharp box-drawing corners (`┌ ┐ └ ┘ ├ ┤`). No rounded rectangles; the terminal cell grid has no sub-cell rounding.
+**Shapes:** box-drawing corners are rounded — `╭ ╮ ╰ ╯` are the only curved cells (Issue #137 §2), the junction tees stay sharp (`├ ┤ ┼`). No other rounding; the terminal cell grid has no sub-cell rounding.
 
 ## Elevation & Depth
 
-There is no z-axis shadow or blur in a TUI. "Depth" is expressed through **reverse-video** (the cursor row's `selected-bg` background) and **border containment**: the help modal and binary/image/error cards draw an inset box (`┌ ─ ┐ │ └ ─ ┘`) floating over the body grid. The only "elevated" surfaces are:
+There is no z-axis shadow or blur in a TUI. "Depth" is expressed through **reverse-video** (the cursor row's `selected-bg` background) and **border containment**: the help modal and binary/image/error cards draw an inset box (`╭ ─ ╮ │ ╰ ─ ╯`) floating over the body grid. The only "elevated" surfaces are:
 
 - **Help modal** — centered inset box over the panes, titled `pi-navigator — keys`.
 - **Binary / image / error card** — centered inset box with a styled title and a muted body.
@@ -210,11 +210,11 @@ No drop shadows, no gradients, no opacity. If a new surface needs to feel "on to
 
 ## Shapes
 
-All corners are sharp. Borders are light-box-drawing (`U+2500` series): `┌ ┐ └ ┘` for boxes, `├ ┤` for the title separator and the files/git split, `│` for verticals, `─` for horizontals. Tree markers: `▾`/`▸` for expanded/collapsed dirs, `▶` for the cursor arrow, `↗` for symlinks. The viewer gutter separator is `│`.
+Corners are rounded on every bordered surface — `╭ ╮ ╰ ╯`, the only curved box-drawing cells (Issue #137 §2); junction tees stay sharp. Borders are light-box-drawing (`U+2500` series): `╭ ╮ ╰ ╯` for box corners, `├ ┤ ┼` for junctions, `│` for verticals, `─` for horizontals. Tree markers: `▾`/`▸` for expanded/collapsed dirs, `▶` for the cursor arrow, `↗` for symlinks. The viewer gutter separator is `│`.
 
 ## Components
 
-- **overlay-frame** — the outer bordered box; text color = `frame` (dim).
+- **overlay-frame** — the outer bordered box; text color = `frame`.
 - **pane-header** — `FILES` / `GIT` labels; accented when its pane is focused, muted otherwise.
 - **file-row-cursor** — the selected tree/git row; `selected-bg` background.
 - **file-row-modified / -hidden** — git-modified (warning) and hidden/untracked (dim) file labels.
@@ -223,6 +223,7 @@ All corners are sharp. Borders are light-box-drawing (`U+2500` series): `┌ ┐
 - **viewer-notice** — truncation / changed-on-disk banner, warning.
 - **diff-line-*** (v3) — commit-diff lines via the prefix styler (`styleDiffLines` in `diff.ts`): `+` success, `-` error, `@@` accent, meta muted, context text. The diff summary notice above the content is **dim** (informational), not warning.
 - **search-match / search-current** — in-file hit highlights; current match adds underline.
+- **viewer-scrollbar** — the frame's right border column over the viewer's content rows: track `│` on `scrollbarTrack`, proportional thumb `█` on `scrollbarThumb`; overflow-only, display-only (Issue #137 §4).
 - **help-modal-title / -keys / -desc** — accented title, accented key cell (16-col pad), muted description.
 - **card-title-binary / -error / -image** — card titles by kind; card-body is muted.
 

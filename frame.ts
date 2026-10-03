@@ -218,33 +218,136 @@ export function joinLeftRight(left: string, right: string, width: number): strin
   return padTo(line, width);
 }
 
-export const FOCUS_HINTS: Record<Focus, string> = {
+/**
+ * Rounded corner glyphs shared by every bordered surface (Issue #137 §2).
+ * Horizontal strokes stay `─` and vertical strokes stay `│`; only the four
+ * corner cells are curved. The junction tees (`├ ┤ ┼`) have no curved
+ * counterparts and stay sharp.
+ */
+export const FRAME_CORNERS = {
+  tl: "\u256d",
+  tr: "\u256e",
+  bl: "\u2570",
+  br: "\u256f",
+} as const;
+
+/**
+ * The overlay's top border with the product-name pill (Issue #137 §2):
+ * `╭` + `──` + accent-bold `" title "` + `─`.repeat(fill) + `╮`, so the total
+ * visible width is `innerW + 2` — the mock's E chrome
+ * (`fill = innerW - 2 - visibleWidth(titleWithSpaces)`).
+ *
+ * A frame too narrow for a pill (fill < 1) degrades to a plain rounded
+ * border: a mid-word pill reads as corruption, so the title is dropped whole
+ * rather than cut. Width is measured with `visibleWidth`, never `.length`;
+ * the caller owns the title text.
+ */
+export function buildTopBorder(innerW: number, view: { theme: NavigatorTheme; title: string }): string {
+  const T = view.theme;
+  const titleText = " " + view.title + " ";
+  const fill = innerW - 2 - visibleWidth(titleText);
+  if (fill < 1) return T.frame(FRAME_CORNERS.tl + "\u2500".repeat(innerW) + FRAME_CORNERS.tr);
+  return (
+    T.frame(FRAME_CORNERS.tl + "\u2500\u2500") +
+    T.accent(T.bold(titleText)) +
+    T.frame("\u2500".repeat(fill) + FRAME_CORNERS.tr)
+  );
+}
+
+/**
+ * A footer hint (Issue #137 §1): the keys and the action they perform.
+ * `buildFooterRow` styles a pair `dim(keys) + muted(" " + label)` — pi-main's
+ * keyHint shape — and `plainHint` flattens the same pair for the input-bar
+ * placeholders, so the footer and the placeholders cannot drift apart.
+ */
+export interface HintPair {
+  keys: string;
+  label: string;
+}
+
+export const FOCUS_HINTS: Record<Focus, HintPair[]> = {
   // Width budget: the longest hint plus the pane labels must fit the inner
   // width at a 100-column terminal (98) so the focus indicator never gets
   // truncated off the footer (render test enforces this at 120, 100, 80).
   // Issue #127 added the Home/End and PgUp/PgDn aliases; the footer is a
   // curated subset (the help modal lists every binding), so hints that no
   // longer fit were dropped whole rather than left to truncate mid-phrase.
-  files: "j k move  Enter open  g G Home/End  Tab  / filter  . hidden  ? help  q close",
-  git: "j k move  Enter open/diff  l h family  g G Home/End jump  ? help  q close",
-  viewer: "j k scroll  Ctrl+d/u PgUp/PgDn  w wrap  m mode  / search  ? help  q close",
+  // Issue #137 §1: items are typed pairs; an item that carries no action
+  // word of its own (`g G Home/End`, bare `Tab`) gets the minimal label
+  // naming its effect. Issue #137 §5: the close pair advertises the default
+  // cancel key baked into the tables (`q Esc`), matching help.ts; remaps of
+  // `tui.select.cancel` still close because input goes through
+  // `matchesCancel`.
+  files: [
+    { keys: "j k", label: "move" },
+    { keys: "Enter", label: "open" },
+    { keys: "g G Home/End", label: "jump" },
+    { keys: "Tab", label: "pane" },
+    { keys: "/", label: "filter" },
+    { keys: ".", label: "hidden" },
+    { keys: "?", label: "help" },
+    { keys: "q Esc", label: "close" },
+  ],
+  git: [
+    { keys: "j k", label: "move" },
+    { keys: "Enter", label: "open/diff" },
+    { keys: "l h", label: "family" },
+    { keys: "g G Home/End", label: "jump" },
+    { keys: "?", label: "help" },
+    { keys: "q Esc", label: "close" },
+  ],
+  viewer: [
+    { keys: "j k", label: "scroll" },
+    { keys: "Ctrl+d/u PgUp/PgDn", label: "page" },
+    { keys: "w", label: "wrap" },
+    { keys: "m", label: "mode" },
+    { keys: "/", label: "search" },
+    { keys: "?", label: "help" },
+    { keys: "q Esc", label: "close" },
+  ],
 };
 
-export const MODE_HINTS: Record<Exclude<InputMode, "normal">, string> = {
-  filter: "type to filter  up/down move  Home/End first/last  Enter apply  Esc clear",
-  search: "type to search  up/down match  Enter apply  Esc clear",
-  help: "j k scroll  PgUp/PgDn page  Home/End top/bottom  q Esc ? close help",
+export const MODE_HINTS: Record<Exclude<InputMode, "normal">, HintPair[]> = {
+  filter: [
+    { keys: "type", label: "to filter" },
+    { keys: "up/down", label: "move" },
+    { keys: "Home/End", label: "first/last" },
+    { keys: "Enter", label: "apply" },
+    { keys: "Esc", label: "clear" },
+  ],
+  search: [
+    { keys: "type", label: "to search" },
+    { keys: "up/down", label: "match" },
+    { keys: "Enter", label: "apply" },
+    { keys: "Esc", label: "clear" },
+  ],
+  help: [
+    { keys: "j k", label: "scroll" },
+    { keys: "PgUp/PgDn", label: "page" },
+    { keys: "Home/End", label: "top/bottom" },
+    { keys: "q Esc ?", label: "close help" },
+  ],
 };
 
-/** The viewer hint item that only applies to files that can render as markdown
+/** The viewer hint pair that only applies to files that can render as markdown
  *  (Issue #135 L1); removed from the footer when they cannot. */
-const VIEWER_MARKDOWN_HINT_ITEM = "m mode";
+const VIEWER_MARKDOWN_HINT_PAIR: HintPair = { keys: "m", label: "mode" };
+
+/**
+ * Flatten hint pairs to plain text — `keys + " " + label` joined by `" · "`
+ * (Issue #137 §1). The input-bar placeholders use this so they cannot drift
+ * from the footer tables, and width budgets measure the same text the footer
+ * renders.
+ */
+export function plainHint(pairs: HintPair[]): string {
+  return pairs.map((pair) => `${pair.keys} ${pair.label}`).join(" \u00b7 ");
+}
 
 export function getFooterHint(
   mode: InputMode,
   focus: Focus,
   opts: { markdownApplicable?: boolean | undefined } = {},
-): string {
+): HintPair[] {
   switch (mode) {
     case "help":
       return MODE_HINTS.help;
@@ -255,14 +358,13 @@ export function getFooterHint(
     case "normal": {
       const hint = FOCUS_HINTS[focus];
       // Issue #135 L1: an unavailable action is not advertised. For a file that
-      // cannot render as markdown the `m` key is inert, so its item leaves the
-      // hint rather than promising a toggle that will not happen. The items are
-      // "  "-separated, so removing one cannot leave a fragment behind.
+      // cannot render as markdown the `m` key is inert, so its pair leaves the
+      // hint rather than promising a toggle that will not happen. Whole pairs
+      // leave, so no fragment can remain behind.
       if (focus === "viewer" && opts.markdownApplicable === false) {
-        return hint
-          .split("  ")
-          .filter((item) => item !== VIEWER_MARKDOWN_HINT_ITEM)
-          .join("  ");
+        return hint.filter(
+          (pair) => pair.keys !== VIEWER_MARKDOWN_HINT_PAIR.keys || pair.label !== VIEWER_MARKDOWN_HINT_PAIR.label,
+        );
       }
       return hint;
     }
@@ -279,7 +381,10 @@ export interface TitleRowView {
 
 export function buildTitleRow(innerW: number, view: TitleRowView): string {
   const T = view.theme;
-  const left = " " + T.accent(T.bold("pi-navigator")) + "  " + T.muted(shortPath(view.cwd, view.home));
+  // Subtitle row (Issue #137 §2): the product name now lives in the top
+  // border pill (buildTopBorder), so this row carries the path and the git
+  // context only. Row count and geometry are unchanged.
+  const left = " " + T.muted(shortPath(view.cwd, view.home));
   const git = view.git;
   const branchLabel = git?.available
     ? (git.detached ? "(detached)" : git.branch ?? "(detached)")
@@ -310,29 +415,34 @@ export interface FooterView {
 }
 
 /**
- * Fits a footer hint to a width budget by dropping whole items (Issue #135 L4).
+ * Fits footer hints to a width budget by dropping whole trailing pairs
+ * (Issue #135 L4, Issue #137 §1).
  *
- * The hint tables are "  "-separated items, so a line that does not fit can
- * shed trailing items instead of being cut mid-phrase — which is what the audit
- * flagged at 80 columns, where `joinLeftRight` truncated the hint to make room
- * for the pane labels. Returns "" when not even the first item fits; the caller
- * pads the row back to width.
+ * A hint pair never renders half-styled: the budget is measured with
+ * `visibleWidth` on the plain `keys + " " + label` text, so a line that does
+ * not fit sheds pairs instead of being cut mid-phrase — which is what the
+ * audit flagged at 80 columns, where `joinLeftRight` truncated the hint to
+ * make room for the pane labels. Returns `[]` when not even the first pair
+ * fits; the caller pads the row back to width.
  */
-export function fitHint(hint: string, budget: number): string {
-  if (visibleWidth(hint) <= budget) return hint;
-  const kept: string[] = [];
-  for (const item of hint.split("  ")) {
-    const next = [...kept, item].join("  ");
-    if (visibleWidth(next) > budget) break;
-    kept.push(item);
+export function fitHint(pairs: HintPair[], budget: number): HintPair[] {
+  if (visibleWidth(plainHint(pairs)) <= budget) return pairs;
+  const kept: HintPair[] = [];
+  for (const pair of pairs) {
+    const next = [...kept, pair];
+    if (visibleWidth(plainHint(next)) > budget) break;
+    kept.push(pair);
   }
-  return kept.join("  ");
+  return kept;
 }
 
 /**
  * Footer hints row (normal/search/help modes). While filtering, the footer
  * row area carries the filter bar instead — rendered by the caller
- * (viewer_view.buildFilterBar), mirroring the original live branch.
+ * (viewer_view.buildFilterBar), mirroring the original live branch. The close
+ * pair advertises the default cancel key baked into the tables (`q Esc`,
+ * Issue #137 §5); a remap of `tui.select.cancel` still closes, because input
+ * goes through `matchesCancel`.
  */
 export function buildFooterRow(innerW: number, view: FooterView): string {
   const T = view.theme;
@@ -348,8 +458,9 @@ export function buildFooterRow(innerW: number, view: FooterView): string {
       panes.map(([pane, label]) => (view.focus === pane ? T.accent(T.bold(label)) : T.dim(label))).join("  ") +
       " ";
   }
-  // Issue #135 L4: fit the hint to what the row has left, dropping whole items
-  // rather than letting joinLeftRight cut one mid-phrase. The budget mirrors
+  // Issue #135 L4: fit the hint to what the row has left, dropping whole
+  // pairs rather than letting joinLeftRight cut one mid-phrase (the #137 pair
+  // shape makes a half-styled hint impossible). The budget mirrors
   // joinLeftRight's own accounting (the right segment plus one gap cell, and
   // the hint's own leading space) so the hints can never be the reason the
   // focus indicator or the notice is what disappears.
@@ -357,6 +468,7 @@ export function buildFooterRow(innerW: number, view: FooterView): string {
     getFooterHint(view.mode, view.focus, { markdownApplicable: view.markdownApplicable }),
     Math.max(0, innerW - visibleWidth(right) - 2),
   );
-  const left = " " + T.dim(hint);
+  // Issue #137 §1: dim(keys) + muted(" label"), pairs joined by a dim ` · `.
+  const left = " " + hint.map((pair) => T.dim(pair.keys) + T.muted(" " + pair.label)).join(T.dim(" \u00b7 "));
   return joinLeftRight(left, right, innerW);
 }

@@ -85,6 +85,7 @@ function paneView(partial: Partial<ViewerPaneView> = {}): ViewerPaneView {
     display: null,
     digits: 2,
     viewScroll: 0,
+    scrollInfo: null,
     wrap: false,
     hscroll: 0,
     imageLines: null,
@@ -179,8 +180,8 @@ describe("renderViewerPane", () => {
     const bad = viewerFile({ kind: "error", relPath: "locked.ts", message: "EACCES" });
     const rows = renderViewerPane(paneView({ file: bad }), width, 10);
     expect(rows[0]).toContain("locked"); // header path
-    expect(rows.some((row) => row.includes("\u250c"))).toBe(true); // ┌
-    expect(rows.some((row) => row.includes("\u2514"))).toBe(true); // └
+    expect(rows.some((row) => row.includes("\u256d"))).toBe(true); // ╭ (card top, rounded #137)
+    expect(rows.some((row) => row.includes("\u2570"))).toBe(true); // ╰ (card bottom)
     expect(rows.some((row) => row.includes("Cannot read"))).toBe(true);
     expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
   });
@@ -216,14 +217,14 @@ describe("renderViewerPane", () => {
   it("routes a chafa image with imageLines: null to the metadata card", () => {
     const image = viewerFile({ kind: "image", relPath: "pic.png", imageTier: "chafa", lines: [] });
     const rows = renderViewerPane(paneView({ file: image, imageLines: null }), width, 10);
-    expect(rows.some((row) => row.includes("\u250c"))).toBe(true); // card top border
+    expect(rows.some((row) => row.includes("\u256d"))).toBe(true); // card top border
     expect(rows.join("\n")).toContain("Image"); // card title
   });
 
   it("routes a chafa image with an empty imageLines array to the metadata card", () => {
     const image = viewerFile({ kind: "image", relPath: "pic.png", imageTier: "chafa", lines: [] });
     const rows = renderViewerPane(paneView({ file: image, imageLines: [] }), width, 10);
-    expect(rows.some((row) => row.includes("\u250c"))).toBe(true);
+    expect(rows.some((row) => row.includes("\u256d"))).toBe(true);
     expect(rows.join("\n")).toContain("Image");
     expect(rows.join("\n")).not.toContain("chafa-row-");
   });
@@ -235,13 +236,13 @@ describe("renderViewerPane", () => {
       width,
       10,
     );
-    expect(rows.some((row) => row.includes("\u250c"))).toBe(true);
+    expect(rows.some((row) => row.includes("\u256d"))).toBe(true);
   });
 
   it("still renders image rows, not a card, for a chafa image with non-empty lines", () => {
     const image = viewerFile({ kind: "image", relPath: "pic.png", imageTier: "chafa", lines: [] });
     const rows = renderViewerPane(paneView({ file: image, imageLines: ["chafa-row-0", "chafa-row-1"] }), width, 4);
-    expect(rows.some((row) => row.includes("\u250c"))).toBe(false);
+    expect(rows.some((row) => row.includes("\u256d"))).toBe(false);
     expect(rows[1]).toContain("chafa-row-0");
   });
 });
