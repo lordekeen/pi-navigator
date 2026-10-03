@@ -1,0 +1,661 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Architecture review — pi-navigator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose" });
+    </script>
+    <style>
+      body { font-feature-settings: "liga" 0; }
+      .lbl { font-size:.62rem; letter-spacing:.09em; text-transform:uppercase; color:#64748b; font-family:ui-monospace,SFMono-Regular,monospace; }
+      .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+      .mod { border:1px solid #cbd5e1; border-radius:.5rem; background:#fff; padding:.5rem .6rem; font-family:ui-monospace,SFMono-Regular,monospace; font-size:.68rem; color:#334155; }
+      .mod-dashed { border-style:dashed; background:#f8fafc; }
+      .mod-deep { background:linear-gradient(135deg,#0f172a,#1e293b); color:#e2e8f0; border:1px solid #0f172a; border-radius:.6rem; padding:.6rem .7rem; font-family:ui-monospace,SFMono-Regular,monospace; font-size:.68rem; box-shadow:0 6px 14px -8px rgba(15,23,42,.55); }
+      .chip { display:inline-block; border:1px solid #e2e8f0; border-radius:9999px; padding:.04rem .38rem; font-family:ui-monospace,SFMono-Regular,monospace; font-size:.58rem; color:#64748b; background:#f8fafc; margin:1px; }
+      .badge { display:inline-flex; align-items:center; border-radius:9999px; padding:.12rem .55rem; font-size:.66rem; font-weight:600; letter-spacing:.02em; }
+      .b-strong { background:#ecfdf5; color:#047857; border:1px solid #a7f3d0; }
+      .b-worth { background:#fffbeb; color:#b45309; border:1px solid #fde68a; }
+      .b-spec { background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; }
+      .tag { display:inline-flex; align-items:center; border-radius:.375rem; padding:.1rem .45rem; font-size:.62rem; color:#475569; background:#f1f5f9; border:1px solid #e2e8f0; font-family:ui-monospace,SFMono-Regular,monospace; }
+      .seam { border-top:2px dashed #94a3b8; }
+      .leak { color:#dc2626; }
+      .leakline { border-top:2px dashed #dc2626; }
+      .arrow { color:#94a3b8; font-size:.9rem; line-height:1; }
+      .diagram { min-height:270px; }
+      .mermaid { font-family:ui-monospace,SFMono-Regular,monospace !important; }
+    </style>
+  </head>
+  <body class="bg-stone-50 text-slate-900 font-sans antialiased">
+    <main class="max-w-5xl mx-auto px-6 py-12 space-y-12">
+      <!-- ================= HEADER ================= -->
+      <header class="space-y-4">
+        <p class="lbl">architecture review</p>
+        <h1 class="font-serif text-4xl tracking-tight">pi-navigator</h1>
+        <p class="text-slate-500 text-sm">2026-10-03 · read-only audit · 7 strong · 2 worth exploring · 1 speculative</p>
+        <div class="flex flex-wrap gap-x-6 gap-y-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs text-slate-600">
+          <span class="flex items-center gap-2"><span class="inline-block w-6 h-3 rounded-sm border border-slate-400 bg-white"></span>module</span>
+          <span class="flex items-center gap-2"><span class="inline-block w-6 seam"></span>seam</span>
+          <span class="flex items-center gap-2"><span class="inline-block w-6 leakline"></span>protocol leakage</span>
+          <span class="flex items-center gap-2"><span class="inline-block w-6 h-3 rounded-sm mod-deep !py-0 !px-0"></span>deep module</span>
+          <span class="flex items-center gap-2"><span class="mono text-slate-500">vocabulary: module · interface · depth · seam · adapter · leverage · locality</span></span>
+        </div>
+      </header>
+
+      <section id="candidates" class="space-y-10">
+
+        <!-- ================= 1 ================= -->
+        <article id="c1" class="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="px-6 pt-6 pb-4 border-b border-slate-100">
+            <div class="flex items-center gap-3 flex-wrap">
+              <h2 class="font-serif text-2xl">1 · Extract the session module</h2>
+              <span class="badge b-strong">Strong</span>
+              <span class="tag">local-substitutable</span>
+            </div>
+            <p class="mono text-xs text-slate-500 mt-2">index.ts:576–1021 (mount) · refreshData index.ts:859–995 · test/index.test.ts · test/navigator.test.ts</p>
+          </div>
+          <div class="p-6 grid md:grid-cols-2 gap-6">
+            <div>
+              <p class="lbl mb-3">Before</p>
+              <div class="diagram flex flex-col items-stretch justify-center gap-3">
+                <div class="mod mod-dashed !border-slate-400">
+                  <p class="lbl">runNavigator() · ctx.ui.custom closure</p>
+                  <div class="mt-2">
+                    <span class="chip">pollTimer</span><span class="chip">treeProbe</span><span class="chip">signature</span><span class="chip">lastStampedProbe</span><span class="chip">inFlight</span><span class="chip">lastError</span><span class="chip">imageSupport</span><span class="chip">currentImageLoad</span><span class="chip">viewerCache</span><span class="chip">root</span><span class="chip">treeSource</span><span class="chip">closed</span>
+                  </div>
+                  <p class="mt-3 text-slate-500 text-[.65rem]"><span class="leak font-semibold">refreshData(): 137 lines</span> — stamps tree, runs git, arms the next poll</p>
+                </div>
+                <p class="text-center text-[.65rem]"><span class="leak">✗</span> <span class="lbl">no interface for tests</span></p>
+                <div class="mod opacity-60 text-center">test harness → mount the whole TUI → assert indirectly</div>
+              </div>
+            </div>
+            <div>
+              <p class="lbl mb-3">After</p>
+              <div class="diagram flex flex-col items-stretch justify-center gap-3">
+                <div class="mod-deep">
+                  <p class="text-slate-300 text-[.62rem] uppercase tracking-widest">session module</p>
+                  <p class="mt-1"><span class="chip !bg-slate-800 !text-slate-200 !border-slate-700">start</span><span class="chip !bg-slate-800 !text-slate-200 !border-slate-700">stop</span><span class="chip !bg-slate-800 !text-slate-200 !border-slate-700">refresh</span><span class="chip !bg-slate-800 !text-slate-200 !border-slate-700">open</span></p>
+                  <p class="mt-2 text-slate-400 text-[.62rem]">poll · stamping · caches · aborts</p>
+                </div>
+                <p class="text-center arrow">↓ setters ↑ reads</p>
+                <div class="mod">NavigatorOverlay <span class="text-slate-400">(UI state only)</span></div>
+                <p class="text-center arrow">↑ direct</p>
+                <div class="mod">tests drive the session — no TUI</div>
+              </div>
+            </div>
+          </div>
+          <div class="px-6 pb-6 grid md:grid-cols-2 gap-6">
+            <div>
+              <h3 class="lbl mb-2">Problem</h3>
+              <p class="text-sm text-slate-700">The module that decides when the overlay's data changes is an unnamed closure: tests cannot reach the poll, and #114 recorded the call sites as inspection-verified.</p>
+            </div>
+            <div>
+              <h3 class="lbl mb-2">Solution</h3>
+              <p class="text-sm text-slate-700">Extract the closure into a session module with a start/stop/refresh interface; <span class="mono text-xs">index.ts</span> becomes the mount and the wiring.</p>
+              <ul class="mt-3 text-sm text-slate-700 space-y-1 list-disc pl-4">
+                <li><strong>locality:</strong> poll, stamping and cache policy sit in one module</li>
+                <li><strong>interface:</strong> tests drive session behaviour without mounting the TUI</li>
+                <li>harness defaults to the production shape (<span class="mono text-xs">loadCommit</span> present)</li>
+                <li>#114's inspection-verified sites become the test surface</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <!-- ================= 2 ================= -->
+        <article id="c2" class="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="px-6 pt-6 pb-4 border-b border-slate-100">
+            <div class="flex items-center gap-3 flex-wrap">
+              <h2 class="font-serif text-2xl">2 · Deepen the overlay's open-target protocol</h2>
+              <span class="badge b-strong">Strong</span>
+              <span class="tag">in-process</span>
+            </div>
+            <p class="mono text-xs text-slate-500 mt-2">navigator.ts:439–475 (mtime ritual) · navigator.ts:474–583 (two loaders) · index.ts:786, 952–975</p>
+          </div>
+          <div class="p-6 grid md:grid-cols-2 gap-6">
+            <div>
+              <p class="lbl mb-3">Before</p>
+              <div class="diagram rounded-lg border border-slate-200 bg-white p-3 flex items-center justify-center">
+                <pre class="mermaid">
+sequenceDiagram
+  participant I as index.ts
+  participant N as NavigatorOverlay
+  I-&gt;&gt;N: getOpenRelPath()
+  N--&gt;&gt;I: "src/app.ts"
+  I-&gt;&gt;I: stat(cwd + rel)
+  I-&gt;&gt;N: getOpenRelPath() again
+  N--&gt;&gt;I: "src/app.ts"
+  I-&gt;&gt;N: getOpenMtime()
+  N--&gt;&gt;I: 1712345
+  I-&gt;&gt;N: setDiskChanged(stale)
+                </pre>
+              </div>
+              <p class="mt-2 text-[.68rem] text-slate-500">Five calls, fixed order; the recheck is the #040 TOCTOU guard.</p>
+            </div>
+            <div>
+              <p class="lbl mb-3">After</p>
+              <div class="diagram rounded-lg border border-slate-200 bg-white p-3 flex items-center justify-center">
+                <pre class="mermaid">
+sequenceDiagram
+  participant I as index.ts
+  participant N as NavigatorOverlay
+  I-&gt;&gt;N: checkOpenTarget(statResult)
+  N--&gt;&gt;I: changed or unchanged
+                </pre>
+              </div>
+              <p class="mt-2 text-[.68rem] text-slate-500">The target is a value (file or diff); the protocol lives with the state.</p>
+            </div>
+          </div>
+          <div class="px-6 pb-6 grid md:grid-cols-2 gap-6">
+            <div>
+              <h3 class="lbl mb-2">Problem</h3>
+              <p class="text-sm text-slate-700">Two invisible protocols cross the seam: the mtime ritual (whose TOCTOU was #040) and a <span class="mono text-xs">commit:&lt;hash&gt;</span> string invented in <span class="mono text-xs">navigator.ts:541</span> and parsed in <span class="mono text-xs">index.ts:962</span> so the poll doesn't stat garbage. Two ~55-line loaders duplicate the <span class="mono text-xs">loadSeq</span> race guard.</p>
+            </div>
+            <div>
+              <h3 class="lbl mb-2">Solution</h3>
+              <p class="text-sm text-slate-700">The overlay exposes its open target as a value and reports a disk change against it in one call; one load primitive serves path and commit.</p>
+              <ul class="mt-3 text-sm text-slate-700 space-y-1 list-disc pl-4">
+                <li><strong>locality:</strong> the mtime protocol lives beside the state it reads</li>
+                <li><strong>interface:</strong> callers stop parsing path strings</li>
+                <li>the <span class="mono text-xs">commit:</span> prefix protocol disappears</li>
+                <li>one race guard instead of two</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <!-- ================= 3 ================= -->
+        <article id="c3" class="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="px-6 pt-6 pb-4 border-b border-slate-100">
+            <div class="flex items-center gap-3 flex-wrap">
+              <h2 class="font-serif text-2xl">3 · One image verdict, one vocabulary</h2>
+              <span class="badge b-strong">Strong</span>
+              <span class="tag">in-process</span>
+            </div>
+            <p class="mono text-xs text-slate-500 mt-2">images.ts:63, 1297–1307 · types.ts:131 · index.ts:635, 717–731 · navigator.ts:295, 496 · viewer_view.ts:157, 240–243, 358</p>
+          </div>
+          <div class="p-6 grid md:grid-cols-2 gap-6">
+            <div>
+              <p class="lbl mb-3">Before</p>
+              <div class="diagram flex flex-col justify-center gap-2">
+                <div class="grid grid-cols-5 gap-1">
+                  <div class="mod text-center !p-1">ladder<br /><span class="text-slate-400">images.ts</span></div>
+                  <div class="mod text-center !p-1">per-load gate<br /><span class="text-slate-400">index.ts</span></div>
+                  <div class="mod text-center !p-1">fallback order<br /><span class="text-slate-400">viewer.ts</span></div>
+                  <div class="mod text-center !p-1">geometry gate<br /><span class="text-slate-400">navigator.ts</span></div>
+                  <div class="mod text-center !p-1">card label<br /><span class="text-slate-400">viewer_view.ts</span></div>
+                </div>
+                <div class="mod-deep text-center !text-[.65rem]">ViewerFile</div>
+                <div class="grid grid-cols-2 gap-2">
+                  <div class="mod !border-slate-300 text-center text-[.6rem]"><span class="lbl">images.ts</span><br />native | chafa | none</div>
+                  <div class="mod !border-red-300 text-center text-[.6rem]"><span class="lbl leak">types.ts</span><br />metadata | native | chafa</div>
+                </div>
+                <p class="text-center text-[.62rem] leak">two enums that never meet · support stored twice · labels re-derived</p>
+              </div>
+            </div>
+            <div>
+              <p class="lbl mb-3">After</p>
+              <div class="diagram flex flex-col justify-center gap-3">
+                <div class="mod-deep">
+                  <p class="text-slate-300 text-[.62rem] uppercase tracking-widest">image verdict</p>
+                  <p class="mt-1 text-slate-400 text-[.62rem]">one decision per load · rows or card · its own label</p>
+                </div>
+                <p class="text-center arrow">↓ one verdict</p>
+                <div class="mod">loader stops naming tiers · fallback order moves inside</div>
+                <p class="text-center arrow">↓</p>
+                <div class="mod">view renders the verdict · no re-derivation</div>
+              </div>
+            </div>
+          </div>
+          <div class="px-6 pb-6 grid md:grid-cols-2 gap-6">
+            <div>
+              <h3 class="lbl mb-2">Problem</h3>
+              <p class="text-sm text-slate-700">The tier decision is re-derived at five sites behind two enums that never meet; <span class="mono text-xs">images.ts</span> exports 35 symbols of which ~6 carry production leverage. This is the surface the #100–#117 churn kept repainting.</p>
+            </div>
+            <div>
+              <h3 class="lbl mb-2">Solution</h3>
+              <p class="text-sm text-slate-700">One module decides the tier per load and returns an opaque verdict — rows or a card, with its own label. Loader and view stop naming tiers and protocols.</p>
+              <ul class="mt-3 text-sm text-slate-700 space-y-1 list-disc pl-4">
+                <li><strong>leverage:</strong> 35 exports shrink toward ~6</li>
+                <li>decision sites 5 → 1; no re-derivation</li>
+                <li>one place to add a protocol</li>
+                <li>the <span class="mono text-xs">metadata</span> split-brain disappears</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <!-- ================= 4 ================= -->
+        <article id="c4" class="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="px-6 pt-6 pb-4 border-b border-slate-100">
+            <div class="flex items-center gap-3 flex-wrap">
+              <h2 class="font-serif text-2xl">4 · The render seam owns the ladder, the abort, and the load policy</h2>
+              <span class="badge b-strong">Strong</span>
+              <span class="tag">ports &amp; adapters</span>
+            </div>
+            <p class="mono text-xs text-slate-500 mt-2">viewer.ts:322, 343–555, 376–421 · images.ts:1034–1157 · index.ts:646–653, 705–750 · navigator.ts:461–503, 1337</p>
+          </div>
+          <div class="p-6 grid md:grid-cols-2 gap-6">
+            <div>
+              <p class="lbl mb-3">Before</p>
+              <div class="diagram rounded-lg border border-slate-200 bg-white p-3 flex items-center justify-center">
+                <pre class="mermaid">
+flowchart LR
+  V[viewer.ts] -. abort string .-&gt; I[index.ts seams]
+  I -. snapshot .-&gt; IMG[images.ts]
+  V -. ladder order .-&gt; IMG
+  N[navigator.ts loadSeq] -. reflow re-arm .-&gt; V
+  classDef leak stroke:#dc2626,stroke-width:2px,stroke-dasharray:5 4;
+  class V,I,N leak
+                </pre>
+              </div>
+              <p class="mt-2 text-[.68rem] text-slate-500">Correctness = three modules agreeing; delete viewer.ts:417–421 and #117 returns with the suite green.</p>
+            </div>
+            <div>
+              <p class="lbl mb-3">After</p>
+              <div class="diagram rounded-lg border border-slate-200 bg-white p-3 flex items-center justify-center">
+                <pre class="mermaid">
+flowchart LR
+  LOAD[viewer.ts load request] --&gt; SEAM[render seam]
+  subgraph ONE ["one owner"]
+    SEAM --&gt; LADDER[snapshot ladder]
+    SEAM --&gt; ABORT[typed supersession]
+    SEAM --&gt; POLICY[invocation policy]
+  end
+                </pre>
+              </div>
+              <p class="mt-2 text-[.68rem] text-slate-500">One seam; the protocol is a result the loader consumes, not a string it must remember.</p>
+            </div>
+          </div>
+          <div class="px-6 pb-6 grid md:grid-cols-2 gap-6">
+            <div>
+              <h3 class="lbl mb-2">Problem</h3>
+              <p class="text-sm text-slate-700">The <span class="mono text-xs">ImageRenderer</span> seam has two named slots, so ladder order and the abort special-case live in <span class="mono text-xs">viewer.ts</span>; kitty/iTerm2 branch inline in three places. Supersession is a magic string across three modules; the pipeline is re-invoked from four navigator sites, <span class="mono text-xs">loadCommit</span> bypasses it, and an image is read 2–3 times per load.</p>
+            </div>
+            <div>
+              <h3 class="lbl mb-2">Solution</h3>
+              <p class="text-sm text-slate-700">One render seam chosen by the support snapshot; supersession becomes a typed result the loader consumes; the loader owns its own invocation policy (reload and reflow).</p>
+              <ul class="mt-3 text-sm text-slate-700 space-y-1 list-disc pl-4">
+                <li><strong>locality:</strong> #117-class bugs cannot return silently</li>
+                <li>one place for reload, reflow and race policy</li>
+                <li>fewer reads per image load</li>
+                <li>tests stop mutating pi-tui globals</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <!-- ================= 5 ================= -->
+        <article id="c5" class="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="px-6 pt-6 pb-4 border-b border-slate-100">
+            <div class="flex items-center gap-3 flex-wrap">
+              <h2 class="font-serif text-2xl">5 · Settings: one rule table, one lifecycle</h2>
+              <span class="badge b-strong">Strong</span>
+              <span class="tag">local-substitutable</span>
+            </div>
+            <p class="mono text-xs text-slate-500 mt-2">settings.ts:221, 441–491, 543, 563 · index.ts:353–368, 381–417, 1033–1070 · settings_menu.ts</p>
+          </div>
+          <div class="p-6 grid md:grid-cols-2 gap-6">
+            <div>
+              <p class="lbl mb-3">Before</p>
+              <div class="diagram flex flex-col justify-center gap-2">
+                <div class="grid grid-cols-3 gap-2">
+                  <div class="mod text-center !p-1">menu edit<br /><span class="text-slate-400">applyFieldEdit</span></div>
+                  <div class="mod text-center !p-1">/navigator set<br /><span class="text-slate-400">applyFieldEdit</span></div>
+                  <div class="mod !border-red-300 text-center !p-1">JSON load<br /><span class="leak">validateFieldValue</span></div>
+                </div>
+                <p class="text-center text-[.62rem] leak">enum membership and clamps live twice</p>
+                <div class="grid grid-cols-2 gap-2">
+                  <div class="mod text-center">runSet write<br /><span class="text-slate-400">index.ts:404</span></div>
+                  <div class="mod text-center">menu commit write<br /><span class="text-slate-400">index.ts:1063</span></div>
+                </div>
+                <p class="text-center text-[.62rem] leak">read → edit → write written twice</p>
+                <div class="mod !border-amber-300 text-center">collectOverrides re-derives precedence to label shadowed fields</div>
+              </div>
+            </div>
+            <div>
+              <p class="lbl mb-3">After</p>
+              <div class="diagram flex flex-col justify-center gap-3">
+                <div class="mod-deep">
+                  <p class="text-slate-300 text-[.62rem] uppercase tracking-widest">per-kind rule table</p>
+                  <p class="mt-1 text-slate-400 text-[.62rem]">consumed by string-edit and JSON-normalize faces</p>
+                </div>
+                <p class="text-center arrow">↓</p>
+                <div class="mod-deep">
+                  <p class="text-slate-300 text-[.62rem] uppercase tracking-widest">load → edit → write</p>
+                  <p class="mt-1 text-slate-400 text-[.62rem]">one operation · reports which layer won each field</p>
+                </div>
+                <p class="text-center arrow">↓</p>
+                <div class="mod text-center">menu · <span class="mono text-xs">/navigator set</span> · loader</div>
+              </div>
+            </div>
+          </div>
+          <div class="px-6 pb-6 grid md:grid-cols-2 gap-6">
+            <div>
+              <h3 class="lbl mb-2">Problem</h3>
+              <p class="text-sm text-slate-700">Parity between the menu and <span class="mono text-xs">/navigator set</span> is real and verified — but the loader is a third path with its own validator, presence rules are re-derived for labels, and read→edit→write is written twice. Adding an env or flag field touches ~6 places, and tests pin registry rows positionally.</p>
+            </div>
+            <div>
+              <h3 class="lbl mb-2">Solution</h3>
+              <p class="text-sm text-slate-700">One per-kind rule table consumed by both faces; the loader reports which layer won each field; one load/edit/write operation in <span class="mono text-xs">settings.ts</span>.</p>
+              <ul class="mt-3 text-sm text-slate-700 space-y-1 list-disc pl-4">
+                <li><strong>locality:</strong> a field is added in one place</li>
+                <li><strong>leverage:</strong> menu, <span class="mono text-xs">set</span> and loader share one rule table</li>
+                <li>tests assert meaning over warning bytes</li>
+                <li>precedence is reported, not re-derived</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <!-- ================= 6 ================= -->
+        <article id="c6" class="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="px-6 pt-6 pb-4 border-b border-slate-100">
+            <div class="flex items-center gap-3 flex-wrap">
+              <h2 class="font-serif text-2xl">6 · git.ts owns the cwd-relative protocol</h2>
+              <span class="badge b-strong">Strong</span>
+              <span class="tag">local-substitutable</span>
+            </div>
+            <p class="mono text-xs text-slate-500 mt-2">git.ts:111, 281–303, 419 · index.ts:44–56 · tree.ts:73–78</p>
+          </div>
+          <div class="p-6 grid md:grid-cols-2 gap-6">
+            <div>
+              <p class="lbl mb-3">Before</p>
+              <div class="diagram rounded-lg border border-slate-200 bg-white p-3 flex items-center justify-center">
+                <pre class="mermaid">
+flowchart LR
+  IDX[index.ts] --&gt; DR[detectRepo]
+  IDX --&gt; RTF[readTrackedFiles]
+  IDX --&gt; TCR[toCwdRelative]
+  IDX --&gt; GCM[gitCodeMap]
+  DR -. root-relative .-&gt; IDX
+  RTF -. cwd-relative .-&gt; IDX
+  T["tree.ts strips ?? dir/"] -.-&gt; IDX
+  GCM -. "strips ?? dir/" .-&gt; IDX
+  classDef leak stroke:#dc2626,stroke-width:2px,stroke-dasharray:5 4;
+  class T,GCM leak
+                </pre>
+              </div>
+              <p class="mt-2 text-[.68rem] text-slate-500">The caller stitches the protocol; the slash is stripped twice.</p>
+            </div>
+            <div>
+              <p class="lbl mb-3">After</p>
+              <div class="diagram rounded-lg border border-slate-200 bg-white p-3 flex items-center justify-center">
+                <pre class="mermaid">
+flowchart LR
+  IDX[index.ts] --&gt; ENTRY[git tree data entry]
+  ENTRY --&gt; DR[detectRepo]
+  ENTRY --&gt; RTF[readTrackedFiles]
+  ENTRY --&gt; TCR[toCwdRelative + gitCodeMap]
+  ENTRY --&gt; IDX
+                </pre>
+              </div>
+              <p class="mt-2 text-[.68rem] text-slate-500">One entry returns tree-ready, cwd-relative data.</p>
+            </div>
+          </div>
+          <div class="px-6 pb-6 grid md:grid-cols-2 gap-6">
+            <div>
+              <h3 class="lbl mb-2">Problem</h3>
+              <p class="text-sm text-slate-700">The caller orchestrates four calls and must know root-relative vs cwd-relative rules; the <span class="mono text-xs">?? dir/</span> slash is stripped independently in two modules. <span class="mono text-xs">RepoInfo</span> and <span class="mono text-xs">CommitDiff</span> have zero named importers — documentation-only exports.</p>
+            </div>
+            <div>
+              <h3 class="lbl mb-2">Solution</h3>
+              <p class="text-sm text-slate-700">One entry point returns cwd-relative, tree-ready data plus the repo info the caller needs; the slash discipline stays inside the module.</p>
+              <ul class="mt-3 text-sm text-slate-700 space-y-1 list-disc pl-4">
+                <li><strong>locality:</strong> the path protocol lives once</li>
+                <li>interface shrinks; doc-only exports absorbed</li>
+                <li>callers stop stitching prefixes</li>
+                <li>one place strips <span class="mono text-xs">?? dir/</span></li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <!-- ================= 7 ================= -->
+        <article id="c7" class="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="px-6 pt-6 pb-4 border-b border-slate-100">
+            <div class="flex items-center gap-3 flex-wrap">
+              <h2 class="font-serif text-2xl">7 · Pane seam contracts: ask the composer, one window</h2>
+              <span class="badge b-strong">Strong</span>
+              <span class="tag">in-process</span>
+            </div>
+            <p class="mono text-xs text-slate-500 mt-2">frame.ts:77–99, 210–215 · git_view.ts:183–187 · navigator.ts:1492–1607</p>
+          </div>
+          <div class="p-6 grid md:grid-cols-2 gap-6">
+            <div>
+              <p class="lbl mb-3">Before</p>
+              <div class="diagram flex flex-col justify-center gap-2">
+                <div class="grid grid-cols-3 gap-2">
+                  <div class="mod text-center"><span class="lbl">git_view</span><br /><span class="mono text-[.6rem]">maxLeft = w − rw − 1</span></div>
+                  <div class="mod text-center"><span class="lbl">buildFooterRow</span><br /><span class="mono text-[.6rem]">w − rightW − 1</span></div>
+                  <div class="mod text-center"><span class="lbl">navigator</span><br /><span class="mono text-[.6rem]">Math.max(1, …)</span></div>
+                </div>
+                <p class="text-center text-[.62rem] leak">#113 and #138: the same off-by-one twice · floors differ (2 vs 1)</p>
+                <div class="mod mod-dashed text-center"><span class="lbl">invariant in prose</span><br />#065: "moving this above the clamp would re-introduce the divergent badge"</div>
+                <div class="mod text-center text-[.62rem] text-slate-500">guarded only by the class path</div>
+              </div>
+            </div>
+            <div>
+              <p class="lbl mb-3">After</p>
+              <div class="diagram flex flex-col justify-center gap-3">
+                <div class="mod-deep text-center">composer exposes its budget — <span class="text-slate-300">fit(left, right, width)</span></div>
+                <p class="text-center arrow">↓ callers query, not copy</p>
+                <div class="mod">git_view · footer · header — no mirrored arithmetic</div>
+                <p class="text-center arrow">↓</p>
+                <div class="mod-deep text-center">one pane window → render and input</div>
+                <p class="text-center text-[.65rem] text-slate-500">the clamp yields the one offset both body and badge consume</p>
+              </div>
+            </div>
+          </div>
+          <div class="px-6 pb-6 grid md:grid-cols-2 gap-6">
+            <div>
+              <h3 class="lbl mb-2">Problem</h3>
+              <p class="text-sm text-slate-700"><span class="mono text-xs">joinLeftRight</span>'s gap accounting is mirrored by callers — #113 and #138 are the same off-by-one twice. The #065 clamp-order invariant is enforced by a comment and pinned only through the class. Pane-area arithmetic exists twice with different floors, benign only while body ≥ 4.</p>
+            </div>
+            <div>
+              <h3 class="lbl mb-2">Solution</h3>
+              <p class="text-sm text-slate-700">The composer exposes its budget as a query; the clamp produces the single offset both body and badge consume; one pane-window function feeds render and input.</p>
+              <ul class="mt-3 text-sm text-slate-700 space-y-1 list-disc pl-4">
+                <li><strong>locality:</strong> an off-by-one is fixed once, not per caller</li>
+                <li>the #065 invariant becomes structural, not remembered</li>
+                <li>input and render share one window</li>
+                <li>latent divergence becomes impossible</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <!-- ================= 8 ================= -->
+        <article id="c8" class="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="px-6 pt-6 pb-4 border-b border-slate-100">
+            <div class="flex items-center gap-3 flex-wrap">
+              <h2 class="font-serif text-2xl">8 · frame.ts split-brain: assembly and key sources</h2>
+              <span class="badge b-worth">Worth exploring</span>
+              <span class="tag">in-process</span>
+            </div>
+            <p class="mono text-xs text-slate-500 mt-2">frame.ts:54–167, 174–447 · navigator.ts:1410–1437 · help.ts:65 · test/render.test.ts:1335</p>
+          </div>
+          <div class="p-6 grid md:grid-cols-2 gap-6">
+            <div>
+              <p class="lbl mb-3">Before</p>
+              <div class="diagram flex flex-col justify-center gap-2">
+                <div class="mod"><span class="lbl">geometry · only navigator</span><br /><span class="font-mono text-[.6rem]">overlayHeight … cycleFocus</span></div>
+                <div class="mod"><span class="lbl">composition · four view modules</span><br /><span class="font-mono text-[.6rem]">padTo · shortPath · joinLeftRight · truncateAndWidth</span></div>
+                <div class="mod"><span class="lbl">chrome + hints · navigator + viewer_view</span><br /><span class="font-mono text-[.6rem]">FOCUS_HINTS · MODE_HINTS · buildFooterRow</span></div>
+                <div class="mod mod-dashed text-center">frame assembly (separators, notice, scrollbar math) lives in <span class="mono text-xs">navigator.render()</span></div>
+                <p class="text-center text-[.62rem] leak">three hand-maintained key sources: FOCUS_HINTS · NAVIGATOR_KEYBINDINGS · input literals</p>
+              </div>
+            </div>
+            <div>
+              <p class="lbl mb-3">After</p>
+              <div class="diagram flex flex-col justify-center gap-3">
+                <div class="mod-deep">layout math <span class="text-slate-400">(navigator-only)</span></div>
+                <div class="mod-deep">composition + assembly <span class="text-slate-400">(shared primitives)</span></div>
+                <p class="text-center arrow">↓</p>
+                <div class="mod">one key source → help, footer, dispatch</div>
+                <p class="text-center text-[.65rem] text-slate-500">layout issues land apart from truncation issues; #003's phantom-key class closes</p>
+              </div>
+            </div>
+          </div>
+          <div class="px-6 pb-6 grid md:grid-cols-2 gap-6">
+            <div>
+              <h3 class="lbl mb-2">Problem</h3>
+              <p class="text-sm text-slate-700"><span class="mono text-xs">frame.ts</span> serves two consumer sets while frame assembly stays in <span class="mono text-xs">navigator.render()</span>. Footer hints are a third hand-maintained key source beside the keybinding table and the input literals; only <span class="mono text-xs">q Esc close</span> is parity-tested. The drift class is real: #003/#004/#005.</p>
+            </div>
+            <div>
+              <h3 class="lbl mb-2">Solution</h3>
+              <p class="text-sm text-slate-700">Separate navigator-only layout math from the shared composition primitives and move assembly beside them; derive footer hint keys from the keybinding table.</p>
+              <ul class="mt-3 text-sm text-slate-700 space-y-1 list-disc pl-4">
+                <li><strong>locality:</strong> layout issues and truncation issues land apart</li>
+                <li><strong>leverage:</strong> one key source feeds help, footer and dispatch</li>
+                <li>the phantom-key drift class closes</li>
+                <li>seam contracts get module-level assertions</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <!-- ================= 9 ================= -->
+        <article id="c9" class="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="px-6 pt-6 pb-4 border-b border-slate-100">
+            <div class="flex items-center gap-3 flex-wrap">
+              <h2 class="font-serif text-2xl">9 · FileNode is the real interface; make it opaque</h2>
+              <span class="badge b-worth">Worth exploring</span>
+              <span class="tag">in-process</span>
+            </div>
+            <p class="mono text-xs text-slate-500 mt-2">tree.ts (21 exports) · types.ts:31–50 · files_view.ts · navigator.ts (10 moveCursor sites)</p>
+          </div>
+          <div class="p-6 grid md:grid-cols-2 gap-6">
+            <div>
+              <p class="lbl mb-3">Before</p>
+              <div class="diagram flex flex-col justify-center gap-2">
+                <div class="grid grid-cols-2 gap-3">
+                  <div class="flex flex-col">
+                    <p class="lbl text-center mb-1">interface surface</p>
+                    <div class="mod flex-1 !bg-slate-100 text-center flex items-center justify-center">21 exports +<br />14-field mutable FileNode</div>
+                  </div>
+                  <div class="flex flex-col">
+                    <p class="lbl text-center mb-1">implementation</p>
+                    <div class="mod flex-1 text-center flex items-center justify-center">walk · filter · flatten · cursor</div>
+                  </div>
+                </div>
+                <p class="text-center text-[.62rem] leak">callers read parent · lowerName · subtreeChanged; maintenance rules live in comments</p>
+              </div>
+            </div>
+            <div>
+              <p class="lbl mb-3">After</p>
+              <div class="diagram flex flex-col justify-center gap-2">
+                <div class="grid grid-cols-2 gap-3">
+                  <div class="flex flex-col">
+                    <p class="lbl text-center mb-1">interface surface</p>
+                    <div class="mod-deep !py-3 text-center">query / navigate<br />→ rows</div>
+                  </div>
+                  <div class="flex flex-col">
+                    <p class="lbl text-center mb-1">implementation</p>
+                    <div class="mod flex-1 text-center flex items-center justify-center">node graph, flags and helpers — hidden</div>
+                  </div>
+                </div>
+                <p class="text-center text-[.65rem] text-slate-500">shape changes stop rippling; one owner for derived flags</p>
+              </div>
+            </div>
+          </div>
+          <div class="px-6 pb-6 grid md:grid-cols-2 gap-6">
+            <div>
+              <h3 class="lbl mb-2">Problem</h3>
+              <p class="text-sm text-slate-700">The behaviour helpers are deep — delete them and hidden-aware traversal reappears at 10 call sites — but the mutable node graph they return is not hidden. <span class="mono text-xs">walkTree</span> is exported only for tests.</p>
+            </div>
+            <div>
+              <h3 class="lbl mb-2">Solution</h3>
+              <p class="text-sm text-slate-700">The tree's query/navigate surface returns rows instead of exposing the node graph; derived flags get one owner.</p>
+              <ul class="mt-3 text-sm text-slate-700 space-y-1 list-disc pl-4">
+                <li>interface shrinks; shape changes stop rippling</li>
+                <li>one place maintains derived flags</li>
+                <li>test-only export drops out</li>
+                <li>the deletion test still passes for the helpers</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <!-- ================= 10 ================= -->
+        <article id="c10" class="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="px-6 pt-6 pb-4 border-b border-slate-100">
+            <div class="flex items-center gap-3 flex-wrap">
+              <h2 class="font-serif text-2xl">10 · Viewer pane's four channels → one content slot</h2>
+              <span class="badge b-spec">Speculative</span>
+              <span class="tag">in-process</span>
+            </div>
+            <p class="mono text-xs text-slate-500 mt-2">viewer_view.ts (ViewerPaneView, 26 fields) · navigator.ts:1626–1635, 1724–1767</p>
+          </div>
+          <div class="p-6 grid md:grid-cols-2 gap-6">
+            <div>
+              <p class="lbl mb-3">Before</p>
+              <div class="diagram flex flex-col justify-center gap-2">
+                <div class="grid grid-cols-2 gap-2">
+                  <div class="mod text-center">mdContent</div>
+                  <div class="mod text-center">display</div>
+                  <div class="mod text-center">imageLines</div>
+                  <div class="mod text-center">card</div>
+                </div>
+                <p class="text-center text-[.62rem] leak">XOR chosen by class branches; module re-derives the same branch</p>
+                <div class="mod text-center text-[.65rem] text-slate-500">"the class nulls imageLines for cards" — invariant with no carrier</div>
+              </div>
+            </div>
+            <div>
+              <p class="lbl mb-3">After</p>
+              <div class="diagram flex flex-col justify-center gap-3">
+                <div class="mod-deep text-center">one content slot</div>
+                <p class="text-center arrow">↓</p>
+                <div class="mod text-center">26-field record shrinks; one branch, not four</div>
+              </div>
+            </div>
+          </div>
+          <div class="px-6 pb-6 grid md:grid-cols-2 gap-6">
+            <div>
+              <h3 class="lbl mb-2">Problem</h3>
+              <p class="text-sm text-slate-700">Four exclusive content channels are carried as four fields; the class chooses one and the module re-derives which. The exclusivity invariant is prose, not shape.</p>
+            </div>
+            <div>
+              <h3 class="lbl mb-2">Solution</h3>
+              <p class="text-sm text-slate-700">Collapse the channels into one content slot the class fills once.</p>
+              <ul class="mt-3 text-sm text-slate-700 space-y-1 list-disc pl-4">
+                <li>the exclusivity invariant is in the shape</li>
+                <li>record shrinks; class branches collapse</li>
+                <li>the widest interface in the pane seam narrows</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <!-- ================= HEALTHY ================= -->
+      <section class="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-6">
+        <h2 class="font-serif text-xl mb-3">Verified healthy</h2>
+        <ul class="text-sm text-emerald-950 grid md:grid-cols-2 gap-x-8 gap-y-1 list-disc pl-4">
+          <li>index → overlay is one-way: zero field pokes across 13 call sites</li>
+          <li>theme.ts, diff.ts, help_view.ts measure deep — no action</li>
+          <li>icons.ts is a one-line projection onto env.ts; no drift possible</li>
+          <li>createViewerCache, makeImageSeams, makeTreeTruncationWarner are deep and pinned</li>
+          <li>tree/git tests run real tmp dirs and scratch repos — a real adapter</li>
+          <li>menu ↔ /navigator set parity verified in current code</li>
+          <li>dispatch, completions and typo suggestion read one subcommand table</li>
+          <li>settings menu stages a draft and commits once — seam discipline holds</li>
+        </ul>
+      </section>
+
+      <!-- ================= TOP RECOMMENDATION ================= -->
+      <section id="top-rec" class="rounded-2xl border-2 border-slate-900 bg-white shadow-lg overflow-hidden">
+        <div class="mod-deep !rounded-none !px-6 !py-8">
+          <p class="text-slate-400 text-[.66rem] uppercase tracking-widest">Top recommendation</p>
+          <h2 class="font-serif text-3xl text-white mt-1">Start with #1 — extract the session module</h2>
+          <p class="text-slate-300 text-sm mt-3 max-w-3xl">It is the largest concentration of untestable complexity, and candidates 3 and 4 land directly on the injection points it would own: the poll, the caches, image support and per-load abort ownership. Extract it first and the image work gets a test surface instead of an inspection habit.</p>
+          <a href="#c1" class="inline-block mt-4 text-sm text-slate-200 underline decoration-slate-500 underline-offset-4">Jump to candidate 1 →</a>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
