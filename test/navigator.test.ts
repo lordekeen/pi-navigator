@@ -805,7 +805,7 @@ describe("git pane keys", () => {
     expect(rendered).toContain("commit abc1234");
     expect(rendered).toContain("+added");
     expect(rendered).toContain("\u22121");
-    expect(harness.overlay.getOpenRelPath()).toBe("commit:abc1234");
+    expect(harness.overlay.getOpenTarget()).toEqual({ kind: "commit", hash: "abc1234" });
   });
 
   it("Enter on a commit-child opens its diff too (v3)", async () => {
@@ -834,7 +834,7 @@ describe("git pane keys", () => {
     overlay.handleInput(KEYS.enter);
     await Promise.resolve();
     expect(loadCommit).toHaveBeenCalledWith("aaa1111");
-    expect(overlay.getOpenRelPath()).toBe("commit:aaa1111");
+    expect(overlay.getOpenTarget()).toEqual({ kind: "commit", hash: "aaa1111" });
     expect(overlay.render(120).join("\n")).toContain("commit aaa1111");
   });
 
@@ -947,7 +947,7 @@ describe("git pane keys", () => {
     overlay.handleInput("k"); // -> bbb2222 (the child commit)
     overlay.handleInput(KEYS.enter); // no loadCommit -> toggle bbb's family
     expect(overlay.render(120).join("\n")).toMatch(/bbb2222[\s\S]*\u25b8 aaa1111/);
-    expect(overlay.getOpenRelPath()).toBeNull(); // viewer untouched
+    expect(overlay.getOpenTarget()).toBeNull(); // viewer untouched
   });
 });
 
@@ -1208,7 +1208,7 @@ describe("Issue #001: stale content race when opening file", () => {
     let rendered = harness.overlay.render(120).join("\n");
     expect(rendered).toContain("line-from-a-alpha");
     expect(rendered).toContain("[ACCENT:a.ts]");
-    expect(harness.overlay.getOpenRelPath()).toBe("a.ts");
+    expect(harness.overlay.getOpenTarget()).toEqual({ kind: "file", relPath: "a.ts" });
 
     // 2. Tab back to files pane, move cursor to b.ts, and press Enter to open file B.
     harness.overlay.handleInput(KEYS.tab); // viewer -> files
@@ -1232,8 +1232,10 @@ describe("Issue #001: stale content race when opening file", () => {
     expect(rendered).toContain("(loading\u2026)");
     expect(rendered).not.toContain("line-from-a-alpha");
 
-    // - getOpenRelPath() immediately reflects b.ts
-    expect(harness.overlay.getOpenRelPath()).toBe("b.ts");
+    // - getOpenTarget() reports the DISPLAYED target: while b.ts is in flight
+    //   the installed ViewerFile is still a.ts (Issue #142 accepted delta —
+    //   the pane renders the switching placeholder instead).
+    expect(harness.overlay.getOpenTarget()).toEqual({ kind: "file", relPath: "a.ts" });
 
     // 3. Resolve file B
     resolveFileB({
@@ -1350,7 +1352,7 @@ describe("Issue #001: stale content race when opening file", () => {
 
     let rendered = harness.overlay.render(120).join("\n");
     expect(rendered).toContain("file-b-content");
-    expect(harness.overlay.getOpenRelPath()).toBe("b.ts");
+    expect(harness.overlay.getOpenTarget()).toEqual({ kind: "file", relPath: "b.ts" });
 
     // Now resolve file A later
     resolveFileA({
@@ -1359,14 +1361,96 @@ describe("Issue #001: stale content race when opening file", () => {
       lines: ["file-a-content"],
     });
     await vi.waitFor(() => {
-      expect(harness.overlay.getOpenRelPath()).toBe("b.ts");
+      expect(harness.overlay.getOpenTarget()).toEqual({ kind: "file", relPath: "b.ts" });
     });
 
     // Viewer should STILL show file B!
     rendered = harness.overlay.render(120).join("\n");
     expect(rendered).toContain("file-b-content");
     expect(rendered).not.toContain("file-a-content");
-    expect(harness.overlay.getOpenRelPath()).toBe("b.ts");
+    expect(harness.overlay.getOpenTarget()).toEqual({ kind: "file", relPath: "b.ts" });
+  });
+});
+
+// ── Issue #142: typed open target + checkOpenTarget ──
+
+describe("Issue #142: open target protocol", () => {
+  /** Text loader pinned to mtime 1000, so mtime drift is observable. */
+  const textAt = (mtimeMs: number) => async (relPath: string): Promise<ViewerFile> => ({
+    kind: "text",
+    relPath,
+    sizeBytes: 10,
+    lineCount: 1,
+    lines: ["alpha"],
+    mtimeMs,
+  });
+
+  /** Open a.ts through the production input path and settle its load. */
+  const openA = async (harness: Harness): Promise<void> => {
+    withTree(harness, ["a.ts"]);
+    harness.overlay.handleInput(KEYS.enter);
+    await vi.waitFor(() => {
+      expect(harness.overlay.getOpenTarget()).toEqual({ kind: "file", relPath: "a.ts" });
+    });
+  };
+
+  it("checkOpenTarget sets the disk-changed notice for the displayed target with a drifted mtime", async () => {
+    const harness = makeHarness(24, textAt(1000));
+    await openA(harness);
+
+    // Within the ±1 ms tolerance: no change, no notice.
+    expect(harness.overlay.checkOpenTarget({ kind: "file", relPath: "a.ts" }, 1000)).toBe(false);
+    expect(harness.overlay.render(120).join("\n")).not.toContain("file changed on disk");
+
+    // Drifted: the component writes the flag and the verdict comes back true.
+    expect(harness.overlay.checkOpenTarget({ kind: "file", relPath: "a.ts" }, 5000)).toBe(true);
+    expect(harness.overlay.render(120).join("\n")).toContain("file changed on disk");
+  });
+
+  it("checkOpenTarget returns false and touches no state while the target is not displayed (#040 guard)", async () => {
+    const harness = makeHarness(24, textAt(1000));
+    await openA(harness);
+
+    // A stale stat for another file cannot raise a notice for the displayed one.
+    expect(harness.overlay.checkOpenTarget({ kind: "file", relPath: "b.ts" }, 999999)).toBe(false);
+    expect(harness.overlay.render(120).join("\n")).not.toContain("file changed on disk");
+
+    // The displayed target raises it...
+    expect(harness.overlay.checkOpenTarget({ kind: "file", relPath: "a.ts" }, 5000)).toBe(true);
+    expect(harness.overlay.render(120).join("\n")).toContain("file changed on disk");
+
+    // ...and a stale check for a target that moved on cannot clear it either.
+    expect(harness.overlay.checkOpenTarget({ kind: "file", relPath: "b.ts" }, 1000)).toBe(false);
+    expect(harness.overlay.render(120).join("\n")).toContain("file changed on disk");
+  });
+
+  it("getOpenTarget reports the displayed target, not the in-flight one", async () => {
+    let resolveB!: (file: ViewerFile) => void;
+    const harness = makeHarness(24, (relPath) => {
+      if (relPath === "b.ts") {
+        return new Promise<ViewerFile>((resolve) => {
+          resolveB = resolve;
+        });
+      }
+      return Promise.resolve({ kind: "text", relPath, sizeBytes: 10, lineCount: 1, lines: ["alpha"] });
+    });
+    withTree(harness, ["a.ts", "b.ts"]);
+    harness.overlay.handleInput(KEYS.enter); // open a.ts
+    await Promise.resolve();
+    expect(harness.overlay.getOpenTarget()).toEqual({ kind: "file", relPath: "a.ts" });
+
+    harness.overlay.handleInput(KEYS.tab); // viewer -> files
+    harness.overlay.handleInput("j"); // cursor to b.ts
+    harness.overlay.handleInput(KEYS.enter); // b.ts in flight
+    // Displayed-only (Issue #142 item 2): the still-installed a.ts stays the
+    // poll's target while b.ts loads; the pane renders the switching
+    // placeholder at this moment.
+    expect(harness.overlay.getOpenTarget()).toEqual({ kind: "file", relPath: "a.ts" });
+
+    resolveB({ kind: "text", relPath: "b.ts", sizeBytes: 10, lineCount: 1, lines: ["beta"] });
+    await vi.waitFor(() => {
+      expect(harness.overlay.getOpenTarget()).toEqual({ kind: "file", relPath: "b.ts" });
+    });
   });
 });
 
@@ -2158,11 +2242,7 @@ describe("chafa image rendering", () => {
         async (relPath, opts): Promise<ViewerFile> => {
           loads.push({ relPath, opts });
           await gate;
-          // mtimeMs is the settle signal: getOpenMtime() is undefined while a
-          // load is still pending for a different target.
-          return opts?.image
-            ? { ...chafaImage(relPath, opts.image.cols, opts.image.rows), mtimeMs: 0 }
-            : { ...metadataImage(relPath), mtimeMs: 0 };
+          return opts?.image ? chafaImage(relPath, opts.image.cols, opts.image.rows) : metadataImage(relPath);
         },
         undefined,
         undefined,
@@ -2186,7 +2266,12 @@ describe("chafa image rendering", () => {
 
       release?.();
       await vi.advanceTimersByTimeAsync(IMAGE_RESIZE_DEBOUNCE_MS * 2);
-      expect(harness.overlay.getOpenMtime(), "load never settled").toBe(0);
+      // The settle signal is the displayed open target: it stays null while
+      // the first load is pending and reports the file once the load lands.
+      expect(harness.overlay.getOpenTarget(), "load never settled").toEqual({
+        kind: "file",
+        relPath: "sample.png",
+      });
       // The re-armed reflow lands once the load has settled.
       expect(loads).toHaveLength(2);
       expect(loads[1]?.opts?.image).toBeDefined();
@@ -2610,7 +2695,7 @@ describe("Issue #123: invalidate() clears theme-styled caches, keeps the data ca
     // ...while the data-derived caches (raw visible widths) and the file
     // data itself are deliberately kept: no re-read, same open path.
     expect(caches.maxLineWidthCache).not.toBeNull();
-    expect(harness.overlay.getOpenRelPath()).toBe("a.ts");
+    expect(harness.overlay.getOpenTarget()).toEqual({ kind: "file", relPath: "a.ts" });
     expect(harness.loads).toHaveLength(1);
   });
 
@@ -2666,7 +2751,7 @@ describe("Issue #123: invalidate() clears theme-styled caches, keeps the data ca
 
     expect(rendered).toContain("Heading");
     expect(harness.loads).toHaveLength(1); // the file data was NOT re-read
-    expect(harness.overlay.getOpenRelPath()).toBe("README.md");
+    expect(harness.overlay.getOpenTarget()).toEqual({ kind: "file", relPath: "README.md" });
   });
 });
 

@@ -29,7 +29,7 @@ import { DEFAULT_NAVIGATOR_SETTINGS, type NavigatorSettings } from "../settings"
 import { makeNavigatorTheme } from "../theme";
 import type { CommitDiff, RepoInfo } from "../git";
 import { createSession, type NavigatorSession, type SessionDeps } from "../session";
-import type { FileNode, GitState, ViewerFile } from "../types";
+import type { FileNode, GitState, OpenTarget, ViewerFile } from "../types";
 import type { LoadFileOptions } from "../viewer";
 
 /** Mutable control state for the mocked git/tree/image collaborators. */
@@ -201,9 +201,8 @@ interface Sink {
   setTree: Mock<(root: FileNode, source: "git" | "fs") => void>;
   setGitState: Mock<(git: GitState) => void>;
   setImageSupport: Mock<(support: ImageSupport) => void>;
-  setDiskChanged: Mock<(changed: boolean) => void>;
-  getOpenRelPath: Mock<() => string | null>;
-  getOpenMtime: Mock<() => number | undefined>;
+  getOpenTarget: Mock<() => OpenTarget | null>;
+  checkOpenTarget: Mock<(target: OpenTarget, mtimeMs: number | null) => boolean>;
   requestRender: Mock<() => void>;
 }
 
@@ -226,9 +225,8 @@ function makeSession(overrides: Partial<SessionDeps> = {}): Harness {
     setTree: vi.fn(),
     setGitState: vi.fn(),
     setImageSupport: vi.fn(),
-    setDiskChanged: vi.fn(),
-    getOpenRelPath: vi.fn((): string | null => null),
-    getOpenMtime: vi.fn((): number | undefined => undefined),
+    getOpenTarget: vi.fn<() => OpenTarget | null>(() => null),
+    checkOpenTarget: vi.fn<(target: OpenTarget, mtimeMs: number | null) => boolean>(() => false),
     requestRender: vi.fn(),
   };
   const notify = vi.fn<(message: string) => void>();
@@ -467,25 +465,113 @@ describe("createSession: poll cadence and backoff (Issue #008)", () => {
     expect(timer(timers, 1).delay).toBe(5000);
     await runUntil(dueAt(timer(timers, 1)));
     expect(ctl.gitReads).toBe(3);
-    expect(sink.setDiskChanged).not.toHaveBeenCalledWith(true);
+    expect(sink.checkOpenTarget).not.toHaveBeenCalled(); // nothing displayed yet
 
-    // The viewer now shows w.txt with a stale known mtime: the next tick
-    // detects the disk change and resets the backoff. A deterministic stat
-    // fixture replaces the real fs.stat so the tick under fake timers
-    // resolves reliably.
+    // The viewer now shows w.txt: the next tick stats it and hands the stat to
+    // the sink, whose TRUE verdict (a drifted mtime) resets the backoff. A
+    // deterministic stat fixture replaces the real fs.stat so the tick under
+    // fake timers resolves reliably.
     ctl.fakeStat = async () => ({ mtimeMs: 500_000_000 });
-    sink.getOpenRelPath.mockReturnValue("w.txt");
-    sink.getOpenMtime.mockReturnValue(1); // anything differs from the fixture by ≫ 1 ms
+    const target: OpenTarget = { kind: "file", relPath: "w.txt" };
+    sink.getOpenTarget.mockReturnValue(target);
+    sink.checkOpenTarget.mockReturnValue(true);
     await runUntil(dueAt(timer(timers, 2)));
-    expect(sink.setDiskChanged).toHaveBeenCalledWith(true);
+    expect(sink.checkOpenTarget).toHaveBeenCalledWith(target, 500_000_000);
     expect(ctl.gitReads).toBe(4);
     expect(timer(timers, 3).delay).toBe(REFRESH_INTERVAL_MS); // reset applied
+    // The flag lives in the component behind checkOpenTarget now (#142): the
+    // session has no way to write it any more.
+    expect("setDiskChanged" in sink).toBe(false);
 
     // From now on ticks run at the base interval again.
     await runUntil(dueAt(timer(timers, 3)) - 1);
     expect(ctl.gitReads).toBe(4);
     await runUntil(dueAt(timer(timers, 3)));
     expect(ctl.gitReads).toBe(5);
+    session.dispose();
+  });
+});
+
+describe("createSession: open-target disk watch (Issue #142)", () => {
+  it("a settle tick stats the displayed target and lets its false verdict drive the idle backoff", async () => {
+    ctl.gitState = makeGitState();
+    ctl.treeProbe = "probe-1";
+    ctl.tracked = ["src/a.ts"];
+    vi.useFakeTimers();
+    const timers = installTimerLog();
+    const { session, sink } = makeSession();
+    const target: OpenTarget = { kind: "file", relPath: "w.txt" };
+    sink.getOpenTarget.mockReturnValue(target);
+    ctl.fakeStat = async () => ({ mtimeMs: 1234 });
+    sink.checkOpenTarget.mockReturnValue(false); // unchanged on disk
+
+    session.start();
+    await flushTicks();
+    await runUntil(dueAt(timer(timers, 0)));
+    // The session statted the displayed target and deferred the verdict —
+    // mtime comparison and flag are the sink's business now.
+    expect(sink.checkOpenTarget).toHaveBeenCalledWith(target, 1234);
+    expect(timer(timers, 1).delay).toBe(5000); // false → idle growth
+    session.dispose();
+  });
+
+  it("a commit target performs no stat and no checkOpenTarget call", async () => {
+    ctl.gitState = makeGitState();
+    ctl.treeProbe = "probe-1";
+    ctl.tracked = ["src/a.ts"];
+    vi.useFakeTimers();
+    const { session, sink } = makeSession();
+    let statCalls = 0;
+    ctl.fakeStat = async () => {
+      statCalls += 1;
+      return { mtimeMs: 1 };
+    };
+    sink.getOpenTarget.mockReturnValue({ kind: "commit", hash: "abc1234" });
+
+    session.start();
+    await flushTicks();
+    // A commit is not a filesystem path: no stat, and the session no longer
+    // parses `commit:` out of a display string to notice that.
+    expect(statCalls).toBe(0);
+    expect(sink.checkOpenTarget).not.toHaveBeenCalled();
+    session.dispose();
+  });
+
+  it("a stat failure is reported as changed via checkOpenTarget(target, null)", async () => {
+    ctl.gitState = makeGitState();
+    ctl.treeProbe = "probe-1";
+    ctl.tracked = ["src/a.ts"];
+    vi.useFakeTimers();
+    const { session, sink } = makeSession();
+    const target: OpenTarget = { kind: "file", relPath: "gone.txt" };
+    sink.getOpenTarget.mockReturnValue(target);
+    ctl.fakeStat = async () => {
+      throw new Error("ENOENT");
+    };
+
+    session.start();
+    await flushTicks();
+    expect(sink.checkOpenTarget).toHaveBeenCalledWith(target, null);
+    session.dispose();
+  });
+
+  it("no displayed target: the probe neither stats nor checks", async () => {
+    ctl.gitState = makeGitState();
+    ctl.treeProbe = "probe-1";
+    ctl.tracked = ["src/a.ts"];
+    vi.useFakeTimers();
+    const { session, sink } = makeSession(); // getOpenTarget defaults to null
+    let statCalls = 0;
+    ctl.fakeStat = async () => {
+      statCalls += 1;
+      return { mtimeMs: 1 };
+    };
+
+    session.start();
+    await flushTicks();
+    expect(statCalls).toBe(0);
+    expect(sink.checkOpenTarget).not.toHaveBeenCalled();
+    session.dispose();
   });
 });
 

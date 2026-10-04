@@ -110,6 +110,16 @@ export type GitRow =
 
 // ── Viewer ──
 
+/**
+ * What the viewer is showing (Issue #142): a file keyed by its relPath, or a
+ * commit keyed by its short hash. The one vocabulary the disk-watch protocol,
+ * the reload verb and the "open file" highlight share, so none of them has to
+ * parse the `commit:<hash>` display string to recover the fact.
+ */
+export type OpenTarget =
+  | { kind: "file"; relPath: string }
+  | { kind: "commit"; hash: string };
+
 export type ViewerKind = "empty" | "text" | "truncated" | "binary" | "image" | "error" | "diff";
 
 export interface ViewerFile {

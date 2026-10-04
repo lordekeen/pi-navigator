@@ -21,7 +21,8 @@ export interface FilesViewContext {
   /** Nerd Font icon column opt-in (Issue #028). */
   enableIcons: boolean;
   filterQuery: string;
-  /** Path of the file open in the viewer (viewTargetRelPath ?? viewFile?.relPath). */
+  /** Path of the file open in the viewer (the in-flight target's string
+   *  projection, then viewFile's relPath; Issue #142). */
   openRelPath: string | null;
   /** Cursor row for the header position counter. */
   filesCursor: number;

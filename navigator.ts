@@ -6,7 +6,7 @@
  * plans/pi-navigator-implementation-plan.md section 4.
  *
  * All data arrives through setters that follow the plan section 3.6 contract
- * (setTree / setGitState); the viewer's state is installed by openRelPath(),
+ * (setTree / setGitState); the viewer's state is installed by openTarget(),
  * which owns its async load. This class owns UI state only and never touches
  * the filesystem or git directly — the render path stays pure and the async
  * work stays in index.ts.
@@ -70,6 +70,7 @@ import type {
   GitState,
   InputMode,
   NavigatorLayout,
+  OpenTarget,
   SearchMatch,
   ViewerFile,
 } from "./types";
@@ -196,6 +197,39 @@ function deleteLastCodePoint(text: string): string {
   return text.slice(0, end);
 }
 
+/**
+ * The typed open target of a displayed ViewerFile (Issue #142): the diff kind
+ * or a stamped commitHash makes it a commit target; everything else is a file
+ * target keyed by its display relPath. Null while nothing is displayed, and
+ * defensive null for a commit-kind file that carries no hash (it cannot be
+ * addressed).
+ */
+function targetOf(file: ViewerFile | null): OpenTarget | null {
+  if (file === null) return null;
+  if (file.kind === "diff" || file.commitHash !== undefined) {
+    return file.commitHash === undefined ? null : { kind: "commit", hash: file.commitHash };
+  }
+  return { kind: "file", relPath: file.relPath };
+}
+
+/**
+ * The string projection of a target for the consumers that still speak
+ * paths: `commit:<hash>` stays the commit display/cache identity (Issue #142
+ * decision 6), and a file target is its relPath.
+ */
+function targetPath(target: OpenTarget | null): string | null {
+  if (target === null) return null;
+  return target.kind === "commit" ? `commit:${target.hash}` : target.relPath;
+}
+
+/** Structural identity of two targets (Issue #142); null matches nothing. */
+function sameTarget(a: OpenTarget | null, b: OpenTarget | null): boolean {
+  if (a === null || b === null) return false;
+  if (a.kind === "file" && b.kind === "file") return a.relPath === b.relPath;
+  if (a.kind === "commit" && b.kind === "commit") return a.hash === b.hash;
+  return false;
+}
+
 export class NavigatorOverlay implements Focusable {
   /** Set by TUI when focus changes; gates the CURSOR_MARKER emission. */
   focused = false;
@@ -235,7 +269,8 @@ export class NavigatorOverlay implements Focusable {
 
   private viewFile: ViewerFile | null = null;
   private viewLoading = false;
-  private viewTargetRelPath: string | null = null;
+  /** The in-flight target while viewLoading; null otherwise (Issue #142). */
+  private viewTarget: OpenTarget | null = null;
   private loadSeq = 0;
   private viewScroll = 0;
   private viewHscroll = 0;
@@ -419,10 +454,13 @@ export class NavigatorOverlay implements Focusable {
     // reflows on a knob fingerprint change; an unrendered image — a metadata
     // card, or the in-flight target of a load that has not landed yet
     // (viewFile still null) — re-requests the render whenever an effective
-    // tier exists (upgrade path, D9). The target is the in-flight path first
-    // (viewTargetRelPath, then viewFile), so support landing while the first
-    // image load of a session is still pending arms the upgrade too.
-    const target = this.viewTargetRelPath ?? this.viewFile?.relPath ?? null;
+    // tier exists (upgrade path, D9). The target is the in-flight target's
+    // string projection first (then viewFile), so support landing while the
+    // first image load of a session is still pending arms the upgrade too.
+    // A commit's pseudo-path deliberately does NOT fall back to viewFile
+    // (Issue #142): that would arm a reflow against the previous image
+    // during a commit load.
+    const target = targetPath(this.viewTarget) ?? this.viewFile?.relPath ?? null;
     const viewIsRenderedImage =
       target !== null &&
       this.viewFile !== null &&
@@ -440,21 +478,36 @@ export class NavigatorOverlay implements Focusable {
     this.touch();
   }
 
-  setDiskChanged(changed: boolean): void {
+  private setDiskChanged(changed: boolean): void {
     if (this.diskChanged === changed) return;
     this.diskChanged = changed;
     this.touch();
   }
 
-  getOpenRelPath(): string | null {
-    return this.viewTargetRelPath ?? this.viewFile?.relPath ?? null;
+  /**
+   * The displayed open target (Issue #142): derived from the installed
+   * ViewerFile, so it is null while nothing is shown. Displayed-only — the
+   * in-flight target is never reported to the session's poll.
+   */
+  getOpenTarget(): OpenTarget | null {
+    return targetOf(this.viewFile);
   }
 
-  getOpenMtime(): number | undefined {
-    if (this.viewLoading && this.viewTargetRelPath && this.viewTargetRelPath !== this.viewFile?.relPath) {
-      return undefined;
-    }
-    return this.viewFile?.mtimeMs;
+  /**
+   * The disk-watch check (Issue #142): returns false without touching state
+   * when the passed target is no longer the displayed one (the #040 TOCTOU
+   * guard, structural now); otherwise compares the statted mtime ±1 ms
+   * against the displayed file's, writes the disk-changed flag itself (a
+   * stat failure — `null` — means changed) and returns the verdict the
+   * session feeds to its backoff.
+   */
+  checkOpenTarget(target: OpenTarget, mtimeMs: number | null): boolean {
+    const current = targetOf(this.viewFile);
+    if (current === null || !sameTarget(current, target)) return false;
+    const known = this.viewFile?.mtimeMs;
+    const changed = mtimeMs === null || (known !== undefined && Math.abs(mtimeMs - known) > 1);
+    this.setDiskChanged(changed);
+    return changed;
   }
 
   /** Observable search state for tests and diagnostics (Issue #093). */
@@ -466,94 +519,38 @@ export class NavigatorOverlay implements Focusable {
     };
   }
 
-  /** Reload the open file, keeping scroll position. Used by "r". */
+  /** Reload the displayed target, keeping scroll position. Used by "r". */
   reloadOpenFile(): void {
-    const file = this.viewFile;
-    if (!file) return;
-    if (file.kind === "diff" || file.relPath.startsWith("commit:")) {
-      const hash = file.commitHash ?? file.relPath.slice("commit:".length);
-      if (hash && this.loadCommit) {
-        void this.openCommit(hash, true);
-      }
+    const target = targetOf(this.viewFile);
+    if (!target) return;
+    if (target.kind === "commit") {
+      if (this.loadCommit) void this.openTarget(target, true);
       return;
     }
-    void this.openRelPath(file.relPath, true);
-  }
-
-  /** Open a file by relative path (async; sets viewer state on completion). */
-  async openRelPath(relPath: string, keepScroll = false): Promise<void> {
-    const seq = ++this.loadSeq;
-    this.viewLoading = true;
-    this.viewTargetRelPath = relPath;
-    const sameFile = this.viewFile?.relPath === relPath;
-    if (!keepScroll || !sameFile) {
-      this.viewScroll = 0;
-      this.viewHscroll = 0;
-      if (!sameFile) {
-        // The `i` toggle is session-only and scoped to one open file (D8).
-        this.imageAsCard = false;
-        this.searchQuery = "";
-        this.searchMatches = [];
-        this.searchIndex = 0;
-      }
-    }
-    this.touch();
-    this.requestRender();
-
-    try {
-      const geometry = this.currentImageGeometry();
-      const loadOpts =
-        this.imageSupport.tier !== "none" && IMAGE_EXTENSIONS.has(extOf(relPath)) && geometry !== null
-          ? { image: geometry }
-          : undefined;
-      const file = await this.loadFile(relPath, loadOpts);
-      if (this.disposed || this.loadSeq !== seq) return;
-      this.viewFile = file;
-      this.mdCache = null;
-      // New file content: an active query must be re-scanned on next render.
-      // The marked/maxLineWidth/rows caches key on the `viewFile` reference,
-      // so the new object invalidates them automatically.
-      this.searchDirty = true;
-      this.diskChanged = false;
-      if (!keepScroll || !sameFile) {
-        this.viewScroll = 0;
-        this.viewHscroll = 0;
-      }
-    } catch {
-      if (this.disposed || this.loadSeq !== seq) return;
-      this.viewFile = { kind: "error", relPath, lines: [], message: "unexpected read failure" };
-      this.mdCache = null;
-      this.searchDirty = true;
-    } finally {
-      if (!this.disposed && this.loadSeq === seq) {
-        this.viewLoading = false;
-        this.viewTargetRelPath = null;
-        this.touch();
-        this.requestRender();
-      }
-    }
+    void this.openTarget(target, true);
   }
 
   /**
-   * Open a commit's diff in the viewer (v3). Parallel to openRelPath: reuses
-   * the same loadSeq race guard, viewTargetRelPath, viewLoading and search
-   * state so a diff load can never race a file load. `relPath` is set to
-   * `commit:<shortHash>` — distinct from any file path — so the viewer
-   * header / caches key on it and index.ts can skip the mtime poll for it.
+   * The one viewer load primitive (Issue #142): owns the loadSeq race guard,
+   * the in-flight target, the scroll/search reset and the completion and
+   * disposal handling for every kind of open target. `openRelPath` and
+   * `openCommit` are thin delegates; a commit target with no injected loader
+   * is a no-op (the `openCommit` entry keeps its v2 family-toggle fallback).
    */
-  async openCommit(shortHash: string, keepScroll = false): Promise<void> {
-    if (!this.loadCommit) {
-      this.toggleCommitFamily(shortHash);
-      return;
-    }
+  async openTarget(target: OpenTarget, keepScroll = false): Promise<void> {
+    const commitLoader = this.loadCommit;
+    if (target.kind === "commit" && commitLoader === undefined) return;
     const seq = ++this.loadSeq;
     this.viewLoading = true;
-    this.viewTargetRelPath = `commit:${shortHash}`;
-    const sameCommit = this.viewFile?.kind === "diff" && this.viewFile.commitHash === shortHash;
-    if (!keepScroll || !sameCommit) {
+    this.viewTarget = target;
+    const same = sameTarget(target, targetOf(this.viewFile));
+    if (!keepScroll || !same) {
       this.viewScroll = 0;
       this.viewHscroll = 0;
-      if (!sameCommit) {
+      if (!same) {
+        // The `i` toggle is session-only and scoped to one open file (D8);
+        // it has no meaning for a commit diff.
+        if (target.kind === "file") this.imageAsCard = false;
         this.searchQuery = "";
         this.searchMatches = [];
         this.searchIndex = 0;
@@ -561,35 +558,79 @@ export class NavigatorOverlay implements Focusable {
     }
     this.touch();
     this.requestRender();
+
     try {
-      const file = await this.loadCommit(shortHash);
+      let file: ViewerFile;
+      if (target.kind === "commit") {
+        // The early guard returned when no loader exists; the re-read keeps
+        // the narrowing honest without a non-null assertion.
+        if (commitLoader === undefined) return;
+        file = await commitLoader(target.hash);
+      } else {
+        const geometry = this.currentImageGeometry();
+        const loadOpts =
+          this.imageSupport.tier !== "none" && IMAGE_EXTENSIONS.has(extOf(target.relPath)) && geometry !== null
+            ? { image: geometry }
+            : undefined;
+        file = await this.loadFile(target.relPath, loadOpts);
+      }
       if (this.disposed || this.loadSeq !== seq) return;
       this.viewFile = file;
       this.mdCache = null;
+      // New content: an active query must be re-scanned on next render. The
+      // marked/maxLineWidth/rows caches key on the `viewFile` reference, so
+      // the new object invalidates them automatically.
       this.searchDirty = true;
       this.diskChanged = false;
-      if (!keepScroll || !sameCommit) {
+      if (!keepScroll || !same) {
         this.viewScroll = 0;
         this.viewHscroll = 0;
       }
     } catch {
       if (this.disposed || this.loadSeq !== seq) return;
-      this.viewFile = {
-        kind: "error",
-        relPath: `commit:${shortHash}`,
-        lines: [],
-        message: "cannot read commit",
-      };
+      if (target.kind === "commit") {
+        // Issue #142 decision 7: the error card carries the hash, so the
+        // commit identity survives without parsing `commit:` back out.
+        this.viewFile = {
+          kind: "error",
+          relPath: `commit:${target.hash}`,
+          commitHash: target.hash,
+          lines: [],
+          message: "cannot read commit",
+        };
+      } else {
+        this.viewFile = { kind: "error", relPath: target.relPath, lines: [], message: "unexpected read failure" };
+      }
       this.mdCache = null;
       this.searchDirty = true;
     } finally {
       if (!this.disposed && this.loadSeq === seq) {
         this.viewLoading = false;
-        this.viewTargetRelPath = null;
+        this.viewTarget = null;
         this.touch();
         this.requestRender();
       }
     }
+  }
+
+  /** Open a file by relative path (async; sets viewer state on completion). */
+  openRelPath(relPath: string, keepScroll = false): Promise<void> {
+    return this.openTarget({ kind: "file", relPath }, keepScroll);
+  }
+
+  /**
+   * Open a commit's diff in the viewer (v3). Delegates to the shared load
+   * primitive; the installed ViewerFile's `relPath` is `commit:<shortHash>` —
+   * distinct from any file path — so the viewer header / caches key on it and
+   * the mtime poll skips commit targets (Issue #142). Without an injected
+   * loader, Enter falls back to toggling the commit's family (v2 behavior).
+   */
+  openCommit(shortHash: string, keepScroll = false): Promise<void> {
+    if (!this.loadCommit) {
+      this.toggleCommitFamily(shortHash);
+      return Promise.resolve();
+    }
+    return this.openTarget({ kind: "commit", hash: shortHash }, keepScroll);
   }
 
   dispose(): void {
@@ -1252,14 +1293,10 @@ export class NavigatorOverlay implements Focusable {
       if (row?.kind === "file") value = row.relPath;
       else if (row?.kind === "commit") value = row.commit.shortHash;
     } else if (this.focus === "viewer") {
-      if (this.viewFile?.kind === "diff" && this.viewFile.commitHash) {
-        value = this.viewFile.commitHash;
-      } else {
-        value = this.viewTargetRelPath ?? this.viewFile?.relPath ?? "";
-        if (value.startsWith("commit:")) {
-          value = value.slice("commit:".length);
-        }
-      }
+      // The in-flight target first: while a load runs, the displayed
+      // ViewerFile still describes the previous content (Issue #142).
+      const target = this.viewTarget ?? targetOf(this.viewFile);
+      value = target === null ? "" : target.kind === "commit" ? target.hash : target.relPath;
     } else {
       value = this.filesRows()[this.filesCursor]?.node.relPath ?? "";
     }
@@ -1530,7 +1567,7 @@ export class NavigatorOverlay implements Focusable {
         theme: this.T,
         enableIcons: this.enableIcons,
         filterQuery: this.filterQuery,
-        openRelPath: this.viewTargetRelPath ?? this.viewFile?.relPath ?? null,
+        openRelPath: targetPath(this.viewTarget) ?? this.viewFile?.relPath ?? null,
         filesCursor: this.filesCursor,
         focus: this.focus,
       };
@@ -1623,7 +1660,8 @@ export class NavigatorOverlay implements Focusable {
   // ── Right pane ──
 
   private buildRightRows(rightW: number, body: number): string[] {
-    const isSwitching = this.viewLoading && this.viewTargetRelPath !== null && this.viewTargetRelPath !== this.viewFile?.relPath;
+    const isSwitching =
+      this.viewLoading && this.viewTarget !== null && !sameTarget(this.viewTarget, targetOf(this.viewFile));
     const file = isSwitching ? null : this.viewFile;
 
     const canRender = canRenderMarkdown(file);
@@ -1763,7 +1801,7 @@ export class NavigatorOverlay implements Focusable {
       file,
       loading: this.viewLoading,
       switching: isSwitching,
-      targetRelPath: this.viewTargetRelPath,
+      targetRelPath: targetPath(this.viewTarget),
       diskChanged: this.diskChanged,
       searchMode: this.mode === "search",
       renderMarkdown: this.viewRenderMarkdown,

@@ -62,7 +62,7 @@ import {
   reapplyExpansion,
   type TreeEntry,
 } from "./tree";
-import type { FileNode, GitState, ViewerFile } from "./types";
+import type { FileNode, GitState, OpenTarget, ViewerFile } from "./types";
 import { extOf, restyleViewerFile, type ImageRenderer, type LoadFileOptions } from "./viewer";
 
 /**
@@ -245,18 +245,29 @@ export function makeImageSeams(opts: {
 }
 
 /**
- * Overlay-facing port (Issue #140): the seven component interactions the
- * mount closure used to perform directly. The sink is defined before the
- * overlay exists (its methods only run once the overlay is constructed), so
- * index.ts can build the session first and hand its methods to the ctor.
+ * Overlay-facing port (Issue #140): the component interactions the mount
+ * closure used to perform directly. The sink is defined before the overlay
+ * exists (its methods only run once the overlay is constructed), so index.ts
+ * can build the session first and hand its methods to the ctor. Issue #142
+ * deepened the disk-watch protocol: the session pulls the displayed open
+ * target, stats it, and hands the result to `checkOpenTarget`, which owns the
+ * comparison, the flag and the verdict (three string calls replaced by two
+ * typed ones).
  */
 export interface OverlaySink {
   setTree(root: FileNode, source: "git" | "fs"): void;
   setGitState(git: GitState): void;
   setImageSupport(support: ImageSupport): void;
-  setDiskChanged(changed: boolean): void;
-  getOpenRelPath(): string | null;
-  getOpenMtime(): number | undefined;
+  /** The DISPLAYED open target (Issue #142); null while nothing is shown. */
+  getOpenTarget(): OpenTarget | null;
+  /**
+   * Disk-watch check (Issue #142): compares the statted mtime (±1 ms; `null`
+   * = stat failed = changed) against the displayed target's, writes the
+   * disk-changed flag, and returns the verdict for the session's backoff.
+   * Returns false without touching state when the passed target is no longer
+   * the displayed one (the #040 TOCTOU guard, structural now).
+   */
+  checkOpenTarget(target: OpenTarget, mtimeMs: number | null): boolean;
   requestRender(): void;
 }
 
@@ -612,31 +623,20 @@ export function createSession(deps: SessionDeps): NavigatorSession {
   };
 
   /**
-   * Open-file mtime probe; returns whether the file shown in the viewer
-   * changed on disk during this tick.
+   * Open-target mtime probe (Issue #142): get target → skip commit targets
+   * (a commit is not a filesystem path) → stat → hand the result to the sink,
+   * which owns the comparison, the disk-changed flag and the verdict this
+   * feeds to the backoff.
    */
   const probeOpenFile = async (): Promise<boolean> => {
-    const openRel = deps.sink.getOpenRelPath();
-    if (!openRel) return false;
-    // v3: a commit:<hash> viewer path is not a filesystem path — skip
-    // the mtime poll (stat(join(cwd, "commit:abc1234")) would fail and
-    // set a spurious diskChanged every tick).
-    if (openRel.startsWith("commit:")) return false;
+    const target = deps.sink.getOpenTarget();
+    if (target === null || target.kind === "commit") return false;
     try {
-      const info = await stat(join(cwd, openRel));
-      if (deps.sink.getOpenRelPath() === openRel) {
-        const known = deps.sink.getOpenMtime();
-        const changed = known !== undefined && Math.abs(info.mtimeMs - known) > 1;
-        deps.sink.setDiskChanged(changed);
-        return changed;
-      }
+      const info = await stat(join(cwd, target.relPath));
+      return deps.sink.checkOpenTarget(target, info.mtimeMs);
     } catch {
-      if (deps.sink.getOpenRelPath() === openRel) {
-        deps.sink.setDiskChanged(true);
-        return true;
-      }
+      return deps.sink.checkOpenTarget(target, null);
     }
-    return false;
   };
 
   /**

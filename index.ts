@@ -434,9 +434,8 @@ async function runNavigator(
         setTree: (root, source) => overlay.setTree(root, source),
         setGitState: (git) => overlay.setGitState(git),
         setImageSupport: (support) => overlay.setImageSupport(support),
-        setDiskChanged: (changed) => overlay.setDiskChanged(changed),
-        getOpenRelPath: () => overlay.getOpenRelPath(),
-        getOpenMtime: () => overlay.getOpenMtime(),
+        getOpenTarget: () => overlay.getOpenTarget(),
+        checkOpenTarget: (target, mtimeMs) => overlay.checkOpenTarget(target, mtimeMs),
         // The component has no requestRender method; renders go through the
         // host TUI callback the overlay was constructed with.
         requestRender: () => tui.requestRender(),
