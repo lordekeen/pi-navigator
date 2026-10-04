@@ -64,6 +64,16 @@ settings menu annotates shadowed rows from it and `/navigator set` warns from it
 re-derives precedence from raw presence — a present-but-invalid flag reports no origin
 (Issue #145).
 
+## Viewer window
+
+The one clamped scroll state a render pass produces for the viewer pane (`viewerWindow` in
+`viewer_view.ts`): the vertical offset, the horizontal offset, and — when the content
+overflows — the scrollbar window (`rowOffset` / `count` / `scroll` / `total`). Body rows, the
+header's `col N` badge and position readout, and the frame's right-border scrollbar all
+consume this one object; because the render branch assigns it before the pane record is
+built, the #065 class — an indicator reporting an offset the body was not drawn at — cannot
+be reintroduced by reordering (Issue #147).
+
 ## Retained source
 
 The pre-style material a viewer file carries so its lines can be re-styled under a new style

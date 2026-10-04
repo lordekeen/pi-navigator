@@ -71,29 +71,41 @@ export function leftColumnWidth(innerW: number): number {
   return Math.min(LEFT_COLUMN_MAX, Math.max(LEFT_COLUMN_MIN, Math.floor(innerW * LEFT_COLUMN_RATIO)));
 }
 
+/**
+ * The data rows a pane group of `groupHeight` draws: the group's header takes
+ * one of them (Issue #147). One expression for render and input — the render
+ * path applies it to the heights it already holds (`heights.filesH`,
+ * `heights.gitH`, the body) and the area helpers below delegate to it, so no
+ * render/input floor can disagree. Floored at 1 because a pane never draws
+ * fewer than one row; every group a real (non-compact) frame draws is at
+ * least 3 rows tall, so the floor is a guard, not a visible value.
+ */
+export function paneArea(groupHeight: number): number {
+  return Math.max(1, groupHeight - 1);
+}
+
 /** Files-pane scroll area height for the current terminal size and layout
  *  (Issue #119, D5): the explicit layout parameter keeps a missed call site
- *  from silently computing the default layout's split. */
+ *  from silently computing the default layout's split. Delegates to the one
+ *  pane-area expression (Issue #147). */
 export function filesArea(termRows: number, layout: NavigatorLayout): number {
-  const overlayH = overlayHeight(termRows);
-  const body = bodyRows(overlayH);
-  return Math.max(2, layoutRows(body, layout).filesH - 1);
+  const body = bodyRows(overlayHeight(termRows));
+  return paneArea(layoutRows(body, layout).filesH);
 }
 
 /** Git-pane scroll area height for the current terminal size and layout
  *  (Issue #127): the git pane's paging step needs the same figure the render
  *  path computes, so it is derived here rather than duplicated at the call
- *  site. Mirrors `filesArea`. */
+ *  site. Mirrors `filesArea` (Issue #147). */
 export function gitArea(termRows: number, layout: NavigatorLayout): number {
-  const overlayH = overlayHeight(termRows);
-  const body = bodyRows(overlayH);
-  return Math.max(2, layoutRows(body, layout).gitH - 1);
+  const body = bodyRows(overlayHeight(termRows));
+  return paneArea(layoutRows(body, layout).gitH);
 }
 
-/** Viewer-pane content area height for the current terminal size. */
+/** Viewer-pane content area height for the current terminal size (Issue
+ *  #147: the same `paneArea` expression the render path applies to the body). */
 export function viewerArea(termRows: number): number {
-  const overlayH = overlayHeight(termRows);
-  return Math.max(2, bodyRows(overlayH) - 1);
+  return paneArea(bodyRows(overlayHeight(termRows)));
 }
 
 export function splitRows(body: number): { filesH: number; gitH: number } {
@@ -198,6 +210,17 @@ export function isImageLine(line: string): boolean {
 }
 
 /**
+ * The widest the left segment may be for `right` to survive the composer with
+ * the one gap cell `joinLeftRight` reserves: `width − visibleWidth(right) −
+ * 1`, floored at 0. Callers that must fit left-side content around a right
+ * segment query this instead of copying the composer's arithmetic (Issue
+ * #147) — #113 and #138 were the same off-by-one corrected caller-side, twice.
+ */
+export function leftBudget(width: number, right: string): number {
+  return Math.max(0, width - visibleWidth(right) - 1);
+}
+
+/**
  * Left/right split with the right side guaranteed: when both cannot fit,
  * the left (informational hint or title path) is ellipsized and the right
  * (pane labels, counters, branch) survives. Plain padTo would truncate the
@@ -211,7 +234,7 @@ export function joinLeftRight(left: string, right: string, width: number): strin
   if (isImageLine(left)) return left;
   if (isImageLine(right)) return right;
   const rightW = visibleWidth(right);
-  const maxLeft = Math.max(0, width - rightW - 1);
+  const maxLeft = leftBudget(width, right);
   const leftPart = visibleWidth(left) > maxLeft ? hardTruncate(left, maxLeft) : left;
   const gap = Math.max(1, width - visibleWidth(leftPart) - rightW);
   const line = leftPart + " ".repeat(gap) + right;
@@ -460,13 +483,14 @@ export function buildFooterRow(innerW: number, view: FooterView): string {
   }
   // Issue #135 L4: fit the hint to what the row has left, dropping whole
   // pairs rather than letting joinLeftRight cut one mid-phrase (the #137 pair
-  // shape makes a half-styled hint impossible). The budget mirrors
-  // joinLeftRight's own accounting (the right segment plus one gap cell, and
-  // the hint's own leading space) so the hints can never be the reason the
-  // focus indicator or the notice is what disappears.
+  // shape makes a half-styled hint impossible). The budget is the composer's
+  // own left budget (Issue #147: the right segment plus its gap cell), minus
+  // one for the hint's own leading space — not composer accounting — so the
+  // hints can never be the reason the focus indicator or the notice is what
+  // disappears.
   const hint = fitHint(
     getFooterHint(view.mode, view.focus, { markdownApplicable: view.markdownApplicable }),
-    Math.max(0, innerW - visibleWidth(right) - 2),
+    Math.max(0, leftBudget(innerW, right) - 1),
   );
   // Issue #137 §1: dim(keys) + muted(" label"), pairs joined by a dim ` · `.
   const left = " " + hint.map((pair) => T.dim(pair.keys) + T.muted(" " + pair.label)).join(T.dim(" \u00b7 "));

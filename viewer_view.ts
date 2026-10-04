@@ -59,6 +59,73 @@ export function paneContentArea(
 }
 
 /**
+ * The scrollbar window for a pane body (Issue #137 §3/§4): where the
+ * scrollable content starts relative to the pane body, how many rows the pane
+ * draws, and the clamped offset it was drawn at. The header readout and the
+ * frame's right-border scrollbar both read this record.
+ */
+export interface ViewerScrollWindow {
+  rowOffset: number;
+  count: number;
+  scroll: number;
+  total: number;
+}
+
+/**
+ * One render pass's clamped viewer window (Issue #147): the vertical scroll
+ * offset, the horizontal scroll offset, and the scrollbar window (null when
+ * the content fits or the branch carries none).
+ */
+export interface ViewerWindow {
+  viewScroll: number;
+  hscroll: number;
+  scrollWindow: ViewerScrollWindow | null;
+}
+
+/**
+ * Inputs to `viewerWindow`: the requested offsets plus the geometry their
+ * clamps need. Omitted clamps are pass-throughs, so a branch that never
+ * scrolls (a card) states that by leaving them out rather than by copying a
+ * no-op `Math.max`.
+ */
+export interface ViewerWindowInput {
+  requestedScroll: number;
+  requestedHscroll: number;
+  /** Vertical content length; omit (with count) for a pane that never clamps. */
+  total?: number;
+  /** Rows the pane draws. */
+  count?: number;
+  /** Horizontal clamp ceiling; omit to pass requestedHscroll through. */
+  maxHscroll?: number;
+  /** Body-relative first scrollable row; omit for no scrollbar window. */
+  rowOffset?: number;
+}
+
+/**
+ * The one clamp for the viewer pane (Issue #147): one render pass produces
+ * this object, and the body rows, the header badge/readout and the frame
+ * scrollbar all consume it, so the #065 divergence between the offset the
+ * body was drawn at and the offset a consumer reports cannot be reintroduced
+ * by reordering the render code.
+ */
+export function viewerWindow(input: ViewerWindowInput): ViewerWindow {
+  const { total, count } = input;
+  const viewScroll =
+    total !== undefined && count !== undefined
+      ? Math.max(0, Math.min(input.requestedScroll, Math.max(0, total - count)))
+      : input.requestedScroll;
+  const hscroll =
+    input.maxHscroll !== undefined
+      ? Math.max(0, Math.min(input.requestedHscroll, input.maxHscroll))
+      : input.requestedHscroll;
+  const scrollWindow =
+    input.rowOffset !== undefined && total !== undefined && count !== undefined && total > count
+      ? { rowOffset: input.rowOffset, count, scroll: viewScroll, total }
+      : null;
+  return { viewScroll, hscroll, scrollWindow };
+}
+
+/**
  * Flat view-model record the overlay fills with already-computed data.
  * `mdContent` is authoritative in rendered-markdown mode (pre-styled by the
  * overlay, which owns markRenderedLineMatches); `display` is authoritative in

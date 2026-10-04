@@ -14,7 +14,7 @@ import { FAMILY_MAX_ROWS } from "./constants";
 import type { NavigatorTheme } from "./theme";
 import type { Focus, GitChangedFile, GitCommit, GitRow, GitState } from "./types";
 import { hardTruncate } from "./viewer";
-import { joinLeftRight, padTo, truncateAndWidth } from "./frame";
+import { joinLeftRight, leftBudget, padTo, truncateAndWidth } from "./frame";
 
 /**
  * A changed-file row's display path: porcelain's trailing-slash marker for an
@@ -190,11 +190,12 @@ export function buildGitHeader(leftW: number, view: GitHeaderView): string {
   if (view.gitNavCount > view.gitAreaRows) {
     const counter = T.dim(`${Math.min(view.gitCursorIndex + 1, view.gitNavCount)}/${view.gitNavCount}`) + " ";
     // Issue #138: the composer reserves one gap cell between the segments
-    // (`joinLeftRight`: maxLeft = width - rightW - 1), so the counter must fit
-    // label + info + counter + gap — not just the three segments. Without the
-    // gap the guard passed at leftW 31 while maxLeft was 3, and hardTruncate
-    // shaved the label to "GI"; the counter is dropped instead.
-    if (visibleWidth(label) + visibleWidth(info) + visibleWidth(counter) + 1 <= leftW) info += counter;
+    // (`joinLeftRight`), so the counter must fit label + counter inside the
+    // left budget — not just the segments. Without that cell the guard passed
+    // at leftW 31 while maxLeft was 3, and hardTruncate shaved the label to
+    // "GI"; the counter is dropped instead. Issue #147: the guard asks the
+    // composer for its budget instead of re-adding the gap by hand.
+    if (visibleWidth(label) + visibleWidth(counter) <= leftBudget(leftW, info)) info += counter;
   }
   return joinLeftRight(label, info, leftW);
 }

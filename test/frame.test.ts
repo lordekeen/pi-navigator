@@ -22,15 +22,18 @@ import {
   fitHint,
   FRAME_CORNERS,
   getFooterHint,
+  gitArea,
   initialFocus,
   isImageLine,
   joinLeftRight,
   layoutPanes,
   layoutRows,
+  leftBudget,
   leftColumnWidth,
   MODE_HINTS,
   overlayHeight,
   padTo,
+  paneArea,
   plainHint,
   shortPath,
   splitRows,
@@ -122,21 +125,38 @@ describe("splitRows", () => {
   });
 });
 
+describe("paneArea (Issue #147)", () => {
+  it("is a group's data rows: its header takes one, floored at 1", () => {
+    expect(paneArea(0)).toBe(1);
+    expect(paneArea(1)).toBe(1);
+    expect(paneArea(2)).toBe(1);
+    expect(paneArea(3)).toBe(2);
+    expect(paneArea(13)).toBe(12);
+  });
+});
+
 describe("pane areas", () => {
-  it("filesArea(36, default) is 12 and viewerArea(36) is 24, both floored at 2", () => {
-    expect(filesArea(36, "files-git-viewer")).toBe(12); // max(2, splitRows(bodyRows(30)).filesH - 1)
-    expect(viewerArea(36)).toBe(24); // max(2, bodyRows(30) - 1)
+  it("filesArea(36, default) is 12 and viewerArea(36) is 24, both floored at 1", () => {
+    expect(filesArea(36, "files-git-viewer")).toBe(12); // paneArea(splitRows(bodyRows(30)).filesH)
+    expect(viewerArea(36)).toBe(24); // paneArea(bodyRows(30))
     expect(filesArea(36, "files-git-viewer")).toBeGreaterThanOrEqual(2);
     expect(viewerArea(36)).toBeGreaterThanOrEqual(2);
   });
 
   // Issue #119: the area follows the layout's files height; the floor keeps a
-  // git-viewer session (filesH 0) safe if alignFilesCursor ever fires.
-  it("filesArea follows the layout: full height in files-viewer, floor 2 in git-viewer (Issue #119)", () => {
-    expect(filesArea(36, "files-viewer")).toBe(24); // max(2, bodyRows(30) - 1)
-    expect(filesArea(36, "git-viewer")).toBe(2); // max(2, 0 - 1)
+  // git-viewer session (filesH 0) safe if alignFilesCursor ever fires. Issue
+  // #147: that floor is `paneArea`'s 1, the same expression render applies.
+  it("filesArea follows the layout: full height in files-viewer, floor 1 in git-viewer (Issue #119)", () => {
+    expect(filesArea(36, "files-viewer")).toBe(24); // paneArea(bodyRows(30))
+    expect(filesArea(36, "git-viewer")).toBe(1); // paneArea(0) — the pane draws no data row
     expect(filesArea(24, "files-viewer")).toBe(bodyRows(overlayHeight(24)) - 1);
-    expect(filesArea(24, "git-viewer")).toBe(2);
+    expect(filesArea(24, "git-viewer")).toBe(1);
+  });
+
+  it("gitArea mirrors filesArea on the git group and floors at 1 for a hidden pane", () => {
+    expect(gitArea(36, "files-git-viewer")).toBe(10); // paneArea(splitRows(25).gitH)
+    expect(gitArea(36, "git-viewer")).toBe(24); // paneArea(bodyRows(30))
+    expect(gitArea(36, "files-viewer")).toBe(1); // paneArea(0)
   });
 });
 
@@ -219,6 +239,14 @@ describe("joinLeftRight", () => {
     const out = joinLeftRight(left, right, 20);
     expect(out.endsWith(right)).toBe(true);
     expect(visibleWidth(out)).toBeLessThanOrEqual(20);
+    // The left segment fills exactly the composer's published budget, then
+    // the one gap cell, then the right segment (Issue #147). hardTruncate
+    // re-terminates the cut with a reset, hence the strip.
+    const budget = leftBudget(20, right);
+    expect(budget).toBe(9);
+    const plain = out.replace("\x1b[0m", "");
+    expect(plain.startsWith("x".repeat(budget))).toBe(true);
+    expect(plain.slice(budget)).toBe(" " + right);
   });
 
   it("keeps both sides and fills the gap when everything fits", () => {
@@ -235,6 +263,22 @@ describe("joinLeftRight", () => {
     expect(joinLeftRight(kitty, "right", 40)).toBe(kitty);
     expect(joinLeftRight("left", iterm2, 40)).toBe(iterm2);
     expect(joinLeftRight(iterm2, "right", 40)).toBe(iterm2);
+  });
+});
+
+describe("leftBudget (Issue #147)", () => {
+  it("is the widest left segment that leaves the right segment its one gap cell", () => {
+    expect(leftBudget(20, "cd")).toBe(17); // joinLeftRight: maxLeft = 20 - 2 - 1
+    expect(leftBudget(4, "abcd")).toBe(0); // floored, never negative
+    expect(leftBudget(0, "")).toBe(0);
+  });
+
+  it("measures the right segment with visibleWidth, not its code-unit length", () => {
+    // Styled text: 9 code units, 2 visible cells; and wide chars: 1 code
+    // point, 2 cells each. A `.length` budget would under-count the former
+    // and over-count the latter.
+    expect(leftBudget(10, "\x1b[2mab\x1b[0m")).toBe(7); // 10 - 2 - 1
+    expect(leftBudget(10, "\u65e5\u672c")).toBe(5); // 10 - 4 - 1
   });
 });
 

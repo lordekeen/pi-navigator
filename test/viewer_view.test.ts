@@ -22,19 +22,12 @@ import {
   paneContentArea,
   paneContentWidth,
   renderViewerPane,
+  viewerWindow,
   type ViewerPaneView,
 } from "../viewer_view";
 
 const identityTheme = makeNavigatorTheme({
   fg: (_c: string, t: string) => t,
-  bg: (_c: string, t: string) => t,
-  bold: (t: string) => t,
-  underline: (t: string) => t,
-  inverse: (t: string) => t,
-} as never);
-
-const toneTheme = makeNavigatorTheme({
-  fg: (c: string, t: string) => `${c}:${t}`,
   bg: (_c: string, t: string) => t,
   bold: (t: string) => t,
   underline: (t: string) => t,
@@ -474,5 +467,64 @@ describe("input bars", () => {
       60,
     );
     expect(bar).toContain("2/3 matches");
+  });
+});
+
+describe("viewerWindow (Issue #147)", () => {
+  it("clamps an overshooting scroll request to the last full window and records the window", () => {
+    const win = viewerWindow({
+      requestedScroll: 100,
+      requestedHscroll: 0,
+      total: 40,
+      count: 10,
+      rowOffset: 2,
+    });
+    expect(win.viewScroll).toBe(30); // 40 - 10
+    // The window carries the clamped offset, so the readout and the border
+    // scrollbar cannot report a different position than the body rows.
+    expect(win.scrollWindow).toEqual({ rowOffset: 2, count: 10, scroll: 30, total: 40 });
+  });
+
+  it("produces no scrollbar window when the content fits the pane", () => {
+    const exact = viewerWindow({ requestedScroll: 0, requestedHscroll: 0, total: 10, count: 10, rowOffset: 1 });
+    expect(exact.viewScroll).toBe(0);
+    expect(exact.scrollWindow).toBeNull();
+    const under = viewerWindow({ requestedScroll: 0, requestedHscroll: 0, total: 3, count: 10, rowOffset: 1 });
+    expect(under.scrollWindow).toBeNull();
+  });
+
+  it("passes the requested offsets through when the branch declares no clamp", () => {
+    const win = viewerWindow({ requestedScroll: 7, requestedHscroll: 3 });
+    expect(win.viewScroll).toBe(7);
+    expect(win.hscroll).toBe(3);
+    expect(win.scrollWindow).toBeNull();
+  });
+
+  it("clamps hscroll only when a ceiling is given", () => {
+    expect(viewerWindow({ requestedScroll: 0, requestedHscroll: 12, maxHscroll: 5 }).hscroll).toBe(5);
+    expect(viewerWindow({ requestedScroll: 0, requestedHscroll: 12 }).hscroll).toBe(12);
+  });
+
+  it("clamps negative requests to 0 on the clamped paths", () => {
+    const win = viewerWindow({
+      requestedScroll: -3,
+      requestedHscroll: -2,
+      total: 40,
+      count: 10,
+      maxHscroll: 5,
+      rowOffset: 1,
+    });
+    expect(win.viewScroll).toBe(0);
+    expect(win.hscroll).toBe(0);
+    expect(win.scrollWindow).toEqual({ rowOffset: 1, count: 10, scroll: 0, total: 40 });
+  });
+
+  it("keeps a native image's pinned scroll at 0 without a readout window", () => {
+    // The native branch passes requestedScroll 0 with the image's totals; the
+    // clamp must keep the pin exact, and no rowOffset means no scrollbar.
+    const win = viewerWindow({ requestedScroll: 0, requestedHscroll: 4, total: 40, count: 10 });
+    expect(win.viewScroll).toBe(0);
+    expect(win.hscroll).toBe(4);
+    expect(win.scrollWindow).toBeNull();
   });
 });

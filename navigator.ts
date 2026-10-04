@@ -49,6 +49,7 @@ import {
   leftColumnWidth,
   overlayHeight,
   padTo,
+  paneArea,
   useLeftColumn,
   viewerArea,
 } from "./frame";
@@ -93,7 +94,10 @@ import {
   paneContentArea,
   paneContentWidth,
   renderViewerPane,
+  viewerWindow,
   type ViewerPaneView,
+  type ViewerScrollWindow,
+  type ViewerWindow,
 } from "./viewer_view";
 
 export interface NavigatorOptions {
@@ -301,19 +305,11 @@ export class NavigatorOverlay implements Focusable {
    * Viewer scrollbar window recorded by buildRightRows during a render pass
    * (Issue #137 §4): the frame's right border column draws the track/thumb
    * from this record so the thumb cannot drift from the clamp applied to
-   * `viewScroll`. Transient — recomputed on every pass, never cached, so
-   * `invalidate()` has nothing to clear for it.
+   * `viewScroll`. It is the window's value (Issue #147) — the render branch
+   * that computes the window is its single writer. Transient — recomputed on
+   * every pass, never cached, so `invalidate()` has nothing to clear for it.
    */
-  private viewerScrollWindow: {
-    /** Body-relative index of the first scrollable content row. */
-    rowOffset: number;
-    /** Scrollable content rows drawn (the viewer window height). */
-    count: number;
-    /** The clamped scroll offset the content was drawn at. */
-    scroll: number;
-    /** Total content rows (rendered-markdown lines or wrapped display rows). */
-    total: number;
-  } | null = null;
+  private viewerScrollWindow: ViewerScrollWindow | null = null;
 
   constructor(options: NavigatorOptions) {
     this.cwd = options.cwd;
@@ -1494,7 +1490,7 @@ export class NavigatorOverlay implements Focusable {
 
     if (panes.files) {
       const filesRowModel = this.filesRows();
-      const filesAreaRows = Math.max(1, heights.filesH - 1);
+      const filesAreaRows = paneArea(heights.filesH);
       this.ensureFilesCursorVisibleFor(filesRowModel.length, filesAreaRows);
 
       const filesCtx = {
@@ -1532,7 +1528,7 @@ export class NavigatorOverlay implements Focusable {
 
       const gitRowModel = this.gitRows();
       const navRows = this.gitNavRows();
-      const gitAreaRows = Math.max(1, heights.gitH - 1);
+      const gitAreaRows = paneArea(heights.gitH);
       this.ensureGitCursorVisibleFor(gitRowModel, navRows, gitAreaRows);
 
       rows.push(buildGitHeader(leftW, {
@@ -1610,7 +1606,7 @@ export class NavigatorOverlay implements Focusable {
       this.recomputeSearchIfNeeded();
     }
 
-    const area = Math.max(1, body - 1);
+    const area = paneArea(body);
     // Pane snapshot for chafa geometry. The chafa branch has no gutter, so
     // the pane is the full right panel width (rev. 2 amendment 3). Pure
     // bookkeeping — no user-visible state is touched during render (Issue
@@ -1618,15 +1614,18 @@ export class NavigatorOverlay implements Focusable {
     this.lastViewerLayout = { cols: rightW, rows: area };
 
     // Precompute the content the pure renderer lays out. Every cache write,
-    // clamp and searchJump mutation stays here, in the original order; the
-    // pure viewer renderer only pads and joins the already-computed rows.
+    // clamp and searchJump mutation stays here; the pure viewer renderer only
+    // pads and joins the already-computed rows.
     let mdContent: Array<string | null> | null = null;
     let display: DisplayRow[] | null = null;
     let imageLines: string[] | null = null;
-    // Issue #137 §4: the scrollbar window is recomputed every render pass;
-    // reset first so a branch that stops overflowing cannot leave the last
-    // frame's thumb behind.
-    this.viewerScrollWindow = null;
+    // Issue #147: every branch below assigns this window and writes it back
+    // to the scroll fields, so the window is the single writer for them (the
+    // old top-of-method reset is gone). The `ViewerPaneView` record at the
+    // end consumes the window — moving the record above the branch that
+    // produces it is a compile error (definite assignment), which is what
+    // makes #065's offset contract structural instead of remembered.
+    let viewerWin: ViewerWindow;
 
     if (file) {
       const verdict =
@@ -1643,12 +1642,18 @@ export class NavigatorOverlay implements Focusable {
         // Chafa clamps exactly like the text path (render-time clamp keeps
         // the frame valid between a resize and its debounced reflow, D10);
         // a native image is a terminal-anchored placement, so scroll is
-        // pinned to 0 (D9).
-        if (verdict.renderer === "native") {
-          this.viewScroll = 0;
-        } else {
-          this.viewScroll = Math.max(0, Math.min(this.viewScroll, Math.max(0, verdict.lines.length - area)));
-        }
+        // pinned to 0 (D9) — through the window, which keeps the pin exact.
+        // Images carry no scrollbar window: their rows are pre-styled blocks,
+        // not a scrollable readout.
+        viewerWin = viewerWindow({
+          requestedScroll: verdict.renderer === "native" ? 0 : this.viewScroll,
+          requestedHscroll: this.viewHscroll,
+          total: verdict.lines.length,
+          count: area,
+        });
+        this.viewScroll = viewerWin.viewScroll;
+        this.viewHscroll = viewerWin.hscroll;
+        this.viewerScrollWindow = viewerWin.scrollWindow;
         imageLines = verdict.lines;
       } else if (!isCard) {
         const { noticeRows, contentArea } = paneContentArea(area, file, this.diskChanged);
@@ -1661,14 +1666,19 @@ export class NavigatorOverlay implements Focusable {
             }
             this.searchJump = false;
           }
-          this.viewScroll = Math.max(0, Math.min(this.viewScroll, Math.max(0, mdLines.length - contentArea)));
-          // Issue #137 §3/§4: the same clamp that positions the content also
-          // positions the header readout and the border scrollbar; a window
-          // that fits (`total <= count`) has neither.
-          this.viewerScrollWindow =
-            mdLines.length > contentArea
-              ? { rowOffset: 1 + noticeRows, count: contentArea, scroll: this.viewScroll, total: mdLines.length }
-              : null;
+          // Issue #137 §3/§4, #147: one window positions the content, the
+          // header readout and the border scrollbar; a pane whose content
+          // fits (`total <= count`) gets no scrollbar window.
+          viewerWin = viewerWindow({
+            requestedScroll: this.viewScroll,
+            requestedHscroll: this.viewHscroll,
+            total: mdLines.length,
+            count: contentArea,
+            rowOffset: 1 + noticeRows,
+          });
+          this.viewScroll = viewerWin.viewScroll;
+          this.viewHscroll = viewerWin.hscroll;
+          this.viewerScrollWindow = viewerWin.scrollWindow;
 
           const currentMatch =
             this.searchMatches.length > 0
@@ -1683,7 +1693,7 @@ export class NavigatorOverlay implements Focusable {
           // renderer just pads the pre-styled results.
           mdContent = [];
           for (let i = 0; i < contentArea; i++) {
-            const lineIdx = this.viewScroll + i;
+            const lineIdx = viewerWin.viewScroll + i;
             const rawLine = mdLines[lineIdx];
             if (rawLine === undefined) {
               mdContent.push(null);
@@ -1698,17 +1708,15 @@ export class NavigatorOverlay implements Focusable {
         } else {
           const marked = this.markSearch(file);
 
-          // Clamp horizontal scroll and scroll position. `maxLineWidth` depends
-          // only on visible width, which search marking does not change, so it
-          // is cached on the stable `file` reference; `computeRows` is cached
-          // on the cached `marked` reference plus width/wrap/hscroll, so
-          // vertical scrolling no longer re-wraps the whole file each
-          // keystroke.
-          // Clamp before the header is built (Issue #065): the `col N` badge
-          // reads this.viewHscroll after this point, so badge and body agree.
+          // `maxLineWidth` depends only on visible width, which search
+          // marking does not change, so it is cached on the stable `file`
+          // reference; `computeRows` is cached on the cached `marked`
+          // reference plus width/wrap, so vertical scrolling no longer
+          // re-wraps the whole file each keystroke. Issue #147: the rows do
+          // not read the hscroll offset (the cache key omits it and styled
+          // text is sliced at render time), so computing them before the
+          // window's hscroll clamp is byte-identical to clamping first.
           const maxH = Math.max(0, this.cachedMaxLineWidth(file) - contentW);
-          this.viewHscroll = Math.max(0, Math.min(this.viewHscroll, maxH));
-
           display = this.cachedComputeRows(marked, contentW, this.viewWrap);
           if (this.searchJump && this.searchMatches.length > 0) {
             const currentMatch = this.searchMatches[this.searchIndex];
@@ -1716,15 +1724,36 @@ export class NavigatorOverlay implements Focusable {
             if (target >= 0) this.viewScroll = Math.max(0, target - Math.floor(contentArea / 2));
             this.searchJump = false;
           }
-          this.viewScroll = Math.max(0, Math.min(this.viewScroll, Math.max(0, display.length - contentArea)));
-          this.viewerScrollWindow =
-            display.length > contentArea
-              ? { rowOffset: 1 + noticeRows, count: contentArea, scroll: this.viewScroll, total: display.length }
-              : null;
+          viewerWin = viewerWindow({
+            requestedScroll: this.viewScroll,
+            requestedHscroll: this.viewHscroll,
+            total: display.length,
+            count: contentArea,
+            maxHscroll: maxH,
+            rowOffset: 1 + noticeRows,
+          });
+          this.viewScroll = viewerWin.viewScroll;
+          this.viewHscroll = viewerWin.hscroll;
+          this.viewerScrollWindow = viewerWin.scrollWindow;
         }
+      } else {
+        // Metadata/binary/error card: nothing scrolls, so the window is a
+        // pass-through — no clamp, no scrollbar.
+        viewerWin = viewerWindow({ requestedScroll: this.viewScroll, requestedHscroll: this.viewHscroll });
+        this.viewScroll = viewerWin.viewScroll;
+        this.viewHscroll = viewerWin.hscroll;
+        this.viewerScrollWindow = viewerWin.scrollWindow;
       }
+    } else {
+      // Loading / no file: the same pass-through window keeps every path's
+      // assignment uniform.
+      viewerWin = viewerWindow({ requestedScroll: this.viewScroll, requestedHscroll: this.viewHscroll });
+      this.viewScroll = viewerWin.viewScroll;
+      this.viewHscroll = viewerWin.hscroll;
+      this.viewerScrollWindow = viewerWin.scrollWindow;
     }
 
+    const scrollWindow = viewerWin.scrollWindow;
     const view: ViewerPaneView = {
       theme: this.T,
       focus: this.focus,
@@ -1741,25 +1770,23 @@ export class NavigatorOverlay implements Focusable {
       mdContent,
       display,
       digits,
-      viewScroll: this.viewScroll,
-      // Issue #137 §3: computed from the same clamped window the body rows
+      viewScroll: viewerWin.viewScroll,
+      // Issue #137 §3: derived from the same clamped window the body rows
       // were drawn at, so the readout cannot disagree with the content.
-      scrollInfo: this.viewerScrollWindow
+      scrollInfo: scrollWindow
         ? {
-            start: this.viewerScrollWindow.scroll + 1,
-            end: Math.min(
-              this.viewerScrollWindow.scroll + this.viewerScrollWindow.count,
-              this.viewerScrollWindow.total,
-            ),
-            total: this.viewerScrollWindow.total,
+            start: scrollWindow.scroll + 1,
+            end: Math.min(scrollWindow.scroll + scrollWindow.count, scrollWindow.total),
+            total: scrollWindow.total,
           }
         : null,
       wrap: this.viewWrap,
-      // Post-clamp by construction (Issue #065): the text branch above has
-      // already clamped this.viewHscroll, so the badge reports the same offset
-      // the body rows were rendered at. Moving this record above the clamp
-      // would re-introduce the divergent badge.
-      hscroll: this.viewHscroll,
+      // Post-clamp by construction (Issue #065, #147): the branch above ran
+      // this offset through `viewerWin`, and the body rows are drawn from
+      // that same window, so the badge reports the offset the rows were
+      // rendered at. Moving this record above the window assignment fails to
+      // compile.
+      hscroll: viewerWin.hscroll,
       imageLines,
       imageAsCard: this.imageAsCard,
       imageSupport: this.imageSupport,
