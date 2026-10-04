@@ -89,3 +89,11 @@ the short `footer` form (`keys` + label). Contexts (`FOCUS_BINDINGS` / `MODE_BIN
 ordered binding-id lists; the resolved pair tables, the modal's rows and the input-bar
 placeholders all derive from the table, so a hint key can only exist where its binding row
 does (Issue #148).
+
+## Viewer content
+
+The one discriminated value a render pass fills for the viewer pane's body — `image-lines`
+(rendered image rows), `card`, `markdown`, `display`, or `none`. The pane's exclusive body
+channels are a shape rather than a prose invariant: the class fills the slot once and
+`renderViewerPane` switches once, so the header badge and the body cannot derive different
+answers from the same verdict (Issue #149).

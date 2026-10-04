@@ -90,16 +90,12 @@ function paneView(partial: Partial<ViewerPaneView> = {}): ViewerPaneView {
     diskChanged: false,
     searchMode: false,
     renderMarkdown: false,
-    renderedMode: false,
-    mdContent: null,
-    display: null,
+    content: { kind: "none" },
     digits: 2,
     viewScroll: 0,
     scrollInfo: null,
     wrap: false,
     hscroll: 0,
-    imageLines: null,
-    imageAsCard: false,
     imageSupport: activeSupport(),
     imageGeometry: { cols: 40, rows: 12 },
     searchQuery: "",
@@ -169,7 +165,11 @@ describe("renderViewerPane", () => {
       imageVerdict: renderedVerdict("chafa", ["chafa-row-0", "chafa-row-1"]),
       lines: [],
     });
-    const rows = renderViewerPane(paneView({ file: image, imageLines: ["chafa-row-0", "chafa-row-1"] }), width, 4);
+    const rows = renderViewerPane(
+      paneView({ file: image, content: { kind: "image-lines", lines: ["chafa-row-0", "chafa-row-1"] } }),
+      width,
+      4,
+    );
     expect(rows).toHaveLength(5); // header + area rows
     expect(rows[1]).toContain("chafa-row-0");
     expect(visibleWidth(rows[1]!)).toBe(width);
@@ -184,7 +184,7 @@ describe("renderViewerPane", () => {
       lines: [],
     });
     const rows = renderViewerPane(
-      paneView({ file: image, imageLines: [KITTY_SEQ, "", ""], imageSupport: nativeSupport() }),
+      paneView({ file: image, content: { kind: "image-lines", lines: [KITTY_SEQ, "", ""] }, imageSupport: nativeSupport() }),
       width,
       4,
     );
@@ -198,7 +198,7 @@ describe("renderViewerPane", () => {
 
   it("draws the card box border rows for error files", () => {
     const bad = viewerFile({ kind: "error", relPath: "locked.ts", message: "EACCES" });
-    const rows = renderViewerPane(paneView({ file: bad }), width, 10);
+    const rows = renderViewerPane(paneView({ file: bad, content: { kind: "card" } }), width, 10);
     expect(rows[0]).toContain("locked"); // header path
     expect(rows.some((row) => row.includes("\u256d"))).toBe(true); // ╭ (card top, rounded #137)
     expect(rows.some((row) => row.includes("\u2570"))).toBe(true); // ╰ (card bottom)
@@ -211,7 +211,7 @@ describe("renderViewerPane", () => {
       { line: null, text: "wrapped-continuation" },
       { line: 5, text: "hello" },
     ];
-    const rows = renderViewerPane(paneView({ file: viewerFile(), display }), width, 3);
+    const rows = renderViewerPane(paneView({ file: viewerFile(), content: { kind: "display", rows: display } }), width, 3);
     expect(rows).toHaveLength(4); // header + 3 content rows
     // null line: digits(2) spaces + separator space -> "   " before the │
     expect(rows[1]).toContain("\u2502");
@@ -224,7 +224,7 @@ describe("renderViewerPane", () => {
 
   it("renders pre-styled markdown rows, with null entries as blank rows", () => {
     const md = viewerFile({ kind: "text", relPath: "README.md", rawText: "# hi" });
-    const rows = renderViewerPane(paneView({ file: md, renderedMode: true, mdContent: ["<styled>", null] }), width, 3);
+    const rows = renderViewerPane(paneView({ file: md, content: { kind: "markdown", rows: ["<styled>", null] } }), width, 3);
     expect(rows[1]).toContain("<styled>");
     expect(rows[1]!.startsWith(" ")).toBe(true); // one-space lead-in before the styled row
     expect(visibleWidth(rows[1]!)).toBe(width);
@@ -232,34 +232,25 @@ describe("renderViewerPane", () => {
     expect(visibleWidth(rows[2]!)).toBe(width); // still padded to the pane width
   });
 
-  // Issue #103: an image with no rendered lines must route to the metadata
-  // card, never fall through to the text-like gutter and line numbering.
-  it("routes an image whose view-model rows are null to the metadata card", () => {
+  // Issue #103: an image the class did not render shows the metadata card,
+  // never the text-like gutter and line numbering. The zero-line → card
+  // decision lives in navigator.ts and stays pinned by its #103 test; the
+  // producer can no longer emit an empty `image-lines` (Issue #149), so the
+  // old null-rows and empty-rows cases fold into this one card case.
+  it("routes an image with card content to the metadata card", () => {
     const image = viewerFile({
       kind: "image",
       relPath: "pic.png",
       imageVerdict: renderedVerdict("chafa", ["chafa-row-0"]),
       lines: [],
     });
-    const rows = renderViewerPane(paneView({ file: image, imageLines: null }), width, 10);
+    const rows = renderViewerPane(paneView({ file: image, content: { kind: "card" } }), width, 10);
     expect(rows.some((row) => row.includes("\u256d"))).toBe(true); // card top border
     expect(rows.join("\n")).toContain("Image"); // card title
-  });
-
-  it("routes a rendered image with an empty row list to the metadata card", () => {
-    const image = viewerFile({
-      kind: "image",
-      relPath: "pic.png",
-      imageVerdict: renderedVerdict("chafa", [], 40, 0),
-      lines: [],
-    });
-    const rows = renderViewerPane(paneView({ file: image, imageLines: [] }), width, 10);
-    expect(rows.some((row) => row.includes("\u256d"))).toBe(true);
-    expect(rows.join("\n")).toContain("Image");
     expect(rows.join("\n")).not.toContain("chafa-row-");
   });
 
-  it("routes a native-rendered image without view-model rows to the metadata card", () => {
+  it("routes a native-rendered image with card content to the metadata card", () => {
     const image = viewerFile({
       kind: "image",
       relPath: "pic.png",
@@ -267,7 +258,7 @@ describe("renderViewerPane", () => {
       lines: [],
     });
     const rows = renderViewerPane(
-      paneView({ file: image, imageLines: null, imageSupport: nativeSupport() }),
+      paneView({ file: image, content: { kind: "card" }, imageSupport: nativeSupport() }),
       width,
       10,
     );
@@ -281,7 +272,7 @@ describe("renderViewerPane", () => {
       imageVerdict: renderedVerdict("chafa", ["chafa-row-0", "chafa-row-1"]),
       lines: [],
     });
-    const rows = renderViewerPane(paneView({ file: image, imageLines: ["chafa-row-0", "chafa-row-1"] }), width, 4);
+    const rows = renderViewerPane(paneView({ file: image, content: { kind: "image-lines", lines: ["chafa-row-0", "chafa-row-1"] } }), width, 4);
     expect(rows.some((row) => row.includes("\u256d"))).toBe(false);
     expect(rows[1]).toContain("chafa-row-0");
   });
@@ -301,7 +292,7 @@ describe("buildViewerHeader", () => {
       lines: [],
     });
     const kitty = buildViewerHeader(
-      paneView({ file: image, imageLines: [KITTY_SEQ], imageSupport: nativeSupport() }),
+      paneView({ file: image, content: { kind: "image-lines", lines: [KITTY_SEQ] }, imageSupport: nativeSupport() }),
       70,
     );
     expect(kitty).toContain("kitty");
@@ -310,7 +301,7 @@ describe("buildViewerHeader", () => {
     const iterm = buildViewerHeader(
       paneView({
         file: image,
-        imageLines: [KITTY_SEQ],
+        content: { kind: "image-lines", lines: [KITTY_SEQ] },
         imageSupport: nativeSupport({ nativeProtocol: "iterm2" }),
       }),
       70,
@@ -318,7 +309,7 @@ describe("buildViewerHeader", () => {
     expect(iterm).toContain("iterm2");
 
     const card = buildViewerHeader(
-      paneView({ file: image, imageLines: [KITTY_SEQ], imageAsCard: true, imageSupport: nativeSupport() }),
+      paneView({ file: image, content: { kind: "card" }, imageSupport: nativeSupport() }),
       70,
     );
     expect(card).toContain("i render");

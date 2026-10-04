@@ -114,10 +114,25 @@ export function viewerWindow(input: ViewerWindowInput): ViewerWindow {
 }
 
 /**
+ * The pane's one body payload (Issue #149): the class fills exactly one
+ * variant per render pass and `renderViewerPane` branches on `kind` once, so
+ * the body channels' exclusivity is carried by the union instead of by
+ * coordinating parallel nullable fields.
+ */
+export type ViewerContent =
+  | { kind: "image-lines"; lines: string[] }        // rendered image rows (non-empty by construction)
+  | { kind: "card" }                                 // binary / error / image shown as a card
+  // Rendered-markdown mode active: these rows are authoritative — pre-styled
+  // by the overlay, which owns markRenderedLineMatches; null entry = blank row.
+  | { kind: "markdown"; rows: Array<string | null> } // pre-styled rendered markdown
+  // Text mode: search-marked, wrapped and truncated by the overlay's caches.
+  | { kind: "display"; rows: DisplayRow[] }          // text-like wrapped rows (incl. diffs)
+  | { kind: "none" };                                // no body drawn (null file / loading)
+
+/**
  * Flat view-model record the overlay fills with already-computed data.
- * `mdContent` is authoritative in rendered-markdown mode (pre-styled by the
- * overlay, which owns markRenderedLineMatches); `display` is authoritative in
- * text mode (search-marked, wrapped and truncated by the overlay's caches).
+ * `content` carries the one body payload (Issue #149); the remaining fields
+ * are header/bar state plus geometry and support snapshots.
  */
 export interface ViewerPaneView {
   /** Renderer tokens; every color goes through this. */
@@ -142,12 +157,8 @@ export interface ViewerPaneView {
   searchMode: boolean;
   /** Raw rendered-markdown flag (did the user toggle `m`). */
   renderMarkdown: boolean;
-  /** Rendered-markdown mode active: mdContent is authoritative. */
-  renderedMode: boolean;
-  /** Pre-styled rendered-markdown content rows; null entry = blank row. */
-  mdContent: Array<string | null> | null;
-  /** Search-marked wrapped text rows (text mode). */
-  display: DisplayRow[] | null;
+  /** The one body payload; the renderer switches on `kind` once (Issue #149). */
+  content: ViewerContent;
   /** Gutter width in digits (text mode). */
   digits: number;
   /** Already-clamped vertical scroll offset (all content branches). */
@@ -161,10 +172,6 @@ export interface ViewerPaneView {
   wrap: boolean;
   /** Horizontal scroll offset (header meta). */
   hscroll: number;
-  /** Pre-styled chafa image rows; null when not a rendered image. */
-  imageLines: string[] | null;
-  /** True when the image is shown as a metadata card. */
-  imageAsCard: boolean;
   /** Image-support snapshot (header badge + card hints). */
   imageSupport: ImageSupport;
   /** Current pane geometry for chafa (null when never laid out). */
@@ -202,7 +209,7 @@ export function renderViewerPane(view: ViewerPaneView, width: number, area: numb
   // each carrying its own trailing reset (§8), so every row is truncated to
   // the full pane width with an empty ellipsis (Issue #010) and padded;
   // native rows are pass-through with right-side fill (spec §8, D9).
-  if (view.imageLines && view.imageLines.length > 0) {
+  if (view.content.kind === "image-lines") {
     // Native rows (spec §8.2, D9): the sequence row is emitted first,
     // un-truncated, with right-side space fill only — the image anchors where
     // the sequence appears, so no width function may cut or re-anchor it.
@@ -211,7 +218,7 @@ export function renderViewerPane(view: ViewerPaneView, width: number, area: numb
     const verdict = file.imageVerdict;
     const native = verdict?.kind === "rendered" && verdict.renderer === "native";
     for (let i = 0; i < area; i++) {
-      const line = view.imageLines[view.viewScroll + i];
+      const line = view.content.lines[view.viewScroll + i];
       if (line === undefined || line === "") {
         rows.push(padTo("", width));
         continue;
@@ -225,10 +232,11 @@ export function renderViewerPane(view: ViewerPaneView, width: number, area: numb
     return rows;
   }
 
-  // Reaching here with kind "image" means the rendered-image branch above
-  // did not return (no rendered lines), so every image without lines gets
-  // the metadata card — never the text-like gutter (Issue #103).
-  if (file.kind === "binary" || file.kind === "error" || file.kind === "image") {
+  // Card branch: the class routes every binary / error / image it does not
+  // render here, so a zero-line rendered verdict gets the metadata card —
+  // never the text-like gutter (Issue #103) — and no file.kind or line-count
+  // check re-derives the choice (Issue #149).
+  if (view.content.kind === "card") {
     rows.push(...buildCard(file, width, area, view));
     return rows;
   }
@@ -246,15 +254,16 @@ export function renderViewerPane(view: ViewerPaneView, width: number, area: numb
     rows.push(padTo(" " + T.warning("file changed on disk \u2014 press r to reload"), width));
   }
 
-  if (view.renderedMode && view.mdContent) {
+  const body = view.content;
+  if (body.kind === "markdown") {
     for (let i = 0; i < contentArea; i++) {
-      const row = view.mdContent[i];
+      const row = body.rows[i];
       rows.push(row === null ? padTo("", width) : padTo(" " + row, width));
     }
-  } else if (view.display) {
+  } else if (body.kind === "display") {
     const { contentW } = paneContentWidth(file, false, width);
     for (let i = 0; i < contentArea; i++) {
-      const row = view.display[view.viewScroll + i];
+      const row = body.rows[view.viewScroll + i];
       if (!row) {
         rows.push(padTo("", width));
         continue;
@@ -293,8 +302,13 @@ export function buildViewerHeader(view: ViewerPaneView, rightW: number): string 
       // Header badge (spec §7.5, §10): a rendered image shows its renderer and
       // the toggle affordance; a capable card shows how to get back to it.
       const verdict = file.imageVerdict;
-      if (verdict?.kind === "rendered" && !view.imageAsCard) {
-        meta.push(verdict.renderer === "chafa" ? "chafa" : (view.imageSupport.nativeProtocol ?? "native"));
+      // Issue #149 delta: the badge keys on the same content slot the body
+      // draws, so a rendered verdict with zero lines reads `i render` with
+      // its card (matching the body and the `i` handler). The verdict only
+      // narrows the renderer name — image-lines implies a rendered verdict
+      // by construction.
+      if (view.content.kind === "image-lines") {
+        meta.push(verdict?.kind === "rendered" && verdict.renderer === "chafa" ? "chafa" : (view.imageSupport.nativeProtocol ?? "native"));
         meta.push("i card");
       } else {
         meta.push("i render");

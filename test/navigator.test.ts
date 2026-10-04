@@ -2466,6 +2466,37 @@ describe("chafa image rendering", () => {
     }
     harness.overlay.dispose();
   });
+
+  it("badges a zero-line rendered verdict as i render, not i card, while showing its card (#149)", async () => {
+    // Issue #149's one documented behavior delta: the header badge keys on
+    // the same content slot the body draws, so a rendered verdict with no
+    // rows advertises `i render` (matching the card body and the `i`
+    // handler) instead of `chafa · i card`.
+    const harness = makeHarness(
+      36,
+      async (relPath): Promise<ViewerFile> => {
+        const image = chafaImage(relPath);
+        const verdict = image.imageVerdict;
+        return {
+          ...image,
+          imageVerdict: verdict?.kind === "rendered" ? { ...verdict, lines: [] } : verdict,
+        };
+      },
+      undefined,
+      undefined,
+      activeSupport(),
+    );
+    withTree(harness, ["empty.png"]);
+    harness.overlay.render(120);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+
+    const joined = harness.overlay.render(120).join("\n");
+    expect(joined).toContain("i render"); // header meta (the delta)
+    expect(joined).not.toContain("i card"); // never the renderer + toggle pair
+    expect(joined).toContain("Image"); // the body still shows the metadata card
+    harness.overlay.dispose();
+  });
 });
 
 // ── Native image rendering (§12.4) ──

@@ -92,6 +92,7 @@ import {
   paneContentWidth,
   renderViewerPane,
   viewerWindow,
+  type ViewerContent,
   type ViewerPaneView,
   type ViewerWindow,
 } from "./viewer_view";
@@ -1579,10 +1580,10 @@ export class NavigatorOverlay implements Focusable {
 
     // Precompute the content the pure renderer lays out. Every cache write,
     // clamp and searchJump mutation stays here; the pure viewer renderer only
-    // pads and joins the already-computed rows.
-    let mdContent: Array<string | null> | null = null;
-    let display: DisplayRow[] | null = null;
-    let imageLines: string[] | null = null;
+    // pads and joins the already-computed rows. Issue #149: one
+    // discriminated `ViewerContent` replaces the parallel nullable channel
+    // locals — the class fills the slot once, in the branches below.
+    let content: ViewerContent = { kind: "none" };
     // Issue #147: every branch below assigns this window and writes it back
     // to the scroll fields, so the window is the single writer for them (the
     // old top-of-method reset is gone). The `ViewerPaneView` record at the
@@ -1618,7 +1619,7 @@ export class NavigatorOverlay implements Focusable {
         this.viewScroll = viewerWin.viewScroll;
         this.viewHscroll = viewerWin.hscroll;
         this.viewerScrollWindow = viewerWin.scrollWindow;
-        imageLines = verdict.lines;
+        content = { kind: "image-lines", lines: verdict.lines };
       } else if (!isCard) {
         const { noticeRows, contentArea } = paneContentArea(area, file, this.diskChanged);
 
@@ -1655,20 +1656,21 @@ export class NavigatorOverlay implements Focusable {
           // Pre-style the rendered-markdown content rows: per-line search
           // marking stays in the class (markRenderedLineMatches), the pure
           // renderer just pads the pre-styled results.
-          mdContent = [];
+          const rows: Array<string | null> = [];
           for (let i = 0; i < contentArea; i++) {
             const lineIdx = viewerWin.viewScroll + i;
             const rawLine = mdLines[lineIdx];
             if (rawLine === undefined) {
-              mdContent.push(null);
+              rows.push(null);
               continue;
             }
             let styledLine = rawLine;
             if (this.searchQuery && this.searchMatches.length > 0 && this.searchMatchLines.has(lineIdx)) {
               styledLine = this.markRenderedLineMatches(styledLine, lineIdx, currentMatch, currentOccurrenceOnLine);
             }
-            mdContent.push(styledLine);
+            rows.push(styledLine);
           }
+          content = { kind: "markdown", rows };
         } else {
           const marked = this.markSearch(file);
 
@@ -1681,17 +1683,17 @@ export class NavigatorOverlay implements Focusable {
           // text is sliced at render time), so computing them before the
           // window's hscroll clamp is byte-identical to clamping first.
           const maxH = Math.max(0, this.cachedMaxLineWidth(file) - contentW);
-          display = this.cachedComputeRows(marked, contentW, this.viewWrap);
+          const rows = this.cachedComputeRows(marked, contentW, this.viewWrap);
           if (this.searchJump && this.searchMatches.length > 0) {
             const currentMatch = this.searchMatches[this.searchIndex];
-            const target = display.findIndex((row) => row.line === currentMatch?.line);
+            const target = rows.findIndex((row) => row.line === currentMatch?.line);
             if (target >= 0) this.viewScroll = Math.max(0, target - Math.floor(contentArea / 2));
             this.searchJump = false;
           }
           viewerWin = viewerWindow({
             requestedScroll: this.viewScroll,
             requestedHscroll: this.viewHscroll,
-            total: display.length,
+            total: rows.length,
             count: contentArea,
             maxHscroll: maxH,
             rowOffset: 1 + noticeRows,
@@ -1699,6 +1701,7 @@ export class NavigatorOverlay implements Focusable {
           this.viewScroll = viewerWin.viewScroll;
           this.viewHscroll = viewerWin.hscroll;
           this.viewerScrollWindow = viewerWin.scrollWindow;
+          content = { kind: "display", rows };
         }
       } else {
         // Metadata/binary/error card: nothing scrolls, so the window is a
@@ -1707,6 +1710,7 @@ export class NavigatorOverlay implements Focusable {
         this.viewScroll = viewerWin.viewScroll;
         this.viewHscroll = viewerWin.hscroll;
         this.viewerScrollWindow = viewerWin.scrollWindow;
+        content = { kind: "card" };
       }
     } else {
       // Loading / no file: the same pass-through window keeps every path's
@@ -1730,9 +1734,7 @@ export class NavigatorOverlay implements Focusable {
       diskChanged: this.diskChanged,
       searchMode: this.mode === "search",
       renderMarkdown: this.viewRenderMarkdown,
-      renderedMode: useRendered,
-      mdContent,
-      display,
+      content,
       digits,
       viewScroll: viewerWin.viewScroll,
       // Issue #137 §3: derived from the same clamped window the body rows
@@ -1751,8 +1753,6 @@ export class NavigatorOverlay implements Focusable {
       // rendered at. Moving this record above the window assignment fails to
       // compile.
       hscroll: viewerWin.hscroll,
-      imageLines,
-      imageAsCard: this.imageAsCard,
       imageSupport: this.imageSupport,
       imageGeometry: this.currentImageGeometry(),
       searchQuery: this.searchQuery,
