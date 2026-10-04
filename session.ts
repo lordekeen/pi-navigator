@@ -25,7 +25,7 @@ import {
   MAX_VIEWER_CACHE_ENTRIES,
   REFRESH_INTERVAL_MS,
 } from "./constants";
-import { styleCommitMessage, styleDiffLines } from "./diff";
+import { composeDiffLines } from "./diff";
 import {
   detectRepo,
   gitCodeMap,
@@ -470,13 +470,9 @@ export function createSession(deps: SessionDeps): NavigatorSession {
     const diff = await readCommitDiff(cwd, shortHash);
     // Issue #120: the commit message rides above the diff, `git show`
     // style — subject bold, body plain, one blank separator line when a
-    // diff body follows. styleCommitMessage lives in diff.ts so the
-    // styling joins styleDiffLines under the same theme-free split.
-    const messageLines = styleCommitMessage(diff.message, deps.theme);
-    const lines =
-      messageLines.length > 0 && diff.lines.length > 0
-        ? [...messageLines, "", ...styleDiffLines(diff.lines, deps.theme)]
-        : [...messageLines, ...styleDiffLines(diff.lines, deps.theme)];
+    // diff body follows. composeDiffLines lives in diff.ts so the message
+    // assembly joins styleDiffLines under the same theme-free split.
+    const lines = composeDiffLines(diff, deps.theme);
     return {
       kind: "diff",
       relPath: `commit:${diff.shortHash}`,
@@ -485,6 +481,11 @@ export function createSession(deps: SessionDeps): NavigatorSession {
       lineCount: diff.lines.length,
       lines,
       notice: diff.notice,
+      // Issue #141: retain the plain styling source and the key it was styled
+      // under, so invalidate() can recompose the diff under a new theme
+      // without another `git show` — the #136 pattern for the diff pipeline.
+      styleDiff: { message: diff.message, lines: diff.lines },
+      styleKey: deps.styleKey?.(),
     };
   };
 

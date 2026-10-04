@@ -2740,6 +2740,92 @@ describe("Issue #136: invalidate() restyles the open file from its retained sour
   });
 });
 
+// ── Issue #141: invalidate() restyles the open commit diff too ──
+
+describe("Issue #141: invalidate() restyles the open commit diff from its retained source", () => {
+  /**
+   * loadCommit stub standing in for the session's diff loader: it returns a
+   * diff already composed under the key at open time, retaining the plain
+   * message + lines exactly like session.ts loadCommit now does. The
+   * mutable-theme fake below gives the recomposed lines an observable tag.
+   */
+  const diffLoader = (key: () => string) =>
+    vi.fn(
+      async (shortHash: string): Promise<ViewerFile> => ({
+        kind: "diff",
+        relPath: `commit:${shortHash}`,
+        commitHash: shortHash,
+        parents: [],
+        lines: [`stale-diff-under-${key()}`],
+        notice: `commit ${shortHash}`,
+        styleDiff: { message: { subject: "the subject", body: [] }, lines: ["+added"] },
+        styleKey: key(),
+      }),
+    );
+
+  const openCommitDiff = async (harness: Harness): Promise<void> => {
+    withTree(harness, ["a.ts"]);
+    withGit(harness);
+    harness.overlay.handleInput(KEYS.tab); // focus git
+    harness.overlay.handleInput("G"); // bottom row: the commit
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+  };
+
+  it("re-styles the open diff when the style key changes, without reloading the commit", async () => {
+    let key = "key-A";
+    let tag = "A";
+    const loadCommit = diffLoader(() => key);
+    const harness = makeHarness(
+      36,
+      undefined,
+      (color, text) => (color === "toolDiffAdded" ? `${tag}:${text}` : text),
+      loadCommit,
+      undefined,
+      undefined,
+      undefined,
+      () => key,
+    );
+    await openCommitDiff(harness);
+    expect(strip(harness.overlay.render(120).join("\n"))).toContain("stale-diff-under-key-A");
+
+    // The host switched the theme, then called invalidate().
+    key = "key-B";
+    tag = "B";
+    harness.overlay.invalidate();
+    const rendered = strip(harness.overlay.render(120).join("\n"));
+    // Recomposed from the retained styleDiff source under the theme now in
+    // force — the message and the diff body both repaint.
+    expect(rendered).toContain("the subject");
+    expect(rendered).toContain("B:+added");
+    expect(rendered).not.toContain("stale-diff-under-key-A");
+    // The invalidate path performed no git read (Issue #141 acceptance).
+    expect(loadCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the open diff untouched when the key is unchanged (resize invalidate)", async () => {
+    const key = () => "key-A";
+    const loadCommit = diffLoader(key);
+    const harness = makeHarness(
+      36,
+      undefined,
+      (color, text) => (color === "toolDiffAdded" ? `A:${text}` : text),
+      loadCommit,
+      undefined,
+      undefined,
+      undefined,
+      key,
+    );
+    await openCommitDiff(harness);
+
+    harness.overlay.invalidate();
+    const rendered = strip(harness.overlay.render(120).join("\n"));
+    expect(rendered).toContain("stale-diff-under-key-A"); // served as-is
+    expect(rendered).not.toContain("A:+added"); // no restyle ran
+    expect(loadCommit).toHaveBeenCalledTimes(1);
+  });
+});
+
 // ── Issue #124: selection anchors by identity across refreshes ──
 
 describe("Issue #124: selection anchors by identity across refreshes", () => {

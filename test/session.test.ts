@@ -707,4 +707,27 @@ describe("createSession: loadCommit (v3 commit detail)", () => {
     // git show style: the subject line, a blank separator, then the diff body.
     expect(file.lines).toEqual(["fix things", "", "+added", "-removed"]);
   });
+
+  it("retains the plain styling source and the current style key (Issue #141)", async () => {
+    const commit: CommitDiff = {
+      shortHash: "abc1234",
+      parents: ["dead000"],
+      lines: ["+added", "-removed"],
+      filesChanged: 1,
+      insertions: 2,
+      deletions: 1,
+      notice: "commit abc1234 \u00b7 1 file",
+      message: { subject: "fix things", body: ["body line"] },
+    };
+    ctl.commitDiff = commit;
+    const { session } = makeSession({ styleKey: () => "key-A" });
+    const file = await session.loadCommit("abc1234");
+
+    // The retained source is exactly the plain material `lines` was composed
+    // from (identity theme here), so invalidate() can recompose without a
+    // `git show`; the key records the styling it is currently under.
+    expect(file.styleDiff).toEqual({ message: commit.message, lines: commit.lines });
+    expect(file.styleKey).toBe("key-A");
+    expect(file.lines).toEqual(["fix things", "body line", "", "+added", "-removed"]);
+  });
 });

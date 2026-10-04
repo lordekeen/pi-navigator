@@ -71,12 +71,14 @@ export function makeNavigatorTheme(theme: Theme): NavigatorTheme {
 }
 
 /**
- * The syntax tokens `highlightCode` resolves through the active pi Theme: its
- * cli-highlight theme closure plus the `mdCodeBlock` fallback for a language
- * it cannot highlight. Kept next to `makeStyleKey` so the fingerprint and the
- * highlighter's own token set cannot drift silently.
+ * The theme tokens the viewer's retained content depends on: `highlightCode`'s
+ * syntax set (its cli-highlight theme closure plus the `mdCodeBlock` fallback
+ * for a language it cannot highlight) plus the diff composer's roles —
+ * `styleCommitMessage`'s subject/body and `styleDiffLines`' muted/accent and
+ * dedicated diff tokens (Issue #141). Kept next to `makeStyleKey` so the
+ * fingerprint and the stylers' own token sets cannot drift silently.
  */
-const HIGHLIGHT_STYLE_TOKENS: readonly ThemeColor[] = [
+const VIEWER_STYLE_TOKENS: readonly ThemeColor[] = [
   "syntaxComment",
   "syntaxKeyword",
   "syntaxFunction",
@@ -88,22 +90,32 @@ const HIGHLIGHT_STYLE_TOKENS: readonly ThemeColor[] = [
   "syntaxPunctuation",
   "muted",
   "mdCodeBlock",
+  // Diff composer roles (Issues #120/#141): the commit message's text and
+  // the diff classifier's accent + toolDiff* set. `muted` is shared above.
+  "text",
+  "accent",
+  "toolDiffAdded",
+  "toolDiffRemoved",
+  "toolDiffContext",
 ];
 
 /**
- * Fingerprint of the syntax-token ANSI sequences `highlightCode`'s output
- * depends on: `getFgAnsi` for every token in {@link HIGHLIGHT_STYLE_TOKENS},
- * plus the color mode. This is the style cache key for the viewer's retained
- * pre-highlight source (Issue #136). The key is defined here because the
- * cache cost is about exactly this: a theme switch changes it and pays one
- * re-highlight per file actually reopened (the open file on invalidate, each
- * cached file on its next open), while resize/cell-size invalidates leave it
- * unchanged and pay nothing. The closure is lazy so it observes switches on
- * the live theme proxy, not the theme at construction time.
+ * Fingerprint of the theme-token ANSI sequences the retained-content stylers
+ * depend on: `getFgAnsi` for every token in {@link VIEWER_STYLE_TOKENS}, plus
+ * the color mode. One key covers both retained-content kinds (highlighted
+ * file lines and composed diff lines) — over-approximating costs at most one
+ * wasted restyle when only an unrelated role changed, while
+ * under-approximating would leave stale colours on screen (the bug class of
+ * Issues #136/#141). The key is defined here because the cache cost is about
+ * exactly this: a theme switch changes it and pays one restyle per retained
+ * view actually restyled (the open file/diff on invalidate, each cached file
+ * on its next open), while resize/cell-size invalidates leave it unchanged
+ * and pay nothing. The closure is lazy so it observes switches on the live
+ * theme proxy, not the theme at construction time.
  */
 export function makeStyleKey(theme: Theme): () => string {
   return () =>
-    [...HIGHLIGHT_STYLE_TOKENS.map((token) => theme.getFgAnsi(token)), theme.getColorMode()].join(
+    [...VIEWER_STYLE_TOKENS.map((token) => theme.getFgAnsi(token)), theme.getColorMode()].join(
       "|",
     );
 }

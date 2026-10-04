@@ -161,6 +161,16 @@ export interface ViewerFile {
   styleText?: string;
   /** The `makeStyleKey` value `lines` were highlighted under (Issue #136). */
   styleKey?: string;
+
+  /**
+   * The plain styling source for a diff view: the commit message and the raw
+   * diff lines `lines` were composed from (structural mirror of diff.ts's
+   * CommitMessage pair, inlined so this module keeps its dependency-free
+   * direction). Retained only for `kind: "diff"` results, so the open diff
+   * can be recomposed under a new theme without another `git show`
+   * (Issue #141).
+   */
+  styleDiff?: { message: { subject: string; body: string[] }; lines: string[] };
 }
 
 export interface SearchMatch {

@@ -32,6 +32,7 @@ import {
   MIN_OVERLAY_HEIGHT,
   MIN_OVERLAY_WIDTH,
 } from "./constants";
+import { restyleDiffViewerFile } from "./diff";
 import { NAVIGATOR_KEYBINDINGS } from "./help";
 import { buildFilesHeader, buildFileRow, buildFilesRows, filesEmptyRow } from "./files_view";
 import {
@@ -147,9 +148,10 @@ export interface NavigatorOptions {
   /** The layout the overlay opens with (Issue #119; settings or subcommand).
    *  Defaults to "files-git-viewer". Fixed for the overlay's lifetime. */
   initialLayout?: NavigatorLayout;
-  /** Current syntax style key (Issue #136). `invalidate()` restyles the open
-   *  file from its retained pre-highlight source when this changed; defaults
-   *  to `() => ""`, which is a no-op back-reference for every file. */
+  /** Current retained-content style key (Issues #136/#141). `invalidate()`
+   *  restyles the open file or commit diff from its retained source when this
+   *  changed; defaults to `() => ""`, which is a no-op back-reference for
+   *  every file. */
   styleKey?: () => string;
 }
 
@@ -602,6 +604,22 @@ export class NavigatorOverlay implements Focusable {
     }
   }
 
+  /**
+   * Re-style the open viewer file from its retained source under the current
+   * theme (Issues #136/#141): syntax highlighting for text files, the diff
+   * composer for a commit diff. Synchronous and I/O-free — a theme switch
+   * reuses the retained source, never a re-read or a `git show`; both
+   * restylers return the same reference when the key is already current.
+   */
+  private restyleOpenFile(): void {
+    const file = this.viewFile;
+    if (!file) return;
+    this.viewFile =
+      file.kind === "diff"
+        ? restyleDiffViewerFile(file, this.T, this.styleKey())
+        : restyleViewerFile(file, this.styleKey());
+  }
+
   invalidate(): void {
     // Theme-change notification from the host (interactive-mode onThemeChange
     // calls ui.invalidate() on every switch). Clear the DERIVED render state
@@ -623,13 +641,13 @@ export class NavigatorOverlay implements Focusable {
     // — re-reading and re-hashing files is the expensive part, and the
     // derivation above is all that must be redone to repaint.
     //
-    // Issue #136: a theme switch also changes the syntax tokens baked into
-    // the open file's lines. Restyle it from the retained pre-highlight
-    // source BEFORE clearing the derived caches — synchronous and I/O-free,
-    // so the invalidate path never re-reads a file. A resize/cell-size
-    // invalidate leaves the style key unchanged, so the restyle returns the
-    // same object and costs nothing.
-    if (this.viewFile) this.viewFile = restyleViewerFile(this.viewFile, this.styleKey());
+    // Issues #136/#141: a theme switch also changes the tokens baked into
+    // the open file's or diff's lines. Restyle it from the retained source
+    // BEFORE clearing the derived caches — synchronous and I/O-free, so the
+    // invalidate path never re-reads a file or re-runs git. A resize/cell-
+    // size invalidate leaves the style key unchanged, so the restyle returns
+    // the same object and costs nothing.
+    this.restyleOpenFile();
     this.cachedWidth = undefined;
     this.cachedLines = undefined;
     this.rowsCache = null;

@@ -133,7 +133,7 @@ describe("makeNavigatorTheme composition discipline", () => {
   });
 });
 
-// ── makeStyleKey (Issue #136) ──
+// ── makeStyleKey (Issues #136/#141) ──
 
 /** Stub pi Theme exposing only the surfaces makeStyleKey reads. */
 function makeStyleTheme(overrides: { getFgAnsi?: (token: string) => string; getColorMode?: () => string } = {}) {
@@ -144,8 +144,8 @@ function makeStyleTheme(overrides: { getFgAnsi?: (token: string) => string; getC
   };
 }
 
-/** The syntax tokens highlightCode's output depends on (spec #136). */
-const HIGHLIGHT_TOKENS = [
+/** The theme tokens the retained-content fingerprint covers (Issues #136/#141). */
+const VIEWER_TOKENS = [
   "syntaxComment",
   "syntaxKeyword",
   "syntaxFunction",
@@ -157,9 +157,14 @@ const HIGHLIGHT_TOKENS = [
   "syntaxPunctuation",
   "muted",
   "mdCodeBlock",
+  "text",
+  "accent",
+  "toolDiffAdded",
+  "toolDiffRemoved",
+  "toolDiffContext",
 ];
 
-describe("makeStyleKey (Issue #136)", () => {
+describe("makeStyleKey (Issues #136/#141)", () => {
   it("is stable when the theme's token sequences do not change", () => {
     const key = makeStyleKey(makeStyleTheme() as never);
     expect(key()).toBe(makeStyleKey(makeStyleTheme() as never)());
@@ -174,13 +179,23 @@ describe("makeStyleKey (Issue #136)", () => {
     expect(after).not.toBe(before);
   });
 
+  it("changes when a diff-composer token's ANSI sequence changes (Issue #141)", () => {
+    const before = makeStyleKey(makeStyleTheme() as never)();
+    const after = makeStyleKey(
+      makeStyleTheme({
+        getFgAnsi: (token) => (token === "toolDiffAdded" ? "fg2:added" : `fg:${token}`),
+      }) as never,
+    )();
+    expect(after).not.toBe(before);
+  });
+
   it("changes when the color mode changes", () => {
     const before = makeStyleKey(makeStyleTheme() as never)();
     const after = makeStyleKey(makeStyleTheme({ getColorMode: () => "256" }) as never)();
     expect(after).not.toBe(before);
   });
 
-  it("fingerprints every syntax token the highlighter depends on", () => {
+  it("fingerprints every token the retained-content stylers depend on", () => {
     const seen: string[] = [];
     const key = makeStyleKey(
       makeStyleTheme({
@@ -190,8 +205,8 @@ describe("makeStyleKey (Issue #136)", () => {
         },
       }) as never,
     )();
-    expect(seen).toEqual(HIGHLIGHT_TOKENS);
-    for (const token of HIGHLIGHT_TOKENS) expect(key).toContain(`fg:${token}`);
+    expect(seen).toEqual(VIEWER_TOKENS);
+    for (const token of VIEWER_TOKENS) expect(key).toContain(`fg:${token}`);
     expect(key).toContain("truecolor");
   });
 });

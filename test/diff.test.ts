@@ -10,8 +10,9 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { styleCommitMessage, styleDiffLines } from "../diff";
+import { composeDiffLines, restyleDiffViewerFile, styleCommitMessage, styleDiffLines } from "../diff";
 import type { NavigatorTheme } from "../theme";
+import type { ViewerFile } from "../types";
 
 /** Every NavigatorTheme token, each wrapping its input in its own tag. */
 const ALL_TOKENS = [
@@ -178,5 +179,104 @@ describe("styleCommitMessage", () => {
     const body = ["leading blank next", "", "  indented  spaces  ", "+-looks like a diff"];
     const out = styleCommitMessage({ subject: "s", body }, T);
     expect(out.map(stripTagging)).toEqual(["s", ...body]);
+  });
+});
+
+// ── composeDiffLines + restyleDiffViewerFile (Issue #141) ──
+
+describe("composeDiffLines", () => {
+  it("puts one blank separator between a non-empty message and a non-empty diff", () => {
+    const { T } = makeTaggingTheme();
+    const out = composeDiffLines(
+      { message: { subject: "the subject", body: ["body line"] }, lines: ["+added", " ctx"] },
+      T,
+    );
+    expect(out).toEqual([
+      "<bold>the subject</bold>",
+      "<text>body line</text>",
+      "",
+      "<diffAdded>+added</diffAdded>",
+      "<diffContext> ctx</diffContext>",
+    ]);
+  });
+
+  it("omits the separator when the diff body is empty (message-only commit)", () => {
+    const { T } = makeTaggingTheme();
+    expect(
+      composeDiffLines({ message: { subject: "empty root commit", body: [] }, lines: [] }, T),
+    ).toEqual(["<bold>empty root commit</bold>"]);
+  });
+
+  it("omits the separator when the message is empty (body-only diff)", () => {
+    const { T } = makeTaggingTheme();
+    expect(
+      composeDiffLines({ message: { subject: "", body: [] }, lines: ["diff --git a/x b/x"] }, T),
+    ).toEqual(["<muted>diff --git a/x b/x</muted>"]);
+  });
+
+  it("keeps a body-only message above the diff, with the separator", () => {
+    const { T } = makeTaggingTheme();
+    expect(
+      composeDiffLines({ message: { subject: "", body: ["orphan body"] }, lines: ["+x"] }, T),
+    ).toEqual(["<text>orphan body</text>", "", "<diffAdded>+x</diffAdded>"]);
+  });
+
+  it("returns [] when both parts are empty", () => {
+    const { T } = makeTaggingTheme();
+    expect(composeDiffLines({ message: { subject: "", body: [] }, lines: [] }, T)).toEqual([]);
+  });
+});
+
+describe("restyleDiffViewerFile (Issue #141)", () => {
+  const diffFile = (key: string): ViewerFile => ({
+    kind: "diff",
+    relPath: "commit:abc1234",
+    commitHash: "abc1234",
+    parents: ["dead000"],
+    lineCount: 1,
+    notice: "commit abc1234",
+    lines: ["stale"],
+    styleDiff: { message: { subject: "the subject", body: [] }, lines: ["+added"] },
+    styleKey: key,
+  });
+
+  it("recomposes the lines from styleDiff under a new key, preserving the other fields", () => {
+    const { T } = makeTaggingTheme();
+    const before = diffFile("key-A");
+    const after = restyleDiffViewerFile(before, T, "key-B");
+    expect(after).not.toBe(before);
+    expect(after.lines).toEqual(["<bold>the subject</bold>", "", "<diffAdded>+added</diffAdded>"]);
+    expect(after.styleKey).toBe("key-B");
+    expect(after.styleDiff).toBe(before.styleDiff); // retained source untouched
+    expect(after.relPath).toBe("commit:abc1234");
+    expect(after.commitHash).toBe("abc1234");
+    expect(after.parents).toEqual(["dead000"]);
+    expect(after.notice).toBe("commit abc1234");
+    expect(after.lineCount).toBe(1);
+  });
+
+  it("returns the same reference when the key already matches", () => {
+    const { T } = makeTaggingTheme();
+    const file = diffFile("key-A");
+    expect(restyleDiffViewerFile(file, T, "key-A")).toBe(file);
+  });
+
+  it("returns the same reference when there is no retained source", () => {
+    const { T } = makeTaggingTheme();
+    const { styleDiff: _dropped, ...file } = diffFile("key-A");
+    expect(restyleDiffViewerFile(file, T, "key-B")).toBe(file);
+  });
+
+  it("returns the same reference for a non-diff kind", () => {
+    const { T } = makeTaggingTheme();
+    const file: ViewerFile = { ...diffFile("key-A"), kind: "text" };
+    expect(restyleDiffViewerFile(file, T, "key-B")).toBe(file);
+  });
+
+  it("injects no hardcoded ANSI: the fake theme adds tags only", () => {
+    const { T } = makeTaggingTheme();
+    for (const line of restyleDiffViewerFile(diffFile("key-A"), T, "key-B").lines) {
+      expect(line).not.toContain("\x1b");
+    }
   });
 });
