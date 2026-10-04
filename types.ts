@@ -72,6 +72,13 @@ export type FilesRow = TreeRow | MatchRow;
 export interface GitChangedFile {
   relPath: string;
   code: GitCode;
+  /**
+   * True only for an untracked-directory record: porcelain reports an
+   * entirely untracked directory as a single `?? dir/` record, and
+   * `parsePorcelain` strips the trailing-slash marker from `relPath` and
+   * records the fact here (Issue #146). Absent on every other record.
+   */
+  isDir?: boolean;
 }
 
 export interface GitCommit {

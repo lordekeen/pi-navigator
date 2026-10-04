@@ -433,24 +433,34 @@ describe("untracked directory subtree (Issue #058)", () => {
       await writeFile(join(dir, "brandnew/d1/d2/d3/d4/d5/d6/leaf.txt"), "deep\n");
 
       // 1. Real porcelain output: -unormal reports the untracked dir as a
-      //    single `?? brandnew/` record with no children.
+      //    single `?? brandnew/` record with no children; parsePorcelain —
+      //    the one production interpretation — normalizes it to a slash-free
+      //    isDir record (Issue #146).
       const porcelain = parsePorcelain("?? brandnew/\0M  tracked.ts\0", "");
-      const untracked = porcelain.unstaged.filter((f) => f.code === "??").map((f) => f.relPath);
-      const base = entriesFromPaths(Array.from(new Set(["tracked.ts", ...untracked])));
+      expect(porcelain.unstaged).toEqual([{ relPath: "brandnew", code: "??", isDir: true }]);
 
-      // 2. Fill the declared untracked dirs with the bounded fs walk.
+      // 2. Tree entries as readGitTree merges them: tracked files first, then
+      //    the untracked records (here the tracked half is a fixture list —
+      //    this scratch dir is not a git repository).
+      const base = [
+        ...entriesFromPaths(["tracked.ts"]),
+        ...porcelain.unstaged.map((f) => ({ relPath: f.relPath, isDir: f.isDir === true, symlink: false })),
+      ];
+
+      // 3. Fill the declared untracked dirs with the bounded fs walk.
       const filled = await Promise.all(base.filter((e) => e.isDir).map((e) => collectDirEntries(dir, e.relPath)));
       const entries = [...base, ...filled.flat()];
 
-      // 3. gitCodeMap strips the slash so the badge lands on the dir row.
+      // 4. Badge keys are the normalized relPaths, so the `??` badge lands on
+      //    the dir row itself (Issues #058, #146).
       const state: GitState = {
         available: true,
         branch: "main",
         detached: false,
         ahead: 0,
         behind: 0,
-        unstaged: [{ relPath: "brandnew/", code: "??" }, { relPath: "tracked.ts", code: "M" }],
-        staged: [],
+        unstaged: porcelain.unstaged,
+        staged: porcelain.staged,
         history: [],
         refreshedAt: 0,
       };

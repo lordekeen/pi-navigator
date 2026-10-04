@@ -23,9 +23,10 @@ import {
   parsePorcelain,
   readCommitDiff,
   readGitState,
-  readTrackedFiles,
-  toCwdRelative,
+  readGitTree,
+  type RepoInfo,
 } from "../git";
+import type { GitState } from "../types";
 
 const execFileAsync = promisify(execFile);
 
@@ -53,14 +54,15 @@ describe("parsePorcelain", () => {
     ]);
   });
 
-  it("keeps the trailing slash of an untracked DIRECTORY record (Issue #058)", () => {
+  it("normalizes the trailing slash of an untracked DIRECTORY record (Issues #058, #146)", () => {
     // `git status --porcelain -unormal -z` collapses an entirely untracked
-    // directory into a single `?? brandnew/` record; the slash is the only
-    // dir marker and must survive parsing for entriesFromPaths to pick up.
+    // directory into a single `?? brandnew/` record. The slash is the only
+    // dir marker; parsePorcelain — the one production interpretation —
+    // strips it and records isDir, so tree entries and badge keys agree.
     const out = parsePorcelain("?? brandnew/\0", "");
-    expect(out.unstaged).toEqual([{ relPath: "brandnew/", code: "??" }]);
+    expect(out.unstaged).toEqual([{ relPath: "brandnew", code: "??", isDir: true }]);
     const nested = parsePorcelain("?? src/newdir/\0", "src/");
-    expect(nested.unstaged).toEqual([{ relPath: "newdir/", code: "??" }]);
+    expect(nested.unstaged).toEqual([{ relPath: "newdir", code: "??", isDir: true }]);
   });
 
   it("consumes the trailing source record of a -z rename and keeps the target", () => {
@@ -100,12 +102,7 @@ describe("parsePorcelain", () => {
   });
 });
 
-describe("toCwdRelative / gitCodeMap / gitTreeProbe", () => {
-  it("translates and filters tracked paths", () => {
-    expect(toCwdRelative(["src/a.ts", "other/x.ts"], "src/")).toEqual(["a.ts"]);
-    expect(toCwdRelative(["a.ts", "b.ts"], "")).toEqual(["a.ts", "b.ts"]);
-  });
-
+describe("gitCodeMap / gitTreeProbe", () => {
   it("lets worktree codes win over index codes", () => {
     const state = {
       available: true,
@@ -121,15 +118,17 @@ describe("toCwdRelative / gitCodeMap / gitTreeProbe", () => {
     expect(gitCodeMap(state).get("a.ts")).toBe("M");
   });
 
-  it("strips the trailing slash of untracked dir records so the badge lands on the dir row (Issue #058)", () => {
+  it("keys the badge by the normalized relPaths so it lands on the dir row (Issues #058, #146)", () => {
+    // parsePorcelain has already stripped the `?? dir/` slash and recorded
+    // isDir; the code map takes the relPaths as they are.
     const state = {
       available: true,
       branch: "main",
       detached: false,
       ahead: 0,
       behind: 0,
-      unstaged: [{ relPath: "brandnew/", code: "??" }],
-      staged: [{ relPath: "stageddir/", code: "A" }],
+      unstaged: [{ relPath: "brandnew", code: "??", isDir: true }],
+      staged: [{ relPath: "stageddir", code: "A" }],
       history: [],
       refreshedAt: 0,
     };
@@ -153,6 +152,97 @@ describe("toCwdRelative / gitCodeMap / gitTreeProbe", () => {
     expect(gitTreeProbe(state)).toContain("main 2 1");
     expect(gitTreeProbe(state)).toContain("A a.ts");
     expect(gitTreeProbe(state)).toContain("M b.ts");
+  });
+});
+
+// ── readGitTree: the one git → tree entry path (Issue #146) ──
+
+describe("readGitTree (Issue #146)", () => {
+  const INFO: RepoInfo = { available: true, prefix: "" };
+
+  function stateOf(overrides: Partial<GitState> = {}): GitState {
+    return {
+      available: true,
+      branch: "main",
+      detached: false,
+      ahead: 0,
+      behind: 0,
+      unstaged: [],
+      staged: [],
+      history: [],
+      refreshedAt: 0,
+      ...overrides,
+    };
+  }
+
+  /** Spawn argv of every stubbed invocation, newest stub session first. */
+  const spawns: string[][] = [];
+
+  /** Stub the entry's `ls-files -z` spawn: emit NUL-separated paths, or fail. */
+  function stubTracked(stdout: string | null): void {
+    spawns.length = 0;
+    vi.spyOn(gitRunner, "execFile").mockImplementation(
+      ((
+        _file: string,
+        args: readonly string[],
+        _options: object,
+        callback: (error: Error | null, stdout: string, stderr: string) => void,
+      ) => {
+        spawns.push([...args]);
+        if (stdout === null) callback(new Error("ls-files failed"), "", "");
+        else callback(null, stdout, "");
+      }) as unknown as typeof gitRunner.execFile,
+    );
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("spawns ls-files with --full-name so the listing stays repository-root-relative", async () => {
+    // The flag is the invariant the prefix translation depends on: without
+    // it ls-files is cwd-relative and a subdirectory cwd drops every tracked
+    // path (Issue #146).
+    stubTracked("a.ts\0");
+    await readGitTree("/work", stateOf(), INFO);
+    expect(spawns).toEqual([["ls-files", "--full-name", "-z"]]);
+  });
+
+  it("translates tracked paths through the repo prefix and drops outsiders", async () => {
+    stubTracked("sub/a.ts\0other/x.ts\0");
+    const entries = await readGitTree("/work", stateOf(), { available: true, prefix: "sub/" });
+    expect(entries).toEqual([{ relPath: "a.ts", isDir: false, symlink: false }]);
+  });
+
+  it("merges untracked records after tracked ones, `?? dir/` becoming a slash-free isDir entry", async () => {
+    stubTracked("a.ts\0");
+    const porcelain = parsePorcelain("?? brandnew/\0?? loose.txt\0", "");
+    const entries = await readGitTree("/work", stateOf({ unstaged: porcelain.unstaged }), INFO);
+    expect(entries).toEqual([
+      { relPath: "a.ts", isDir: false, symlink: false },
+      { relPath: "brandnew", isDir: true, symlink: false },
+      { relPath: "loose.txt", isDir: false, symlink: false },
+    ]);
+  });
+
+  it("dedupes by relPath with tracked-first precedence", async () => {
+    stubTracked("dup.ts\0");
+    const entries = await readGitTree(
+      "/work",
+      stateOf({ unstaged: [{ relPath: "dup.ts", code: "??" }] }),
+      INFO,
+    );
+    expect(entries).toEqual([{ relPath: "dup.ts", isDir: false, symlink: false }]);
+  });
+
+  it("degrades to untracked-only when ls-files fails, never throwing", async () => {
+    stubTracked(null);
+    const entries = await readGitTree(
+      "/work",
+      stateOf({ unstaged: [{ relPath: "new.txt", code: "??" }] }),
+      INFO,
+    );
+    expect(entries).toEqual([{ relPath: "new.txt", isDir: false, symlink: false }]);
   });
 });
 
@@ -239,11 +329,11 @@ describe("git integration on a scratch repository", () => {
     await commit(repo, "first");
     await writeFile(join(repo, "with space.txt"), "changed\n");
 
-    const tracked = await readTrackedFiles(repo);
+    const info = await detectRepo(repo);
+    const state = await readGitState(repo, info);
+    const entries = await readGitTree(repo, state, info);
     // ls-files order follows the byte sort; compare as sets.
-    expect([...tracked].sort()).toEqual(["line\nbreak.txt", "with space.txt"]);
-
-    const state = await readGitState(repo);
+    expect(entries.map((entry) => entry.relPath).sort()).toEqual(["line\nbreak.txt", "with space.txt"]);
     expect(state.unstaged).toContainEqual({ relPath: "with space.txt", code: "M" });
   });
 
@@ -261,8 +351,11 @@ describe("git integration on a scratch repository", () => {
     const state = await readGitState(join(repo, "sub"), info);
     expect(state.unstaged).toEqual([{ relPath: "a.ts", code: "M" }]);
 
-    const tracked = toCwdRelative(await readTrackedFiles(repo), "sub/");
-    expect(tracked).toEqual(["a.ts"]);
+    // The real subdirectory cwd is the regression pin: `ls-files --full-name`
+    // keeps the listing repository-root-relative, so the prefix translation
+    // yields the cwd-relative path instead of dropping it (Issue #146).
+    const entries = await readGitTree(join(repo, "sub"), state, info);
+    expect(entries).toEqual([{ relPath: "a.ts", isDir: false, symlink: false }]);
   });
 
   it("reports history subjects and relative dates for the last commits", async () => {

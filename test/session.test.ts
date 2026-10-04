@@ -30,6 +30,7 @@ import { DEFAULT_NAVIGATOR_SETTINGS, type NavigatorSettings } from "../settings"
 import { makeNavigatorTheme } from "../theme";
 import type { CommitDiff, RepoInfo } from "../git";
 import { createSession, type NavigatorSession, type SessionDeps } from "../session";
+import type { TreeEntry } from "../tree";
 import type { FileNode, GitState, OpenTarget, ViewerFile } from "../types";
 import type { LoadFileOptions } from "../viewer";
 
@@ -65,18 +66,17 @@ vi.mock("../git", () => ({
   gitTreeProbe: (): string => ctl.treeProbe,
   gitCodeMap: (git: { unstaged: Array<{ relPath: string; code: string }> }): Map<string, string> =>
     new Map(git.unstaged.map((f) => [f.relPath, f.code])),
-  readTrackedFiles: (): Promise<string[]> => {
+  readGitTree: (): Promise<TreeEntry[]> => {
     ctl.trackedReads += 1;
-    return Promise.resolve(ctl.tracked);
+    return Promise.resolve(
+      ctl.tracked.map((relPath) => ({ relPath, isDir: relPath.endsWith("/"), symlink: false })),
+    );
   },
-  toCwdRelative: (paths: string[], _prefix: string): string[] => [...paths],
   readCommitDiff: (): Promise<CommitDiff> => Promise.resolve(ctl.commitDiff as CommitDiff),
 }));
 
 vi.mock("../tree", () => ({
   createTreeWalkBudget: () => ({ truncated: false }),
-  entriesFromPaths: (paths: string[]) =>
-    paths.map((p) => ({ relPath: p.replace(/\/$/, ""), isDir: p.endsWith("/") })),
   collectDirEntries: () => Promise.resolve([]),
   collectFsEntries: () => Promise.resolve({ entries: [], truncated: false }),
   collectFsProbe: () => Promise.resolve("fs-probe-static"),

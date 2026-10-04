@@ -90,6 +90,22 @@ describe("buildGitRows", () => {
     expect(rows[6]).toEqual({ kind: "commit", commit: expect.objectContaining({ shortHash: "abc" }) });
   });
 
+  it("re-appends the slash for an untracked-directory record so the panel keeps rendering `?? dir/` (Issue #146)", () => {
+    const rows = buildGitRows(
+      gitState({
+        unstaged: [
+          { relPath: "brandnew", code: "??", isDir: true },
+          { relPath: "plain.ts", code: "??" },
+        ],
+      }),
+      new Set(),
+    );
+    // The record's relPath is slash-free (normalized at parse time); the row
+    // restores porcelain's display bytes. Records without isDir stay verbatim.
+    expect(rows[1]).toEqual({ kind: "file", relPath: "brandnew/", code: "??", staged: false });
+    expect(rows[2]).toEqual({ kind: "file", relPath: "plain.ts", code: "??", staged: false });
+  });
+
   it("shows a dim Clean row when both change lists are empty", () => {
     const rows = buildGitRows(gitState(), new Set());
     expect(rows[0]).toEqual({ kind: "group", label: "Clean \u2014 nothing staged or unstaged", tone: "dim" });

@@ -10,13 +10,18 @@
  * separates records. In -z output a renamed or copied entry carries its source
  * path in the *following* record with the field order reversed (target first,
  * then source) — git-status, "Porcelain Format Version 1". The parser consumes
- * that record and keeps the target path.
+ * that record and keeps the target path. A trailing slash on a record's path
+ * is porcelain's marker for an entirely untracked directory (`?? dir/`); it is
+ * normalized once, at this boundary, into a slash-free relPath plus
+ * `GitChangedFile.isDir` — no downstream consumer reads the marker again
+ * (Issue #146).
  */
 
 import * as childProcess from "node:child_process";
 
 import { GIT_HISTORY_COUNT, GIT_TIMEOUT_MS, MAX_HIGHLIGHT_BYTES, MAX_HIGHLIGHT_LINES } from "./constants";
 import type { CommitMessage } from "./diff";
+import type { TreeEntry } from "./tree";
 import type { GitChangedFile, GitCommit, GitState } from "./types";
 
 export const gitRunner = {
@@ -157,7 +162,16 @@ export function parsePorcelain(
     const relPath = stripPrefix(filePath, prefix);
     if (!relPath) continue;
     if (x === "?" && y === "?") {
-      unstaged.push({ relPath, code: "??" });
+      // The trailing slash is porcelain's marker for an entirely untracked
+      // directory (`?? dir/`). Normalize it here — the one production
+      // interpretation — into a slash-free relPath plus the isDir fact, so
+      // tree entries and badge keys agree without re-reading the marker
+      // downstream (Issue #146).
+      if (relPath.endsWith("/")) {
+        unstaged.push({ relPath: relPath.slice(0, -1), code: "??", isDir: true });
+      } else {
+        unstaged.push({ relPath, code: "??" });
+      }
       continue;
     }
     if (x !== " " && x !== "?") staged.push({ relPath, code: x });
@@ -277,33 +291,66 @@ export function gitTreeProbe(state: GitState): string {
   return [`${state.branch ?? ""} ${state.ahead} ${state.behind}`, ...files].join("\n");
 }
 
-/** Tracked files (repository-root-relative) via `git ls-files -z`. */
-export async function readTrackedFiles(cwd: string): Promise<string[]> {
-  const result = await runGit(cwd, ["ls-files", "-z"]);
+/**
+ * Tracked files via `git ls-files --full-name -z`. Private: `readGitTree` is
+ * the one path from git to tree entries (Issue #146).
+ *
+ * `--full-name` matters: without it `ls-files` prints paths relative to the
+ * cwd, so from a repository subdirectory the prefix translation in
+ * `readGitTree` would see no `repo.prefix` match and drop every tracked path.
+ * With it the listing stays repository-root-relative, which is the invariant
+ * the prefix translation relies on.
+ */
+async function readTrackedFiles(cwd: string): Promise<string[]> {
+  const result = await runGit(cwd, ["ls-files", "--full-name", "-z"]);
   if (result.status !== "ok") return [];
   return result.stdout.split(NUL).filter((line) => line.length > 0);
 }
 
-/** Translate repository-root-relative paths to cwd-relative, dropping outsiders. */
-export function toCwdRelative(paths: string[], prefix: string): string[] {
-  const out: string[] = [];
-  for (const p of paths) {
-    const rel = stripPrefix(p, prefix);
-    if (rel) out.push(rel);
+/**
+ * Tree-ready cwd-relative entries for the git source (Issue #146): tracked
+ * paths from `ls-files -z` translated through `repo.prefix` (outsiders
+ * dropped) first, then the untracked `??` records from the porcelain state
+ * (already cwd-relative; `isDir` carries porcelain's untracked-directory
+ * marker). `readTrackedFiles` reads with `--full-name`, so the tracked
+ * listing is repository-root-relative even when cwd is a subdirectory — the
+ * invariant the prefix translation depends on (Issue #146). First occurrence
+ * wins, so a path that is both tracked and listed untracked keeps its
+ * tracked entry. Never throws: a failed `ls-files` degrades to
+ * untracked-only, exactly as the old inline merge did. Policy stays with the
+ * caller — the untracked-directory subtree fill and the empty-repo fs
+ * fallback are session concerns.
+ */
+export async function readGitTree(cwd: string, git: GitState, repo: RepoInfo): Promise<TreeEntry[]> {
+  const tracked = await readTrackedFiles(cwd);
+  const seen = new Set<string>();
+  const entries: TreeEntry[] = [];
+  for (const p of tracked) {
+    const rel = stripPrefix(p, repo.prefix);
+    if (!rel || seen.has(rel)) continue; // outsiders dropped
+    seen.add(rel);
+    entries.push({ relPath: rel, isDir: false, symlink: false });
   }
-  return out;
+  for (const file of git.unstaged) {
+    if (file.code !== "??") continue;
+    if (seen.has(file.relPath)) continue;
+    seen.add(file.relPath);
+    entries.push({ relPath: file.relPath, isDir: file.isDir === true, symlink: false });
+  }
+  return entries;
 }
 
 /**
- * Per-path status badge map; worktree codes win over index codes. A trailing
- * slash — the porcelain marker for an untracked directory (`?? dir/`) — is
- * stripped so the key matches the tree node's relPath and the `??` badge lands
- * on the directory row itself (Issue #058).
+ * Per-path status badge map; worktree codes win over index codes. Keys are
+ * the normalized relPaths `parsePorcelain` produced — the `?? dir/` trailing
+ * slash is stripped and recorded as `isDir` at parse time (Issue #146) — so
+ * the key matches the tree node's relPath and the `??` badge lands on the
+ * directory row itself (Issue #058).
  */
 export function gitCodeMap(state: GitState): Map<string, string> {
   const map = new Map<string, string>();
-  for (const file of state.staged) map.set(file.relPath.replace(/\/$/, ""), file.code);
-  for (const file of state.unstaged) map.set(file.relPath.replace(/\/$/, ""), file.code);
+  for (const file of state.staged) map.set(file.relPath, file.code);
+  for (const file of state.unstaged) map.set(file.relPath, file.code);
   return map;
 }
 

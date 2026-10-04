@@ -12,9 +12,19 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 
 import { FAMILY_MAX_ROWS } from "./constants";
 import type { NavigatorTheme } from "./theme";
-import type { Focus, GitCommit, GitRow, GitState } from "./types";
+import type { Focus, GitChangedFile, GitCommit, GitRow, GitState } from "./types";
 import { hardTruncate } from "./viewer";
 import { joinLeftRight, padTo, truncateAndWidth } from "./frame";
+
+/**
+ * A changed-file row's display path: porcelain's trailing-slash marker for an
+ * untracked directory (`?? dir/`) is re-appended here, so the panel keeps
+ * rendering the real record byte-identically (Issue #146). Hand-built records
+ * without `isDir` keep their relPath verbatim.
+ */
+function changedPath(file: GitChangedFile): string {
+  return file.isDir === true ? `${file.relPath}/` : file.relPath;
+}
 
 /**
  * Build the git pane row model for a git state + expansion set. Group rows
@@ -33,7 +43,7 @@ export function buildGitRows(git: GitState | null, expanded: ReadonlySet<string>
       label: `Unstaged (${git.unstaged.length})`,
       tone: "warning",
     });
-    for (const file of git.unstaged) rows.push({ kind: "file", relPath: file.relPath, code: file.code, staged: false });
+    for (const file of git.unstaged) rows.push({ kind: "file", relPath: changedPath(file), code: file.code, staged: false });
   }
   if (git.staged.length > 0) {
     rows.push({
@@ -41,7 +51,7 @@ export function buildGitRows(git: GitState | null, expanded: ReadonlySet<string>
       label: `Staged (${git.staged.length})`,
       tone: "success",
     });
-    for (const file of git.staged) rows.push({ kind: "file", relPath: file.relPath, code: file.code, staged: true });
+    for (const file of git.staged) rows.push({ kind: "file", relPath: changedPath(file), code: file.code, staged: true });
   }
   if (git.unstaged.length === 0 && git.staged.length === 0) {
     // A failed status read swaps the Clean row for the error so an

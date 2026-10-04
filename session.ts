@@ -34,8 +34,7 @@ import {
   gitTreeProbe,
   readCommitDiff,
   readGitState,
-  readTrackedFiles,
-  toCwdRelative,
+  readGitTree,
   type RepoInfo,
 } from "./git";
 import {
@@ -59,7 +58,6 @@ import {
   collectFsEntries,
   collectFsProbe,
   createTreeWalkBudget,
-  entriesFromPaths,
   expandedUntrackedDirs,
   reapplyExpansion,
   type TreeEntry,
@@ -662,9 +660,11 @@ export function createSession(deps: SessionDeps): NavigatorSession {
     let entries: TreeEntry[];
     let nextSource: "git" | "fs";
     if (git.available) {
-      const tracked = toCwdRelative(await readTrackedFiles(cwd), repo.prefix);
-      const untracked = git.unstaged.filter((file) => file.code === "??").map((file) => file.relPath);
-      const base = entriesFromPaths(Array.from(new Set([...tracked, ...untracked])));
+      // Issue #146: one entry owns the path protocol — tracked files
+      // (prefix-translated, outsiders dropped) first, then the untracked
+      // `??` records, deduped tracked-first; the `?? dir/` slash is already
+      // normalized to `isDir` at the porcelain boundary.
+      const base = await readGitTree(cwd, git, repo);
       // Issue #058: -unormal reports an untracked directory as a single
       // `?? dir/` record (no children). Fill those subtrees with the
       // same bounded filesystem walk the fs mode uses (depth cap,
@@ -699,17 +699,18 @@ export function createSession(deps: SessionDeps): NavigatorSession {
     return { entries, source: nextSource };
   };
 
-  /** Install newly collected entries as the current tree (rebuild or re-stamp). */
+  /** Install newly collected entries as the current tree (rebuild or re-stamp).
+   *  `codes` is the tick's single derived code map (Issue #146). */
   const stampTree = (
     entries: TreeEntry[],
-    git: GitState,
+    codes: Map<string, string>,
     probe: string,
     expandedBefore: Set<string>,
   ): void => {
     const nextSignature = entries.map((entry) => entry.relPath + (entry.isDir ? "/" : "")).join("\n");
     const firstBuild = root === null;
     if (nextSignature !== signature || firstBuild) {
-      const nextRoot = buildTree(cwd, entries, gitCodeMap(git));
+      const nextRoot = buildTree(cwd, entries, codes);
       // Top level starts expanded; from the second build on the
       // remembered set wins, so a collapsed top-level directory stays
       // collapsed (README: "preserving expanded directories").
@@ -721,7 +722,7 @@ export function createSession(deps: SessionDeps): NavigatorSession {
       // Tree shape unchanged; only re-stamp git codes if the status
       // probe actually changed since the last stamp.
       if (probe !== lastStampedProbe) {
-        applyGitCodes(root, gitCodeMap(git));
+        applyGitCodes(root, codes);
         lastStampedProbe = probe;
       }
     }
@@ -766,6 +767,9 @@ export function createSession(deps: SessionDeps): NavigatorSession {
       const { repo, git } = await readGit();
       if (closed) return;
 
+      // Issue #146: one pure code map per tick, shared by the rebuild and the
+      // unchanged-shape re-stamp branches below.
+      const codes = gitCodeMap(git);
       const probe = await collectTreeProbe(git);
       const treeChanged = root === null || probe !== treeProbe;
 
@@ -773,12 +777,12 @@ export function createSession(deps: SessionDeps): NavigatorSession {
         const expandedBefore = collectExpanded(root);
         const { entries, source } = await collectTreeEntries(git, repo);
         if (closed) return;
-        stampTree(entries, git, probe, expandedBefore);
+        stampTree(entries, codes, probe, expandedBefore);
         treeSource = source;
         treeProbe = probe;
       } else if (root) {
         if (probe !== lastStampedProbe) {
-          applyGitCodes(root, gitCodeMap(git));
+          applyGitCodes(root, codes);
           lastStampedProbe = probe;
         }
       }
