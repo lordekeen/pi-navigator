@@ -56,7 +56,7 @@ import {
   helpVisibleRows as computeHelpVisibleRows,
 } from "./help_view";
 import { makeDeferredImageSupport, resolveChafaGeometry, type ImageSupport } from "./images";
-import { expandAncestors, findNode, moveCursor, pageJump } from "./tree";
+import { expandAncestors, moveCursor, pageJump, setExpanded } from "./tree";
 import type { NavigatorTheme } from "./theme";
 import type {
   FileNode,
@@ -692,21 +692,22 @@ export class NavigatorOverlay implements Focusable {
   }
 
   /**
-   * Toggle `node.expanded` (or set it to `expanded` when given). The only
+   * Toggle `node.expanded` (or set it to `expanded` when given) via
+   * `setExpanded` — the write itself lives in tree.ts (Issue #150). The only
    * in-place files-tree mutation entry point: treeVersion is bumped here so
    * a future caller cannot stale the filesRowsCache (Issue #064 finding 2).
    * touch() is idempotent (clears the render cache), so the calling handler's
    * own trailing touch() stays harmless — no double render.
    */
   private toggleDir(node: FileNode, expanded?: boolean): void {
-    node.expanded = expanded === undefined ? !node.expanded : expanded;
+    setExpanded(node, expanded);
     this.treeVersion++;
     this.touch();
   }
 
-  /** Expand `node` and its ancestors (git-pane Enter on a file row, Issue #064). */
-  private expandTo(node: FileNode): void {
-    expandAncestors(node);
+  /** Expand `root`'s ancestors of `relPath` (git-pane Enter on a file row, Issue #064). */
+  private expandTo(root: FileNode, relPath: string): void {
+    expandAncestors(root, relPath);
     this.treeVersion++;
     this.touch();
   }
@@ -951,10 +952,7 @@ export class NavigatorOverlay implements Focusable {
       const row = rows[this.gitCursor];
       if (!row) return;
       if (row.kind === "file") {
-        if (this.root) {
-          const node = findNode(this.root, row.relPath);
-          if (node) this.expandTo(node);
-        }
+        if (this.root) this.expandTo(this.root, row.relPath);
         this.filterQuery = "";
         this.alignFilesCursor(row.relPath);
         this.focus = "viewer";

@@ -47,7 +47,6 @@ export interface FileNode {
   /** True when this node or any descendant carries a gitCode. Set during tree
    *  build and recomputed in applyGitCodes so directory row styling is O(1). */
   subtreeChanged: boolean;
-  parent?: FileNode;
   children: FileNode[];
 }
 

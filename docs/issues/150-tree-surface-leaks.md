@@ -1,6 +1,6 @@
 # Issue #150: Tree Surface Leaks — Test Support Out, One Mutation Door, No Back-Pointer
 
-- **Status**: In Progress
+- **Status**: Resolved
 - **Type**: Technical Debt / Refactor
 - **Severity**: Low
 - **Component(s)**: `tree.ts`, `types.ts`, `navigator.ts`, tests
@@ -67,21 +67,43 @@ Re-validated against `main@31f3838` (v0.14.12, after Issues #140–#148):
 
 ## Acceptance Criteria
 
-- [ ] `FileNode` has 13 fields and no `parent` anywhere in the source; `makeNode` takes no
+- [x] `FileNode` has 13 fields and no `parent` anywhere in the source; `makeNode` takes no
   parent parameter.
-- [ ] `expandAncestors(root, relPath)` walks segments (no back-pointer), sets every
+- [x] `expandAncestors(root, relPath)` walks segments (no back-pointer), sets every
   non-root ancestor's `expanded`, and its test drives the new signature.
-- [ ] No direct `node.expanded =` write exists outside `tree.ts`; `setExpanded` is the
+- [x] No direct `node.expanded =` write exists outside `tree.ts`; `setExpanded` is the
   only expansion mutation and `navigator.toggleDir` delegates to it.
-- [ ] `tree.ts` no longer exports `entriesFromPaths` or `findNode`; both live in
+- [x] `tree.ts` no longer exports `entriesFromPaths` or `findNode`; both live in
   `test/tree_fixtures.ts`; every former call site is unchanged except its import path.
-- [ ] No behavior change: the full suite (baseline to be recorded after #149 lands) is
-  green, including the #058 fixture suite and the #064 expansion/reveal pins.
-- [ ] `npm run typecheck` green, no new non-null assertions, suite count unchanged.
+- [x] No behavior change: full suite green at 22 suites / 927 cases, including the #058
+  fixture suite and the #064 expansion/reveal pins.
+- [x] `npm run typecheck` green, no new non-null assertions, suite count unchanged.
 
 ## Resolution
 
-_To be filled at closeout._
+Implemented as designed (2026-10-04), version 0.14.14:
+
+- **`test/tree_fixtures.ts` (new)** — `entriesFromPaths` and `findNode` moved verbatim
+  (imports `walkTree` + `TreeEntry` from `../tree`); `tree.ts` no longer exports either, so
+  `tree.ts`'s surface is now the graph type plus the operations the app performs. The three
+  test files re-point only their import lines; the #058 suite and every `findNode` call
+  site are otherwise untouched.
+- **`FileNode` 14 → 13 fields** — `parent?: FileNode` deleted (types.ts) and `makeNode`
+  loses its parameter (four call sites updated). The back-pointer had exactly one reader.
+- **`expandAncestors(root, relPath)`** — root-anchored segment walk (`slice(0, -1)` +
+  `find` by name, no indexed access under `noUncheckedIndexedAccess`): every non-root
+  ancestor of the path is expanded, the node itself never. The root's own flag is no
+  longer touched and is inert (`buildTree` sets it true; nothing reads it). The test now
+  calls the new signature directly instead of looking the node up first.
+- **`setExpanded(node, expanded?)`** — the one expansion mutation door; `navigator.toggleDir`
+  delegates to it and keeps its `treeVersion++` / `touch()` cache bookkeeping. Every
+  production write to `FileNode.expanded` now originates in `tree.ts`
+  (`buildTree`, `reapplyExpansion`, `setExpanded`, `expandAncestors`).
+- **Non-goals unchanged** — no row projection, `walkTree` stays exported with the recorded
+  rationale, `FileNode` stays exported (the session holds the root).
+
+Verification: `npm run typecheck` clean; `npm test` **22 suites / 927 cases** (count
+unchanged — the change is pure surface surgery).
 
 ## References
 

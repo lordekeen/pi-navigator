@@ -22,10 +22,8 @@ import {
   collectExpanded,
   collectFsEntries,
   collectFsProbe,
-  entriesFromPaths,
   expandAncestors,
   filterRows,
-  findNode,
   flattenVisible,
   hasChanges,
   moveCursor,
@@ -33,6 +31,7 @@ import {
   reapplyExpansion,
   walkTree,
 } from "../tree";
+import { entriesFromPaths, findNode } from "./tree_fixtures";
 
 const CWD = "/work";
 
@@ -601,12 +600,11 @@ describe("navigation helpers", () => {
   it("expandAncestors opens the chain up to the root", () => {
     const tree = buildTree(CWD, entries(["a/b/c.ts"]), new Map());
     reapplyExpansion(tree, new Set(), 0);
-    const c = findNode(tree, "a/b/c.ts");
     // Collapse everything first.
     walkTree(tree, (n) => {
       if (n.isDir) n.expanded = false;
     });
-    if (c) expandAncestors(c);
+    expandAncestors(tree, "a/b/c.ts");
     expect(findNode(tree, "a")?.expanded).toBe(true);
     expect(findNode(tree, "a/b")?.expanded).toBe(true);
   });

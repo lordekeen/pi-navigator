@@ -69,17 +69,6 @@ function budgetCounted(budget: TreeWalkBudget): void {
   budgetCounts.set(budget, (budgetCounts.get(budget) ?? 0) + 1);
 }
 
-/** Tracked files and untracked paths as tree entries. A trailing slash marks
- * an untracked directory: `git status -unormal` reports an entirely untracked
- * directory as a single `?? dir/` record, so the slash is authoritative —
- * stripped here, no per-entry stat in the hot path (Issue #058). */
-export function entriesFromPaths(paths: string[]): TreeEntry[] {
-  return paths.map((relPath) => {
-    const isDir = relPath.endsWith("/");
-    return { relPath: isDir ? relPath.slice(0, -1) : relPath, isDir, symlink: false };
-  });
-}
-
 /**
  * Entries for one declared directory's subtree, via the same bounded walk as
  * collectFsEntries (depth cap, IGNORED_NAMES, symlink cycle guard, and — when
@@ -239,7 +228,6 @@ function makeNode(
   path: string,
   isDir: boolean,
   depth: number,
-  parent: FileNode | null,
 ): FileNode {
   return {
     name,
@@ -252,7 +240,6 @@ function makeNode(
     hidden: name.startsWith("."),
     depth,
     expanded: depth < 1,
-    parent: parent ?? undefined,
     children: [],
     subtreeChanged: false,
   };
@@ -273,7 +260,7 @@ function sortTree(node: FileNode): void {
  * list are created on demand; declared directories survive even when empty.
  */
 export function buildTree(cwd: string, entries: TreeEntry[], gitCodes: Map<string, string>): FileNode {
-  const root = makeNode(".", "", cwd, true, -1, null);
+  const root = makeNode(".", "", cwd, true, -1);
   root.expanded = true;
 
   const dirMap = new Map<string, FileNode>([["", root]]);
@@ -293,7 +280,7 @@ export function buildTree(cwd: string, entries: TreeEntry[], gitCodes: Map<strin
       rel = rel ? `${rel}/${part}` : part;
       let dirNode = dirMap.get(rel);
       if (!dirNode) {
-        dirNode = makeNode(part, rel, join(cwd, rel), true, current.depth + 1, current);
+        dirNode = makeNode(part, rel, join(cwd, rel), true, current.depth + 1);
         dirMap.set(rel, dirNode);
         current.children.push(dirNode);
       }
@@ -310,7 +297,7 @@ export function buildTree(cwd: string, entries: TreeEntry[], gitCodes: Map<strin
         if (gitCode) existing.gitCode = gitCode;
         return existing;
       }
-      const dirNode = makeNode(name, fullRel, join(cwd, fullRel), true, current.depth + 1, current);
+      const dirNode = makeNode(name, fullRel, join(cwd, fullRel), true, current.depth + 1);
       dirNode.isSymlink = symlink;
       dirNode.gitCode = gitCode;
       dirMap.set(fullRel, dirNode);
@@ -324,7 +311,7 @@ export function buildTree(cwd: string, entries: TreeEntry[], gitCodes: Map<strin
       return existing;
     }
 
-    const fileNode = makeNode(name, fullRel, join(cwd, fullRel), false, current.depth + 1, current);
+    const fileNode = makeNode(name, fullRel, join(cwd, fullRel), false, current.depth + 1);
     fileNode.isSymlink = symlink;
     fileNode.gitCode = gitCode;
     current.children.push(fileNode);
@@ -461,24 +448,27 @@ export function pageJump(total: number, index: number, delta: number, height: nu
   return moveCursor(total, index, delta < 0 ? -step : step);
 }
 
-export function expandAncestors(node: FileNode): void {
-  let current: FileNode | undefined = node.parent;
-  while (current) {
-    current.expanded = true;
-    current = current.parent;
-  }
+/** The one expansion mutation door (Issue #150): negate when `expanded` is omitted. */
+export function setExpanded(node: FileNode, expanded?: boolean): void {
+  node.expanded = expanded === undefined ? !node.expanded : expanded;
 }
 
-export function findNode(root: FileNode, relPath: string): FileNode | null {
-  if (relPath === "") return root;
-  let found: FileNode | null = null;
-  walkTree(root, (node) => {
-    if (node.relPath === relPath) {
-      found = node;
-      return "stop";
-    }
-  });
-  return found;
+/**
+ * Expand every non-root ancestor of `relPath`, walking the path's segments
+ * from `root` — root-anchored instead of following the removed `parent`
+ * back-pointer (Issue #150): the graph has no upward links, so the anchor is
+ * the one node the caller already holds. The node itself (the last segment)
+ * is never expanded, matching the old upward-walk semantics; the root's own
+ * flag is not set (inert: `buildTree` sets it true and nothing reads it).
+ */
+export function expandAncestors(root: FileNode, relPath: string): void {
+  let current = root;
+  for (const part of relPath.split("/").filter(Boolean).slice(0, -1)) {
+    const next = current.children.find((child) => child.name === part);
+    if (!next) return;
+    next.expanded = true;
+    current = next;
+  }
 }
 
 export function hasChanges(node: FileNode): boolean {
