@@ -80,3 +80,12 @@ The pre-style material a viewer file carries so its lines can be re-styled under
 key without touching disk: `styleText` for highlighted file text, `styleDiff` for a composed
 commit diff. Retention is skipped where styling is theme-independent (unknown-language files)
 and is bounded by the existing highlight caps (Issues #136/#141).
+
+## Binding table
+
+The one declaration of an input binding (`KEY_BINDINGS` in `help.ts`): its modal display form
+(`keys` + `description`), whether the `?` modal lists it, and — when a context advertises it —
+the short `footer` form (`keys` + label). Contexts (`FOCUS_BINDINGS` / `MODE_BINDINGS`) are
+ordered binding-id lists; the resolved pair tables, the modal's rows and the input-bar
+placeholders all derive from the table, so a hint key can only exist where its binding row
+does (Issue #148).

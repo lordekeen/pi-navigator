@@ -127,6 +127,21 @@ export type OpenTarget =
   | { kind: "file"; relPath: string }
   | { kind: "commit"; hash: string };
 
+/**
+ * The scrollbar window for a pane body (Issue #137 §3/§4, moved to the
+ * shared types in Issue #148 so frame.ts can draw the border from it without
+ * importing viewer_view.ts): where the scrollable content starts relative to
+ * the pane body, how many rows the pane draws, and the clamped offset it was
+ * drawn at. The header readout and the frame's right-border scrollbar both
+ * read this record.
+ */
+export interface ViewerScrollWindow {
+  rowOffset: number;
+  count: number;
+  scroll: number;
+  total: number;
+}
+
 export type ViewerKind = "empty" | "text" | "truncated" | "binary" | "image" | "error" | "diff";
 
 /**

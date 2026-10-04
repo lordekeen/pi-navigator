@@ -15,6 +15,7 @@ import {
 } from "@earendil-works/pi-tui";
 
 import { IMAGE_RESIZE_DEBOUNCE_MS } from "../constants";
+import { FOCUS_HINTS, type HintPair } from "../help";
 import { DEFAULT_PI_CHAFA_SUBSET, makeDeferredImageSupport, resolveChafaGeometry, type ImageSupport } from "../images";
 import { makeNavigatorTheme } from "../theme";
 import { buildTree, entriesFromPaths, findNode } from "../tree";
@@ -3102,5 +3103,122 @@ describe("Issue #127: Home/End/PageUp/PageDown jump and page in every mode", () 
     expect(body()).toContain("close (Esc clears filter or search first)");
     overlay.handleInput(KEYS.home);
     expect(body()).toContain("cycle pane focus");
+  });
+});
+
+// ── Dispatch liveness (Issue #148) ──
+
+/**
+ * The bytes an advertised pair's first key token stands for. Tokens are
+ * either single characters or the aliases spelled here; an unknown token
+ * returns null so the case fails loudly instead of typing the alias as a
+ * paste.
+ */
+function firstKeyBytes(keys: string): string | null {
+  const token = keys.split(" ")[0] ?? "";
+  if (token === "Enter") return "\r";
+  if (token === "Tab") return "\t";
+  if (token === "Ctrl+d/u") return "\x04";
+  if (token === "PgUp/PgDn") return "\x1b[5~";
+  return token.length === 1 ? token : null;
+}
+
+/**
+ * The liveness contract (Issue #148): an advertised normal-mode key must
+ * visibly act through the real overlay (a rendered-frame change), or be the
+ * documented close. A dead advertised key renders byte-identically — the
+ * #003 phantom-key class.
+ */
+function expectAdvertisedKeyLives(
+  harness: Harness,
+  pair: HintPair,
+  before: string[],
+  focus: string,
+): void {
+  const label = `${focus}: "${pair.keys}" (${pair.label})`;
+  if (pair.keys === "q Esc") {
+    expect(harness.state.closed, `${label} must close the overlay`).toBeGreaterThan(0);
+    return;
+  }
+  expect(harness.state.closed, `${label} must not close the overlay`).toBe(0);
+  const after = harness.overlay.render(120).join("\n");
+  expect(after, `${label} rendered identically — dead advertised key`).not.toBe(before.join("\n"));
+}
+
+/** A long markdown file for the viewer liveness cases: 200 long lines, so
+ *  scroll, wrap and the rendered-markdown toggle each change the frame. */
+function livenessMarkdownFile(relPath: string): ViewerFile {
+  const raw = Array.from(
+    { length: 200 },
+    (_, i) => `line-${String(i).padStart(3, "0")} ${"x".repeat(120)}`,
+  ).join("\n");
+  return {
+    kind: "text",
+    relPath,
+    sizeBytes: raw.length,
+    lineCount: 200,
+    rawText: raw,
+    lines: raw.split("\n"),
+  };
+}
+
+describe("dispatch liveness (Issue #148): every advertised normal-mode key acts", () => {
+  it("files focus: each advertised first key changes the frame or closes", async () => {
+    for (const pair of FOCUS_HINTS.files) {
+      const input = firstKeyBytes(pair.keys);
+      expect(input, `files hint "${pair.keys}" leads with an unmapped token`).not.toBeNull();
+      const harness = makeHarness();
+      // A hidden entry makes `.` change the rows; a directory first makes
+      // Enter act; `g` only moves when the cursor is not already at the top.
+      withTree(harness, [".env", "src/a.ts", "README.md"]);
+      withGit(harness);
+      if (pair.keys.startsWith("g ")) harness.overlay.handleInput("j");
+      const before = harness.overlay.render(120);
+      harness.overlay.handleInput(input ?? "");
+      await Promise.resolve();
+      expectAdvertisedKeyLives(harness, pair, before, "files");
+      harness.overlay.dispose();
+    }
+  });
+
+  it("git focus: each advertised first key changes the frame or closes", async () => {
+    for (const pair of FOCUS_HINTS.git) {
+      const input = firstKeyBytes(pair.keys);
+      expect(input, `git hint "${pair.keys}" leads with an unmapped token`).not.toBeNull();
+      const harness = makeHarness();
+      withTree(harness, ["src/a.ts"]);
+      withGit(harness, {
+        history: [
+          { shortHash: "aaa1111", dateRel: "2h ago", subject: "top commit", parents: ["bbb2222"] },
+          { shortHash: "bbb2222", dateRel: "3h ago", subject: "parent commit" },
+        ],
+      });
+      harness.overlay.handleInput(KEYS.tab); // files -> git
+      // `l` and `g` act on the commit row, not the changed-file row.
+      if (pair.keys.startsWith("l ") || pair.keys.startsWith("g ")) {
+        harness.overlay.handleInput(KEYS.down);
+      }
+      const before = harness.overlay.render(120);
+      harness.overlay.handleInput(input ?? "");
+      await Promise.resolve();
+      expectAdvertisedKeyLives(harness, pair, before, "git");
+      harness.overlay.dispose();
+    }
+  });
+
+  it("viewer focus: each advertised first key changes the frame or closes", async () => {
+    for (const pair of FOCUS_HINTS.viewer) {
+      const input = firstKeyBytes(pair.keys);
+      expect(input, `viewer hint "${pair.keys}" leads with an unmapped token`).not.toBeNull();
+      const harness = makeHarness(36, async (relPath) => livenessMarkdownFile(relPath));
+      withTree(harness, ["doc.md"]);
+      harness.overlay.handleInput(KEYS.enter); // open doc.md, focus the viewer
+      await Promise.resolve();
+      const before = harness.overlay.render(120);
+      harness.overlay.handleInput(input ?? "");
+      await Promise.resolve();
+      expectAdvertisedKeyLives(harness, pair, before, "viewer");
+      harness.overlay.dispose();
+    }
   });
 });

@@ -13,9 +13,10 @@ import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 
 import { isNativelyRenderable, type ImageSupport } from "./images";
 import type { NavigatorTheme } from "./theme";
-import type { Focus, SearchMatch, ViewerFile } from "./types";
+import type { Focus, SearchMatch, ViewerFile, ViewerScrollWindow } from "./types";
 import { formatSize, hardTruncate, isMarkdownPath, sliceStyled, type DisplayRow } from "./viewer";
-import { FRAME_CORNERS, isImageLine, joinLeftRight, MODE_HINTS, padTo, plainHint, shortPath, truncateAndWidth } from "./frame";
+import { FRAME_CORNERS, isImageLine, joinLeftRight, padTo, shortPath, truncateAndWidth } from "./frame";
+import { MODE_HINTS, plainHint } from "./help";
 
 /** Markdown files get an alternative rendered view (Issue #053). */
 export function canRenderMarkdown(file: ViewerFile | null): boolean {
@@ -56,19 +57,6 @@ export function paneContentArea(
   if ((file.kind === "truncated" || file.kind === "diff") && file.notice) noticeRows += 1;
   if (diskChanged) noticeRows += 1;
   return { noticeRows, contentArea: Math.max(1, area - noticeRows) };
-}
-
-/**
- * The scrollbar window for a pane body (Issue #137 §3/§4): where the
- * scrollable content starts relative to the pane body, how many rows the pane
- * draws, and the clamped offset it was drawn at. The header readout and the
- * frame's right-border scrollbar both read this record.
- */
-export interface ViewerScrollWindow {
-  rowOffset: number;
-  count: number;
-  scroll: number;
-  total: number;
 }
 
 /**

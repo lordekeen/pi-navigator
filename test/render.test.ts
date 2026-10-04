@@ -32,7 +32,7 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => ({
 
 import { mapExtensionToIcon } from "../icons";
 import { MIN_OVERLAY_HEIGHT, MIN_OVERLAY_WIDTH } from "../constants";
-import { leftColumnWidth } from "../frame";
+import { leftColumnWidth } from "../layout";
 import type { NavigatorLayout } from "../types";
 import type { NavigatorSettings } from "../settings";
 import { openSettingsMenu, type SettingsMenuDeps, type SettingsMenuTheme, type SettingsMenuUi } from "../settings_menu";

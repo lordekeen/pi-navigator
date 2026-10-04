@@ -1,50 +1,38 @@
 /**
- * frame.ts suites (Issue #064 view-model extraction): overlay geometry,
- * split math, chrome helpers (padTo / joinLeftRight / shortPath /
- * truncateAndWidth), the hint tables, and the title/footer rows. The identity
- * theme passes text through unchanged, so width assertions run on plain
- * strings via the real pi-tui visibleWidth; a tone-tagging theme verifies
- * which theme channel a builder used without hardcoding colors.
+ * frame.ts suites (Issue #064 view-model extraction; Issue #148 split): the
+ * chrome helpers (padTo / joinLeftRight / shortPath / truncateAndWidth), the
+ * frame assembly (composeFrame / buildCompactFrame / buildScrollbarBorder),
+ * and the title/footer rows. The identity theme passes text through
+ * unchanged, so width assertions run on plain strings via the real pi-tui
+ * visibleWidth; a tone-tagging theme verifies which theme channel a builder
+ * used without hardcoding colors. Layout math lives in layout.test.ts and
+ * the hint tables in help.test.ts.
  */
 
 import { describe, expect, it } from "vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
 
-import { LEFT_COLUMN_HIDE_BELOW } from "../constants";
 import {
-  bodyRows,
+  buildCompactFrame,
   buildFooterRow,
+  buildScrollbarBorder,
   buildTitleRow,
   buildTopBorder,
-  cycleFocus,
-  filesArea,
-  FOCUS_HINTS,
+  composeFrame,
   fitHint,
   FRAME_CORNERS,
   getFooterHint,
-  gitArea,
-  initialFocus,
   isImageLine,
   joinLeftRight,
-  layoutPanes,
-  layoutRows,
   leftBudget,
-  leftColumnWidth,
-  MODE_HINTS,
-  overlayHeight,
   padTo,
-  paneArea,
-  plainHint,
   shortPath,
-  splitRows,
   truncateAndWidth,
-  useLeftColumn,
-  viewerArea,
-  visiblePanes,
-  type HintPair,
+  type FrameView,
 } from "../frame";
+import { FOCUS_HINTS, MODE_HINTS, plainHint } from "../help";
 import { makeNavigatorTheme } from "../theme";
-import { NAVIGATOR_LAYOUTS, type Focus, type GitState, type NavigatorLayout } from "../types";
+import type { Focus, GitState, NavigatorLayout } from "../types";
 
 const identityTheme = makeNavigatorTheme({
   fg: (_c: string, t: string) => t,
@@ -77,146 +65,6 @@ function gitState(partial: Partial<GitState> = {}): GitState {
     ...partial,
   };
 }
-
-describe("overlay geometry", () => {
-  it("overlayHeight: 85% of rows, never above rows-2, 0 falls back to 24", () => {
-    expect(overlayHeight(24)).toBe(20); // floor(24*0.85)=20, min(20, 22)=20
-    expect(overlayHeight(36)).toBe(30);
-    expect(overlayHeight(1000)).toBe(850); // min(850, 998)
-    expect(overlayHeight(0)).toBe(20); // fallback 24 rows -> 20
-  });
-
-  it("bodyRows: five chrome rows, floored at 4", () => {
-    expect(bodyRows(30)).toBe(25);
-    expect(bodyRows(5)).toBe(4);
-  });
-});
-
-describe("left column", () => {
-  it("leftColumnWidth clamps the 30% ratio into [24, 44]", () => {
-    expect(leftColumnWidth(50)).toBe(24); // max(24, 15)
-    expect(leftColumnWidth(300)).toBe(44); // min(44, 90)
-    expect(leftColumnWidth(100)).toBe(30);
-  });
-
-  it("useLeftColumn gates on tree visibility, body size and inner width", () => {
-    expect(useLeftColumn(100, 25, false)).toBe(false);
-    expect(useLeftColumn(100, 7, true)).toBe(false); // body < 8
-    expect(useLeftColumn(LEFT_COLUMN_HIDE_BELOW - 1, 25, true)).toBe(false);
-    expect(useLeftColumn(100, 25, true)).toBe(true);
-  });
-});
-
-describe("splitRows", () => {
-  it("splits 55/45 with one separator row at a healthy body size", () => {
-    const { filesH, gitH } = splitRows(25);
-    expect(filesH).toBe(13);
-    expect(gitH).toBe(11);
-    expect(filesH + gitH + 1).toBe(25);
-    expect(gitH).toBeGreaterThanOrEqual(4); // GIT_MIN_ROWS
-  });
-
-  it("keeps the plain split at the minimum body", () => {
-    expect(splitRows(12)).toEqual({ filesH: 6, gitH: 5 });
-  });
-
-  it("hands the slack to the git pane when 55% leaves it under GIT_MIN_ROWS", () => {
-    expect(splitRows(8)).toEqual({ filesH: 3, gitH: 4 });
-  });
-});
-
-describe("paneArea (Issue #147)", () => {
-  it("is a group's data rows: its header takes one, floored at 1", () => {
-    expect(paneArea(0)).toBe(1);
-    expect(paneArea(1)).toBe(1);
-    expect(paneArea(2)).toBe(1);
-    expect(paneArea(3)).toBe(2);
-    expect(paneArea(13)).toBe(12);
-  });
-});
-
-describe("pane areas", () => {
-  it("filesArea(36, default) is 12 and viewerArea(36) is 24, both floored at 1", () => {
-    expect(filesArea(36, "files-git-viewer")).toBe(12); // paneArea(splitRows(bodyRows(30)).filesH)
-    expect(viewerArea(36)).toBe(24); // paneArea(bodyRows(30))
-    expect(filesArea(36, "files-git-viewer")).toBeGreaterThanOrEqual(2);
-    expect(viewerArea(36)).toBeGreaterThanOrEqual(2);
-  });
-
-  // Issue #119: the area follows the layout's files height; the floor keeps a
-  // git-viewer session (filesH 0) safe if alignFilesCursor ever fires. Issue
-  // #147: that floor is `paneArea`'s 1, the same expression render applies.
-  it("filesArea follows the layout: full height in files-viewer, floor 1 in git-viewer (Issue #119)", () => {
-    expect(filesArea(36, "files-viewer")).toBe(24); // paneArea(bodyRows(30))
-    expect(filesArea(36, "git-viewer")).toBe(1); // paneArea(0) — the pane draws no data row
-    expect(filesArea(24, "files-viewer")).toBe(bodyRows(overlayHeight(24)) - 1);
-    expect(filesArea(24, "git-viewer")).toBe(1);
-  });
-
-  it("gitArea mirrors filesArea on the git group and floors at 1 for a hidden pane", () => {
-    expect(gitArea(36, "files-git-viewer")).toBe(10); // paneArea(splitRows(25).gitH)
-    expect(gitArea(36, "git-viewer")).toBe(24); // paneArea(bodyRows(30))
-    expect(gitArea(36, "files-viewer")).toBe(1); // paneArea(0)
-  });
-});
-
-// Issue #119 (D2): the layout model is pure frame.ts derivations; the
-// component only calls them.
-describe("layout derivations (Issue #119)", () => {
-  it("NAVIGATOR_LAYOUTS is the closed union in canonical order", () => {
-    expect(NAVIGATOR_LAYOUTS).toEqual(["files-git-viewer", "files-viewer", "git-viewer"]);
-  });
-
-  it("layoutPanes reports pane presence per layout", () => {
-    expect(layoutPanes("files-git-viewer")).toEqual({ files: true, git: true });
-    expect(layoutPanes("files-viewer")).toEqual({ files: true, git: false });
-    expect(layoutPanes("git-viewer")).toEqual({ files: false, git: true });
-  });
-
-  it("layoutRows delegates the default layout to splitRows and hands single panes the full body", () => {
-    expect(layoutRows(25, "files-git-viewer")).toEqual(splitRows(25));
-    expect(layoutRows(25, "files-git-viewer")).toEqual({ filesH: 13, gitH: 11 });
-    expect(layoutRows(25, "files-viewer")).toEqual({ filesH: 25, gitH: 0 });
-    expect(layoutRows(25, "git-viewer")).toEqual({ filesH: 0, gitH: 25 });
-    // Minimum body rows: no arithmetic underflows.
-    expect(layoutRows(bodyRows(0), "files-viewer")).toEqual({ filesH: 4, gitH: 0 });
-    expect(layoutRows(bodyRows(0), "git-viewer")).toEqual({ filesH: 0, gitH: 4 });
-    expect(layoutRows(8, "files-git-viewer")).toEqual(splitRows(8)); // splitRows clamps
-  });
-
-  it("visiblePanes orders the focusable panes with the viewer last", () => {
-    expect(visiblePanes("files-git-viewer")).toEqual(["files", "git", "viewer"]);
-    expect(visiblePanes("files-viewer")).toEqual(["files", "viewer"]);
-    expect(visiblePanes("git-viewer")).toEqual(["git", "viewer"]);
-  });
-
-  it("initialFocus is the pane the layout opens with", () => {
-    expect(initialFocus("files-git-viewer")).toBe("files");
-    expect(initialFocus("files-viewer")).toBe("files");
-    expect(initialFocus("git-viewer")).toBe("git");
-  });
-
-  it("cycleFocus wraps forward within the visible panes", () => {
-    expect(cycleFocus("files", 1, "files-git-viewer")).toBe("git");
-    expect(cycleFocus("git", 1, "files-git-viewer")).toBe("viewer");
-    expect(cycleFocus("viewer", 1, "files-git-viewer")).toBe("files");
-    expect(cycleFocus("files", 1, "files-viewer")).toBe("viewer");
-    expect(cycleFocus("viewer", 1, "files-viewer")).toBe("files");
-    expect(cycleFocus("git", 1, "git-viewer")).toBe("viewer");
-    expect(cycleFocus("viewer", 1, "git-viewer")).toBe("git");
-  });
-
-  it("cycleFocus reverses with Shift+Tab and recovers an invisible focus", () => {
-    expect(cycleFocus("viewer", -1, "files-git-viewer")).toBe("git");
-    expect(cycleFocus("files", -1, "files-git-viewer")).toBe("viewer");
-    expect(cycleFocus("viewer", -1, "files-viewer")).toBe("files");
-    expect(cycleFocus("git", -1, "git-viewer")).toBe("viewer");
-    // A focus the layout does not render (e.g. carried over from another
-    // layout) lands on the first visible pane instead of crashing.
-    expect(cycleFocus("git" as Focus, 1, "files-viewer")).toBe("files");
-    expect(cycleFocus("files" as Focus, -1, "git-viewer")).toBe("git");
-  });
-});
 
 describe("padTo", () => {
   it("pads short strings, hard-cuts long ones, and never splits a wide char", () => {
@@ -367,20 +215,6 @@ describe("getFooterHint", () => {
         expect(pair.label.length).toBeGreaterThan(0);
       }
     }
-  });
-});
-
-describe("plainHint (Issue #137 §1)", () => {
-  it("joins `keys label` pairs with ' · ' for placeholder text", () => {
-    const pairs: HintPair[] = [
-      { keys: "type", label: "to search" },
-      { keys: "Esc", label: "clear" },
-    ];
-    expect(plainHint(pairs)).toBe("type to search \u00b7 Esc clear");
-    expect(plainHint([])).toBe("");
-    expect(plainHint(MODE_HINTS.help)).toBe(
-      "j k scroll \u00b7 PgUp/PgDn page \u00b7 Home/End top/bottom \u00b7 q Esc ? close help",
-    );
   });
 });
 
@@ -581,5 +415,149 @@ describe("buildTopBorder (Issue #137 §2)", () => {
     const styled = buildTopBorder(40, { theme: toneTheme, title: "pi-navigator" });
     expect(styled).toContain("accent: pi-navigator ");
     expect(styled).not.toContain("\x1b");
+  });
+});
+
+describe("buildCompactFrame (Issue #148)", () => {
+  const noticeText = " terminal too small for pi-navigator - resize, or press Esc ";
+
+  it("draws the three-line notice: rounded borders, warning text, clipped to width", () => {
+    // The full notice fits at its own length + the two border cells.
+    const width = noticeText.length + 2;
+    const lines = buildCompactFrame(width, identityTheme);
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toBe("\u256d" + "\u2500".repeat(width - 2) + "\u256e");
+    expect(lines[1]).toBe("\u2502" + noticeText + "\u2502");
+    expect(lines[2]).toBe("\u2570" + "\u2500".repeat(width - 2) + "\u256f");
+    for (const line of lines) expect(visibleWidth(line)).toBe(width);
+  });
+
+  it("clips every line when the terminal is narrower than the notice", () => {
+    const lines = buildCompactFrame(10, identityTheme);
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toBe("\u256d" + "\u2500".repeat(8) + "\u256e");
+    expect(lines[2]).toBe("\u2570" + "\u2500".repeat(8) + "\u256f");
+    for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(10);
+  });
+
+  it("styles the notice through the theme's warning channel", () => {
+    const lines = buildCompactFrame(noticeText.length + 2, toneTheme);
+    expect(lines[1]).toContain("warning: terminal too small");
+    expect(lines[0]).toContain("borderMuted:");
+  });
+});
+
+describe("buildScrollbarBorder (Issue #148)", () => {
+  // count 4 of total 8: thumbH = round(16/8) = 2, starting at rowOffset 1.
+  const win = { rowOffset: 1, count: 4, scroll: 0, total: 8 };
+
+  it("draws the frame cell when there is no window", () => {
+    expect(buildScrollbarBorder(2, null, identityTheme)).toBe("\u2502");
+  });
+
+  it("draws the frame cell outside the window's row span", () => {
+    expect(buildScrollbarBorder(0, win, identityTheme)).toBe("\u2502"); // rel -1
+    expect(buildScrollbarBorder(5, win, identityTheme)).toBe("\u2502"); // rel 4 >= count
+  });
+
+  it("draws a proportional thumb: two cells at the top at scroll 0", () => {
+    expect(buildScrollbarBorder(1, win, identityTheme)).toBe("\u2588");
+    expect(buildScrollbarBorder(2, win, identityTheme)).toBe("\u2588");
+    expect(buildScrollbarBorder(3, win, identityTheme)).toBe("\u2502");
+    expect(buildScrollbarBorder(4, win, identityTheme)).toBe("\u2502");
+  });
+
+  it("slides the thumb to the bottom at full scroll", () => {
+    const bottom = { ...win, scroll: 4 };
+    // thumbStart = round((4 / 4) * (4 - 2)) = 2.
+    expect(buildScrollbarBorder(1, bottom, identityTheme)).toBe("\u2502");
+    expect(buildScrollbarBorder(3, bottom, identityTheme)).toBe("\u2588");
+    expect(buildScrollbarBorder(4, bottom, identityTheme)).toBe("\u2588");
+  });
+
+  it("keeps at least a one-cell thumb and styles through the scrollbar channels", () => {
+    const tall = { rowOffset: 0, count: 10, scroll: 0, total: 1000 };
+    // thumbH = max(1, round(100 / 1000)) = 1.
+    expect(buildScrollbarBorder(0, tall, identityTheme)).toBe("\u2588");
+    expect(buildScrollbarBorder(1, tall, identityTheme)).toBe("\u2502");
+    expect(buildScrollbarBorder(1, win, toneTheme)).toBe("scrollbarThumb:\u2588");
+    expect(buildScrollbarBorder(3, win, toneTheme)).toBe("scrollbarTrack:\u2502");
+    expect(buildScrollbarBorder(0, win, toneTheme)).toBe("borderMuted:\u2502"); // outside the window
+  });
+});
+
+describe("composeFrame (Issue #148)", () => {
+  const frameView = (overrides: Partial<FrameView> = {}): FrameView => ({
+    theme: identityTheme,
+    innerW: 24,
+    body: 4,
+    leftW: 4,
+    filesH: 1,
+    showSeparator: true,
+    leftRows: ["aaaa", "bbbb", "cccc", "dddd"],
+    rightRows: ["RRRR", "SSSS", "TTTT", "UUUU"],
+    scrollWindow: null,
+    title: { cwd: "/work/repo", git: null, home: "" },
+    footerRow: "footer",
+    ...overrides,
+  });
+
+  it("assembles the top border, title row and outer separator", () => {
+    const lines = composeFrame(frameView());
+    expect(lines).toHaveLength(9); // 4 body rows + 5 chrome rows
+    expect(lines[0]).toBe(buildTopBorder(24, { theme: identityTheme, title: "pi-navigator" }));
+    expect(lines[1]).toBe("\u2502 /work/repo" + " ".repeat(5) + " no git \u2502");
+    expect(lines[2]).toBe("\u251c" + "\u2500".repeat(24) + "\u2524");
+  });
+
+  it("joins the left and right cells, drawing the separator row at filesH", () => {
+    const lines = composeFrame(frameView());
+    expect(lines[3]).toBe("\u2502aaaa\u2502RRRR\u2502"); // i = 0
+    expect(lines[4]).toBe("\u251c\u2500\u2500\u2500\u2500\u2524SSSS\u2502"); // i === filesH
+    expect(lines[5]).toBe("\u2502cccc\u2502TTTT\u2502");
+    expect(lines[6]).toBe("\u2502dddd\u2502UUUU\u2502");
+  });
+
+  it("draws no separator row when the layout has none", () => {
+    const lines = composeFrame(frameView({ showSeparator: false }));
+    expect(lines.slice(3, 7)).toEqual([
+      "\u2502aaaa\u2502RRRR\u2502",
+      "\u2502bbbb\u2502SSSS\u2502",
+      "\u2502cccc\u2502TTTT\u2502",
+      "\u2502dddd\u2502UUUU\u2502",
+    ]);
+  });
+
+  it("joins the right cell directly when the left column is hidden", () => {
+    const lines = composeFrame(frameView({ leftRows: null, showSeparator: false }));
+    expect(lines.slice(3, 7)).toEqual([
+      "\u2502RRRR\u2502",
+      "\u2502SSSS\u2502",
+      "\u2502TTTT\u2502",
+      "\u2502UUUU\u2502",
+    ]);
+  });
+
+  it("draws the scrollbar in the right border column and the frame cell outside the window", () => {
+    const lines = composeFrame(
+      frameView({
+        body: 5,
+        showSeparator: false,
+        leftRows: ["aaaa", "bbbb", "cccc", "dddd", "eeee"],
+        rightRows: ["RRRR", "SSSS", "TTTT", "UUUU", "VVVV"],
+        scrollWindow: { rowOffset: 1, count: 3, scroll: 0, total: 6 },
+      }),
+    );
+    expect(lines[3]).toBe("\u2502aaaa\u2502RRRR\u2502"); // rel -1: frame
+    expect(lines[4]).toBe("\u2502bbbb\u2502SSSS\u2588"); // rel 0: thumb
+    expect(lines[5]).toBe("\u2502cccc\u2502TTTT\u2588"); // rel 1: thumb
+    expect(lines[6]).toBe("\u2502dddd\u2502UUUU\u2502"); // rel 2: track
+    expect(lines[7]).toBe("\u2502eeee\u2502VVVV\u2502"); // rel 3 >= count: frame
+  });
+
+  it("wraps the footer row and closes the bottom border", () => {
+    const lines = composeFrame(frameView());
+    expect(lines[7]).toBe("\u2502footer\u2502");
+    expect(lines[8]).toBe("\u2570" + "\u2500".repeat(24) + "\u256f");
   });
 });

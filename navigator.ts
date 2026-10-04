@@ -34,26 +34,22 @@ import {
 import { restyleDiffViewerFile } from "./diff";
 import { NAVIGATOR_KEYBINDINGS } from "./help";
 import { buildFilesHeader, buildFileRow, buildFilesRows, filesEmptyRow } from "./files_view";
+import { buildCompactFrame, buildFooterRow, composeFrame, padTo } from "./frame";
+import { buildGitHeader, buildGitRow, buildGitNavRows, buildGitRows } from "./git_view";
 import {
   bodyRows,
-  buildFooterRow,
-  buildTitleRow,
-  buildTopBorder,
   cycleFocus,
   filesArea,
-  FRAME_CORNERS,
   gitArea,
   initialFocus,
   layoutPanes,
   layoutRows,
   leftColumnWidth,
   overlayHeight,
-  padTo,
   paneArea,
   useLeftColumn,
   viewerArea,
-} from "./frame";
-import { buildGitHeader, buildGitRow, buildGitNavRows, buildGitRows } from "./git_view";
+} from "./layout";
 import {
   composeHelp,
   helpMaxScroll as computeHelpMaxScroll,
@@ -74,6 +70,7 @@ import type {
   OpenTarget,
   SearchMatch,
   ViewerFile,
+  ViewerScrollWindow,
 } from "./types";
 import {
   computeRows,
@@ -96,7 +93,6 @@ import {
   renderViewerPane,
   viewerWindow,
   type ViewerPaneView,
-  type ViewerScrollWindow,
   type ViewerWindow,
 } from "./viewer_view";
 
@@ -1364,16 +1360,9 @@ export class NavigatorOverlay implements Focusable {
     const innerW = Math.max(0, width - 2);
 
     if (width < MIN_OVERLAY_WIDTH || overlayH < MIN_OVERLAY_HEIGHT) {
-      // Compact notice for terminals that cannot host the frame. Every line is
-      // clipped to `width`, so the notice is width-safe like the frame.
-      const barW = Math.max(0, width - 2);
-      const notice = (text: string) =>
-        padTo(T.frame("\u2502") + padTo(text, barW) + T.frame("\u2502"), width);
-      const lines = [
-        padTo(T.frame(FRAME_CORNERS.tl + "\u2500".repeat(barW) + FRAME_CORNERS.tr), width),
-        notice(T.warning(" terminal too small for pi-navigator - resize, or press Esc ")),
-        padTo(T.frame(FRAME_CORNERS.bl + "\u2500".repeat(barW) + FRAME_CORNERS.br), width),
-      ];
+      // Compact notice for terminals that cannot host the frame (Issue #148:
+      // the pure builder in frame.ts; every line is clipped to `width`).
+      const lines = buildCompactFrame(width, T);
       this.cachedWidth = width;
       this.cachedLines = lines;
       return lines;
@@ -1392,50 +1381,11 @@ export class NavigatorOverlay implements Focusable {
     const rightRows = this.buildRightRows(rightW, body);
     this.maybeScheduleResizeReflow();
 
-    const lines: string[] = [];
-    // Issue #137 §2: the top border carries the product-name pill; the row
-    // below is the subtitle (path + git), not a second title.
-    lines.push(buildTopBorder(innerW, { theme: T, title: "pi-navigator" }));
-    lines.push(
-      T.frame("\u2502") +
-        buildTitleRow(innerW, { theme: T, cwd: this.cwd, git: this.git, home: this.home }) +
-        T.frame("\u2502"),
-    );
-    lines.push(T.frame("\u251c" + "\u2500".repeat(innerW) + "\u2524"));
-
     // Issue #137 §4: the frame's right border column doubles as the viewer
-    // scrollbar while the text-like content overflows. Display-only — no
-    // timers, no fade, no mouse handling — and hidden while the help modal is
-    // open (it composes over the body). The window was recorded by
+    // scrollbar while the text-like content overflows — hidden while the help
+    // modal is open (it composes over the body). The window was recorded by
     // buildRightRows above, so the thumb cannot drift from the clamp.
     const scrollWindow = this.mode === "help" ? null : this.viewerScrollWindow;
-    const rightBorder = (i: number): string => {
-      if (!scrollWindow) return T.frame("\u2502");
-      const rel = i - scrollWindow.rowOffset;
-      if (rel < 0 || rel >= scrollWindow.count) return T.frame("\u2502");
-      const thumbH = Math.max(1, Math.round((scrollWindow.count * scrollWindow.count) / scrollWindow.total));
-      const thumbStart = Math.round(
-        (scrollWindow.scroll / Math.max(1, scrollWindow.total - scrollWindow.count)) *
-          (scrollWindow.count - thumbH),
-      );
-      return rel >= thumbStart && rel < thumbStart + thumbH
-        ? T.scrollbarThumb("\u2588")
-        : T.scrollbarTrack("\u2502");
-    };
-
-    for (let i = 0; i < body; i++) {
-      if (!leftRows) {
-        lines.push(T.frame("\u2502") + rightRows[i] + rightBorder(i));
-        continue;
-      }
-      if (showSeparator && i === filesH) {
-        lines.push(
-          T.frame("\u251c") + T.frame("\u2500".repeat(leftW)) + T.frame("\u2524") + rightRows[i] + rightBorder(i),
-        );
-      } else {
-        lines.push(T.frame("\u2502") + leftRows[i] + T.frame("\u2502") + rightRows[i] + rightBorder(i));
-      }
-    }
 
     // While filtering, the footer row area carries the filter bar instead of
     // the plain hints (plan section 3.6 item 6).
@@ -1457,8 +1407,22 @@ export class NavigatorOverlay implements Focusable {
             // render as markdown, so the footer never advertises a dead key.
             markdownApplicable: canRenderMarkdown(this.viewFile),
           });
-    lines.push(T.frame("\u2502") + footerRow + T.frame("\u2502"));
-    lines.push(T.frame(FRAME_CORNERS.bl + "\u2500".repeat(innerW) + FRAME_CORNERS.br));
+
+    // Issue #148: frame.ts assembles the frame (borders, title, separator
+    // rows, body join, scrollbar border, footer wrapper).
+    const lines = composeFrame({
+      theme: T,
+      innerW,
+      body,
+      leftW,
+      filesH,
+      showSeparator,
+      leftRows,
+      rightRows,
+      scrollWindow,
+      title: { cwd: this.cwd, git: this.git, home: this.home },
+      footerRow,
+    });
 
     if (this.mode === "help") {
       // Same limit the input handler clamps against, written back so the

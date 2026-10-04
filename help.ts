@@ -8,7 +8,7 @@
  * truncating width.
  */
 
-import type { NavigatorLayout } from "./types";
+import type { Focus, InputMode, NavigatorLayout } from "./types";
 
 export const HELP_ENTRY_TYPE = "navigator-help";
 
@@ -51,10 +51,82 @@ export const NAVIGATOR_COMMANDS: readonly { cmd: string; desc: string }[] = [
 ];
 
 /**
+ * A footer hint (Issue #137 §1, moved here in Issue #148): the keys and the
+ * action they perform. `buildFooterRow` styles a pair `dim(keys) +
+ * muted(" " + label)` — pi-main's keyHint shape — and `plainHint` flattens
+ * the same pair for the input-bar placeholders, so the footer and the
+ * placeholders cannot drift apart.
+ */
+export interface HintPair {
+  keys: string;
+  label: string;
+}
+
+/**
+ * One row of the one key declaration (Issue #148). The `?` modal's projection
+ * (`NAVIGATOR_KEYBINDINGS`), the footer/input-bar hint tables below, and the
+ * dispatch-liveness suite all read this table, so a key spelling can no
+ * longer be advertised without a row that carries it.
+ *
+ * `keys` is the modal display spelling; `footer` is the curated short form a
+ * context advertises. The row owns the key spelling — a context ref may
+ * override only the short label. `help: false` rows are contextual entries
+ * the modal never shows (filter/search/help-mode verbs and released
+ * non-modal forms): they exist so every advertised pair resolves to a row
+ * without the modal growing a duplicate.
+ */
+export interface KeyBinding {
+  id: string;
+  keys: string;
+  description?: string;
+  /** Included in the `?` modal's projection (NAVIGATOR_KEYBINDINGS). */
+  help: boolean;
+  /** Footer / input-bar short form; required for every context-referenced row. */
+  footer?: { keys: string; label: string };
+}
+
+export const KEY_BINDINGS: readonly KeyBinding[] = [
+  { id: "cycle-focus", keys: "Tab / Shift+Tab", description: "cycle pane focus (visible panes)", help: true, footer: { keys: "Tab", label: "pane" } },
+  { id: "toggle-tree", keys: "t", description: "hide or show the left column", help: true },
+  { id: "move", keys: "j k / arrows", description: "move the cursor or scroll", help: true, footer: { keys: "j k", label: "move" } },
+  { id: "jump", keys: "g G / Home End", description: "jump to top or bottom", help: true, footer: { keys: "g G Home/End", label: "jump" } },
+  { id: "half-page", keys: "Ctrl+d Ctrl+u", description: "half page; PgUp/PgDn also page", help: true, footer: { keys: "Ctrl+d/u PgUp/PgDn", label: "page" } },
+  { id: "open", keys: "Enter", description: "open file, commit diff, or toggle a directory/commit", help: true, footer: { keys: "Enter", label: "open" } },
+  { id: "expand-collapse", keys: "l h / arrows", description: "expand or collapse a directory / commit family", help: true, footer: { keys: "l h", label: "family" } },
+  { id: "filter-search", keys: "/", description: "filter the tree, search the file", help: true, footer: { keys: "/", label: "filter" } },
+  { id: "match-nav", keys: "n N", description: "next/prev match (viewer)", help: true },
+  { id: "match-cycle", keys: "up/down, ^n/^p", description: "cycle matches (searching)", help: true },
+  { id: "wrap", keys: "w", description: "toggle word wrap", help: true, footer: { keys: "w", label: "wrap" } },
+  { id: "markdown", keys: "m", description: "toggle markdown rendered / code view", help: true, footer: { keys: "m", label: "mode" } },
+  { id: "image", keys: "i", description: "toggle image rendering / metadata card", help: true },
+  { id: "scroll-h", keys: "h l", description: "horizontal scroll when wrap is off", help: true },
+  { id: "hidden", keys: ".", description: "toggle hidden files", help: true, footer: { keys: ".", label: "hidden" } },
+  { id: "copy", keys: "y", description: "copy the selected path", help: true },
+  { id: "refresh", keys: "r", description: "refresh tree and git", help: true },
+  { id: "help", keys: "?", description: "this help", help: true, footer: { keys: "?", label: "help" } },
+  { id: "close", keys: "q Esc", description: "close (Esc clears filter or search first)", help: true, footer: { keys: "q Esc", label: "close" } },
+  // Contextual entries the modal never shows (Issue #148). Each carries the
+  // footer form its mode advertises; `keys` is the same spelling the footer
+  // uses because no modal row exists to hold it.
+  { id: "type-to-filter", keys: "type", help: false, footer: { keys: "type", label: "to filter" } },
+  { id: "cycle-filter", keys: "up/down", help: false, footer: { keys: "up/down", label: "move" } },
+  { id: "first-last", keys: "Home/End", help: false, footer: { keys: "Home/End", label: "first/last" } },
+  { id: "apply", keys: "Enter", help: false, footer: { keys: "Enter", label: "apply" } },
+  { id: "clear", keys: "Esc", help: false, footer: { keys: "Esc", label: "clear" } },
+  { id: "type-to-search", keys: "type", help: false, footer: { keys: "type", label: "to search" } },
+  { id: "cycle-search", keys: "up/down", help: false, footer: { keys: "up/down", label: "match" } },
+  { id: "help-scroll", keys: "j k", help: false, footer: { keys: "j k", label: "scroll" } },
+  { id: "help-page", keys: "PgUp/PgDn", help: false, footer: { keys: "PgUp/PgDn", label: "page" } },
+  { id: "help-top-bottom", keys: "Home/End", help: false, footer: { keys: "Home/End", label: "top/bottom" } },
+  { id: "help-close", keys: "q Esc ?", help: false, footer: { keys: "q Esc ?", label: "close help" } },
+];
+
+/**
  * The in-overlay `?` modal's keybinding table (19 rows, rendered by
  * composeHelp in navigator.ts, which projects [keys, description] from here).
  * `id` is a stable slug a test can assert equality against; key order and
- * wording are the rendered contract.
+ * wording are the rendered contract. Derived from `KEY_BINDINGS` (Issue #148),
+ * so the modal and the footer cannot diverge on a key spelling.
  */
 export interface HelpKeyRow {
   id: string;
@@ -62,27 +134,133 @@ export interface HelpKeyRow {
   description: string;
 }
 
-export const NAVIGATOR_KEYBINDINGS: readonly HelpKeyRow[] = [
-  { id: "cycle-focus", keys: "Tab / Shift+Tab", description: "cycle pane focus (visible panes)" },
-  { id: "toggle-tree", keys: "t", description: "hide or show the left column" },
-  { id: "move", keys: "j k / arrows", description: "move the cursor or scroll" },
-  { id: "jump", keys: "g G / Home End", description: "jump to top or bottom" },
-  { id: "half-page", keys: "Ctrl+d Ctrl+u", description: "half page; PgUp/PgDn also page" },
-  { id: "open", keys: "Enter", description: "open file, commit diff, or toggle a directory/commit" },
-  { id: "expand-collapse", keys: "l h / arrows", description: "expand or collapse a directory / commit family" },
-  { id: "filter-search", keys: "/", description: "filter the tree, search the file" },
-  { id: "match-nav", keys: "n N", description: "next/prev match (viewer)" },
-  { id: "match-cycle", keys: "up/down, ^n/^p", description: "cycle matches (searching)" },
-  { id: "wrap", keys: "w", description: "toggle word wrap" },
-  { id: "markdown", keys: "m", description: "toggle markdown rendered / code view" },
-  { id: "image", keys: "i", description: "toggle image rendering / metadata card" },
-  { id: "scroll-h", keys: "h l", description: "horizontal scroll when wrap is off" },
-  { id: "hidden", keys: ".", description: "toggle hidden files" },
-  { id: "copy", keys: "y", description: "copy the selected path" },
-  { id: "refresh", keys: "r", description: "refresh tree and git" },
-  { id: "help", keys: "?", description: "this help" },
-  { id: "close", keys: "q Esc", description: "close (Esc clears filter or search first)" },
-];
+export const NAVIGATOR_KEYBINDINGS: readonly HelpKeyRow[] = KEY_BINDINGS.filter(
+  (row): row is KeyBinding & { description: string } => row.help,
+).map(({ id, keys, description }) => ({ id, keys, description }));
+
+/**
+ * One context's ordered reference to a binding row (Issue #148): the row owns
+ * the key spelling, `label` overrides only the short form this context
+ * advertises (`open` → "open/diff" in git; `move` → "scroll" in the viewer;
+ * `filter-search` → "search").
+ */
+export interface HintRef {
+  id: string;
+  label?: string;
+}
+
+/**
+ * Resolve a context's ordered refs to the footer's typed pairs (Issue #148).
+ * A ref that names no row — or a row with no footer form — is a programming
+ * error and throws, so a free key string can never enter a hint table.
+ */
+export function resolveBindings(refs: readonly HintRef[]): HintPair[] {
+  return refs.map((ref) => {
+    const footer = KEY_BINDINGS.find((row) => row.id === ref.id)?.footer;
+    if (footer === undefined) {
+      throw new Error(`hint ref "${ref.id}" has no KEY_BINDINGS row with a footer form`);
+    }
+    return { keys: footer.keys, label: ref.label ?? footer.label };
+  });
+}
+
+/**
+ * The normal-mode hint contexts: which bindings the footer (and the input-bar
+ * placeholders, via MODE_BINDINGS) advertises per focus, in order. Width
+ * budget: the longest hint plus the pane labels must fit the inner width at a
+ * 100-column terminal (98) so the focus indicator never gets truncated off
+ * the footer (render test enforces this at 120, 100, 80). Issue #127 added
+ * the Home/End and PgUp/PgDn aliases; the footer is a curated subset (the
+ * help modal lists every binding), so hints that no longer fit were dropped
+ * whole rather than left to truncate mid-phrase. Issue #137 §1: items are
+ * typed pairs; an item that carries no action word of its own (`g G
+ * Home/End`, bare `Tab`) gets the minimal label naming its effect. Issue #137
+ * §5: the close pair advertises the default cancel key baked into the tables
+ * (`q Esc`), matching the modal; remaps of `tui.select.cancel` still close
+ * because input goes through `matchesCancel`.
+ */
+export const FOCUS_BINDINGS: Record<Focus, readonly HintRef[]> = {
+  files: [
+    { id: "move" },
+    { id: "open" },
+    { id: "jump" },
+    { id: "cycle-focus" },
+    { id: "filter-search" },
+    { id: "hidden" },
+    { id: "help" },
+    { id: "close" },
+  ],
+  git: [
+    { id: "move" },
+    { id: "open", label: "open/diff" },
+    { id: "expand-collapse" },
+    { id: "jump" },
+    { id: "help" },
+    { id: "close" },
+  ],
+  viewer: [
+    { id: "move", label: "scroll" },
+    { id: "half-page" },
+    { id: "wrap" },
+    { id: "markdown" },
+    { id: "filter-search", label: "search" },
+    { id: "help" },
+    { id: "close" },
+  ],
+};
+
+/** The modal modes' hint contexts (Issue #148); same contract as
+ *  FOCUS_BINDINGS. */
+export const MODE_BINDINGS: Record<Exclude<InputMode, "normal">, readonly HintRef[]> = {
+  filter: [
+    { id: "type-to-filter" },
+    { id: "cycle-filter" },
+    { id: "first-last" },
+    { id: "apply" },
+    { id: "clear" },
+  ],
+  search: [
+    { id: "type-to-search" },
+    { id: "cycle-search" },
+    { id: "apply" },
+    { id: "clear" },
+  ],
+  help: [
+    { id: "help-scroll" },
+    { id: "help-page" },
+    { id: "help-top-bottom" },
+    { id: "help-close" },
+  ],
+};
+
+/**
+ * The resolved normal-mode hint pairs, byte-identical to the pre-#148 table:
+ * derived from FOCUS_BINDINGS at module load so a pair cannot exist without a
+ * binding row.
+ */
+export const FOCUS_HINTS: Record<Focus, HintPair[]> = {
+  files: resolveBindings(FOCUS_BINDINGS.files),
+  git: resolveBindings(FOCUS_BINDINGS.git),
+  viewer: resolveBindings(FOCUS_BINDINGS.viewer),
+};
+
+/** The resolved modal-mode hint pairs (filter/search/help), derived from
+ *  MODE_BINDINGS at module load (Issue #148). */
+export const MODE_HINTS: Record<Exclude<InputMode, "normal">, HintPair[]> = {
+  filter: resolveBindings(MODE_BINDINGS.filter),
+  search: resolveBindings(MODE_BINDINGS.search),
+  help: resolveBindings(MODE_BINDINGS.help),
+};
+
+/**
+ * Flatten hint pairs to plain text — `keys + " " + label` joined by `" · "`
+ * (Issue #137 §1). The input-bar placeholders use this so they cannot drift
+ * from the footer tables, and width budgets measure the same text the footer
+ * renders.
+ */
+export function plainHint(pairs: HintPair[]): string {
+  return pairs.map((pair) => `${pair.keys} ${pair.label}`).join(" \u00b7 ");
+}
 
 export const HELP_HEADER_PREFIX = "pi-navigator \u2014 ";
 export const HELP_COMMANDS_TITLE = "commands";

@@ -1,26 +1,30 @@
 /**
- * Overlay frame and geometry (Issue #064 view-model extraction).
+ * Overlay frame composition and chrome (Issue #064 view-model extraction;
+ * Issue #148 split).
  *
- * Pure functions of plain inputs: overlay height/split geometry, chrome
- * helpers (padTo / joinLeftRight / shortPath / truncateAndWidth), the title
- * and footer rows, and the focus/mode hint tables. No component state lives
- * here — NavigatorOverlay passes the values it owns (terminal rows, git
- * state, focus, mode, notice, home) and renders the returned strings.
+ * Pure functions of plain inputs: the composition helpers (padTo /
+ * joinLeftRight / shortPath / truncateAndWidth), the title and footer rows,
+ * and the whole frame assembly (composeFrame) with its compact-notice and
+ * scrollbar-border builders. Navigator-only layout math lives in layout.ts
+ * and the one key declaration lives in help.ts (Issue #148); no component
+ * state lives here — NavigatorOverlay passes the values it owns (terminal
+ * rows, git state, focus, mode, notice, home) and renders the returned
+ * strings.
  */
 
 import { visibleWidth } from "@earendil-works/pi-tui";
 
 import {
-  GIT_MIN_ROWS,
-  LEFT_COLUMN_HIDE_BELOW,
-  LEFT_COLUMN_MAX,
-  LEFT_COLUMN_MIN,
-  LEFT_COLUMN_RATIO,
-  OVERLAY_HEIGHT_RATIO,
-  OVERLAY_MARGIN_ROWS,
-} from "./constants";
+  FOCUS_BINDINGS,
+  FOCUS_HINTS,
+  MODE_HINTS,
+  plainHint,
+  resolveBindings,
+  type HintPair,
+} from "./help";
+import { visiblePanes } from "./layout";
 import type { NavigatorTheme } from "./theme";
-import type { Focus, GitState, InputMode, NavigatorLayout } from "./types";
+import type { Focus, GitState, InputMode, NavigatorLayout, ViewerScrollWindow } from "./types";
 import { hardTruncate } from "./viewer";
 
 /**
@@ -37,150 +41,6 @@ import { hardTruncate } from "./viewer";
 export function truncateAndWidth(text: string, maxWidth: number): { text: string; width: number } {
   const out = hardTruncate(text, maxWidth);
   return { text: out, width: visibleWidth(out) };
-}
-
-/**
- * Height in rows, bounded by the terminal so the overlay never overflows it.
- *
- * One source of truth for the ratio: `OVERLAY_OPTIONS.maxHeight` is derived
- * from the same `OVERLAY_HEIGHT_RATIO`, so the box the host allocates and the
- * frame drawn here cannot drift apart (Issue #130).
- *
- * `rows - OVERLAY_MARGIN_ROWS * 2` reserves the host's vertical margin (one row
- * top and bottom), and letting the result fall below MIN_OVERLAY_HEIGHT is
- * deliberate: that is what makes the compact "terminal too small" notice
- * reachable (plan section 6).
- */
-export function overlayHeight(termRows: number): number {
-  const rows = termRows || 24;
-  const bounded = Math.max(0, rows - OVERLAY_MARGIN_ROWS * 2);
-  return Math.max(0, Math.min(Math.floor(rows * OVERLAY_HEIGHT_RATIO), bounded));
-}
-
-export function bodyRows(overlayH: number): number {
-  return Math.max(4, overlayH - 5);
-}
-
-export function useLeftColumn(innerW: number, body: number, showTree: boolean): boolean {
-  if (!showTree || body < 8) return false;
-  const candidate = leftColumnWidth(innerW);
-  return innerW >= LEFT_COLUMN_HIDE_BELOW && innerW - candidate - 1 >= 30;
-}
-
-export function leftColumnWidth(innerW: number): number {
-  return Math.min(LEFT_COLUMN_MAX, Math.max(LEFT_COLUMN_MIN, Math.floor(innerW * LEFT_COLUMN_RATIO)));
-}
-
-/**
- * The data rows a pane group of `groupHeight` draws: the group's header takes
- * one of them (Issue #147). One expression for render and input — the render
- * path applies it to the heights it already holds (`heights.filesH`,
- * `heights.gitH`, the body) and the area helpers below delegate to it, so no
- * render/input floor can disagree. Floored at 1 because a pane never draws
- * fewer than one row; every group a real (non-compact) frame draws is at
- * least 3 rows tall, so the floor is a guard, not a visible value.
- */
-export function paneArea(groupHeight: number): number {
-  return Math.max(1, groupHeight - 1);
-}
-
-/** Files-pane scroll area height for the current terminal size and layout
- *  (Issue #119, D5): the explicit layout parameter keeps a missed call site
- *  from silently computing the default layout's split. Delegates to the one
- *  pane-area expression (Issue #147). */
-export function filesArea(termRows: number, layout: NavigatorLayout): number {
-  const body = bodyRows(overlayHeight(termRows));
-  return paneArea(layoutRows(body, layout).filesH);
-}
-
-/** Git-pane scroll area height for the current terminal size and layout
- *  (Issue #127): the git pane's paging step needs the same figure the render
- *  path computes, so it is derived here rather than duplicated at the call
- *  site. Mirrors `filesArea` (Issue #147). */
-export function gitArea(termRows: number, layout: NavigatorLayout): number {
-  const body = bodyRows(overlayHeight(termRows));
-  return paneArea(layoutRows(body, layout).gitH);
-}
-
-/** Viewer-pane content area height for the current terminal size (Issue
- *  #147: the same `paneArea` expression the render path applies to the body). */
-export function viewerArea(termRows: number): number {
-  return paneArea(bodyRows(overlayHeight(termRows)));
-}
-
-export function splitRows(body: number): { filesH: number; gitH: number } {
-  let filesH = Math.max(6, Math.floor(body * 0.55));
-  let gitH = body - filesH - 1;
-  if (gitH < GIT_MIN_ROWS) {
-    filesH = Math.max(3, body - GIT_MIN_ROWS - 1);
-    gitH = Math.max(2, body - filesH - 1);
-  }
-  return { filesH, gitH };
-}
-
-/**
- * Layout model (Issue #119, D2): which left-column panes a layout renders.
- * Render/builder code branches on `layoutPanes(layout)`, never on a zero
- * height — a zero height is a geometry fact, not the pane-presence source.
- */
-export interface LayoutPanes {
-  readonly files: boolean;
-  readonly git: boolean;
-}
-
-export function layoutPanes(layout: NavigatorLayout): LayoutPanes {
-  switch (layout) {
-    case "files-git-viewer":
-      return { files: true, git: true };
-    case "files-viewer":
-      return { files: true, git: false };
-    case "git-viewer":
-      return { files: false, git: true };
-  }
-}
-
-/**
- * Left-column group heights for a body of `body` rows (Issue #119, D3). The
- * default layout delegates to `splitRows` (filesH + gitH + 1 separator =
- * body); a single-pane layout hands the surviving group the full body — its
- * header + body − 1 area rows, exactly the viewer pane's height.
- */
-export function layoutRows(body: number, layout: NavigatorLayout): { filesH: number; gitH: number } {
-  if (layout === "files-viewer") return { filesH: body, gitH: 0 };
-  if (layout === "git-viewer") return { filesH: 0, gitH: body };
-  return splitRows(body);
-}
-
-/**
- * Focusable panes for a layout, in Tab order (Issue #119, D8). The viewer is
- * always last; the left-column panes appear in their visual order.
- */
-export function visiblePanes(layout: NavigatorLayout): readonly Focus[] {
-  switch (layout) {
-    case "files-git-viewer":
-      return ["files", "git", "viewer"];
-    case "files-viewer":
-      return ["files", "viewer"];
-    case "git-viewer":
-      return ["git", "viewer"];
-  }
-}
-
-/** The pane a layout opens focused on (Issue #119, D8). */
-export function initialFocus(layout: NavigatorLayout): Focus {
-  return layout === "git-viewer" ? "git" : "files";
-}
-
-/**
- * Cycle focus within the layout's visible panes (Issue #119, D8): `1` for
- * Tab, `-1` for Shift+Tab, wrapping at both ends. A focus that the layout
- * does not render falls back to the first visible pane.
- */
-export function cycleFocus(focus: Focus, direction: 1 | -1, layout: NavigatorLayout): Focus {
-  const panes = visiblePanes(layout);
-  const index = panes.indexOf(focus);
-  if (index < 0) return panes[0] ?? "files";
-  return panes[(index + direction + panes.length) % panes.length] ?? "files";
 }
 
 export function padTo(content: string, width: number): string {
@@ -278,93 +138,121 @@ export function buildTopBorder(innerW: number, view: { theme: NavigatorTheme; ti
 }
 
 /**
- * A footer hint (Issue #137 §1): the keys and the action they perform.
- * `buildFooterRow` styles a pair `dim(keys) + muted(" " + label)` — pi-main's
- * keyHint shape — and `plainHint` flattens the same pair for the input-bar
- * placeholders, so the footer and the placeholders cannot drift apart.
+ * Compact "terminal too small" notice (Issue #148): the three lines the
+ * overlay draws when the terminal cannot host the frame (width below
+ * MIN_OVERLAY_WIDTH / height below MIN_OVERLAY_HEIGHT). Every line is clipped
+ * to `width`, so the notice is width-safe like the frame.
  */
-export interface HintPair {
-  keys: string;
-  label: string;
+export function buildCompactFrame(width: number, theme: NavigatorTheme): string[] {
+  const T = theme;
+  const barW = Math.max(0, width - 2);
+  const notice = (text: string) => padTo(T.frame("\u2502") + padTo(text, barW) + T.frame("\u2502"), width);
+  return [
+    padTo(T.frame(FRAME_CORNERS.tl + "\u2500".repeat(barW) + FRAME_CORNERS.tr), width),
+    notice(T.warning(" terminal too small for pi-navigator - resize, or press Esc ")),
+    padTo(T.frame(FRAME_CORNERS.bl + "\u2500".repeat(barW) + FRAME_CORNERS.br), width),
+  ];
 }
-
-export const FOCUS_HINTS: Record<Focus, HintPair[]> = {
-  // Width budget: the longest hint plus the pane labels must fit the inner
-  // width at a 100-column terminal (98) so the focus indicator never gets
-  // truncated off the footer (render test enforces this at 120, 100, 80).
-  // Issue #127 added the Home/End and PgUp/PgDn aliases; the footer is a
-  // curated subset (the help modal lists every binding), so hints that no
-  // longer fit were dropped whole rather than left to truncate mid-phrase.
-  // Issue #137 §1: items are typed pairs; an item that carries no action
-  // word of its own (`g G Home/End`, bare `Tab`) gets the minimal label
-  // naming its effect. Issue #137 §5: the close pair advertises the default
-  // cancel key baked into the tables (`q Esc`), matching help.ts; remaps of
-  // `tui.select.cancel` still close because input goes through
-  // `matchesCancel`.
-  files: [
-    { keys: "j k", label: "move" },
-    { keys: "Enter", label: "open" },
-    { keys: "g G Home/End", label: "jump" },
-    { keys: "Tab", label: "pane" },
-    { keys: "/", label: "filter" },
-    { keys: ".", label: "hidden" },
-    { keys: "?", label: "help" },
-    { keys: "q Esc", label: "close" },
-  ],
-  git: [
-    { keys: "j k", label: "move" },
-    { keys: "Enter", label: "open/diff" },
-    { keys: "l h", label: "family" },
-    { keys: "g G Home/End", label: "jump" },
-    { keys: "?", label: "help" },
-    { keys: "q Esc", label: "close" },
-  ],
-  viewer: [
-    { keys: "j k", label: "scroll" },
-    { keys: "Ctrl+d/u PgUp/PgDn", label: "page" },
-    { keys: "w", label: "wrap" },
-    { keys: "m", label: "mode" },
-    { keys: "/", label: "search" },
-    { keys: "?", label: "help" },
-    { keys: "q Esc", label: "close" },
-  ],
-};
-
-export const MODE_HINTS: Record<Exclude<InputMode, "normal">, HintPair[]> = {
-  filter: [
-    { keys: "type", label: "to filter" },
-    { keys: "up/down", label: "move" },
-    { keys: "Home/End", label: "first/last" },
-    { keys: "Enter", label: "apply" },
-    { keys: "Esc", label: "clear" },
-  ],
-  search: [
-    { keys: "type", label: "to search" },
-    { keys: "up/down", label: "match" },
-    { keys: "Enter", label: "apply" },
-    { keys: "Esc", label: "clear" },
-  ],
-  help: [
-    { keys: "j k", label: "scroll" },
-    { keys: "PgUp/PgDn", label: "page" },
-    { keys: "Home/End", label: "top/bottom" },
-    { keys: "q Esc ?", label: "close help" },
-  ],
-};
-
-/** The viewer hint pair that only applies to files that can render as markdown
- *  (Issue #135 L1); removed from the footer when they cannot. */
-const VIEWER_MARKDOWN_HINT_PAIR: HintPair = { keys: "m", label: "mode" };
 
 /**
- * Flatten hint pairs to plain text — `keys + " " + label` joined by `" · "`
- * (Issue #137 §1). The input-bar placeholders use this so they cannot drift
- * from the footer tables, and width budgets measure the same text the footer
- * renders.
+ * One body row's right border cell (Issue #137 §4, pure since Issue #148):
+ * the frame's right border column doubles as the viewer scrollbar while the
+ * text-like content overflows. Display-only — no timers, no fade, no mouse
+ * handling — and hidden while the help modal is open (the caller passes a
+ * null window then). The window is recorded by the pane's clamp, so the thumb
+ * cannot drift from the drawn content.
  */
-export function plainHint(pairs: HintPair[]): string {
-  return pairs.map((pair) => `${pair.keys} ${pair.label}`).join(" \u00b7 ");
+export function buildScrollbarBorder(
+  i: number,
+  scrollWindow: ViewerScrollWindow | null,
+  theme: NavigatorTheme,
+): string {
+  const T = theme;
+  if (!scrollWindow) return T.frame("\u2502");
+  const rel = i - scrollWindow.rowOffset;
+  if (rel < 0 || rel >= scrollWindow.count) return T.frame("\u2502");
+  const thumbH = Math.max(1, Math.round((scrollWindow.count * scrollWindow.count) / scrollWindow.total));
+  const thumbStart = Math.round(
+    (scrollWindow.scroll / Math.max(1, scrollWindow.total - scrollWindow.count)) * (scrollWindow.count - thumbH),
+  );
+  return rel >= thumbStart && rel < thumbStart + thumbH
+    ? T.scrollbarThumb("\u2588")
+    : T.scrollbarTrack("\u2502");
 }
+
+/**
+ * Inputs to `composeFrame` (Issue #148): the values NavigatorOverlay owns
+ * after geometry, row building and the footer/filter-bar decision.
+ */
+export interface FrameView {
+  theme: NavigatorTheme;
+  innerW: number;
+  /** Body row count (the rows between the title row and the footer row). */
+  body: number;
+  /** Left-column width; ignored when leftRows is null. */
+  leftW: number;
+  /** Files group height, for the separator row position. */
+  filesH: number;
+  /** Whether the default layout's files↔git separator row is drawn. */
+  showSeparator: boolean;
+  /** Left-column rows; null when the left column is hidden. */
+  leftRows: string[] | null;
+  /** Right-pane rows (one per body row). */
+  rightRows: string[];
+  /** The viewer scrollbar window, or null when no scrollbar shows. */
+  scrollWindow: ViewerScrollWindow | null;
+  /** Title-row inputs (path + git context). */
+  title: { cwd: string; git: GitState | null; home: string };
+  /** The footer or filter-bar row content, undecorated. */
+  footerRow: string;
+}
+
+/**
+ * The frame assembly (Issue #148): top border through bottom border —
+ * borders, title row, separator rows, the body join (left column / scrollbar
+ * border) and the footer wrapper. Byte-identical to the assembly that lived
+ * in NavigatorOverlay.render() before the split; the overlay optionally
+ * composes the help modal into the returned lines afterwards.
+ */
+export function composeFrame(view: FrameView): string[] {
+  const T = view.theme;
+  const lines: string[] = [];
+  // Issue #137 §2: the top border carries the product-name pill; the row
+  // below is the subtitle (path + git), not a second title.
+  lines.push(buildTopBorder(view.innerW, { theme: T, title: "pi-navigator" }));
+  lines.push(
+    T.frame("\u2502") +
+      buildTitleRow(view.innerW, { theme: T, cwd: view.title.cwd, git: view.title.git, home: view.title.home }) +
+      T.frame("\u2502"),
+  );
+  lines.push(T.frame("\u251c" + "\u2500".repeat(view.innerW) + "\u2524"));
+
+  for (let i = 0; i < view.body; i++) {
+    const border = buildScrollbarBorder(i, view.scrollWindow, T);
+    if (!view.leftRows) {
+      lines.push(T.frame("\u2502") + view.rightRows[i] + border);
+      continue;
+    }
+    if (view.showSeparator && i === view.filesH) {
+      lines.push(
+        T.frame("\u251c") + T.frame("\u2500".repeat(view.leftW)) + T.frame("\u2524") + view.rightRows[i] + border,
+      );
+    } else {
+      lines.push(T.frame("\u2502") + view.leftRows[i] + T.frame("\u2502") + view.rightRows[i] + border);
+    }
+  }
+
+  lines.push(T.frame("\u2502") + view.footerRow + T.frame("\u2502"));
+  lines.push(T.frame(FRAME_CORNERS.bl + "\u2500".repeat(view.innerW) + FRAME_CORNERS.br));
+  return lines;
+}
+
+/**
+ * The viewer hint ref whose advertised action is unavailable for files that
+ * cannot render as markdown (Issue #135 L1); addressed by binding id since
+ * Issue #148 so a key-spelling change cannot silently stop the drop.
+ */
+const MARKDOWN_REF_ID = "markdown";
 
 export function getFooterHint(
   mode: InputMode,
@@ -379,17 +267,14 @@ export function getFooterHint(
     case "search":
       return MODE_HINTS.search;
     case "normal": {
-      const hint = FOCUS_HINTS[focus];
       // Issue #135 L1: an unavailable action is not advertised. For a file that
-      // cannot render as markdown the `m` key is inert, so its pair leaves the
-      // hint rather than promising a toggle that will not happen. Whole pairs
+      // cannot render as markdown the `m` key is inert, so its ref leaves the
+      // hint rather than promising a toggle that will not happen. Whole refs
       // leave, so no fragment can remain behind.
       if (focus === "viewer" && opts.markdownApplicable === false) {
-        return hint.filter(
-          (pair) => pair.keys !== VIEWER_MARKDOWN_HINT_PAIR.keys || pair.label !== VIEWER_MARKDOWN_HINT_PAIR.label,
-        );
+        return resolveBindings(FOCUS_BINDINGS.viewer.filter((ref) => ref.id !== MARKDOWN_REF_ID));
       }
-      return hint;
+      return FOCUS_HINTS[focus];
     }
   }
 }

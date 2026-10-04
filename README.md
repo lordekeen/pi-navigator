@@ -189,7 +189,7 @@ The tiers are documented in
 
 ## Development
 
-Files: `index.ts` (entry, command routing, async data ownership), `navigator.ts` (overlay component state, caches, input routing, render orchestration), `frame.ts` / `files_view.ts` / `git_view.ts` / `viewer_view.ts` / `help_view.ts` (extracted pure pane view-models — geometry and chrome, files rows, git rows, viewer pane, `?` modal), `tree.ts` (tree model, fs walk), `git.ts` (async git access and porcelain parsing), `viewer.ts` (load caps, highlighting, search, display rows, `hardTruncate`), `theme.ts` (token mapping), `types.ts`, `constants.ts`, `env.ts` (shared env truth table), `settings.ts` (pi-navigator settings terrain), `settings_menu.ts` (`/navigator settings` menu, rendered in the editor area above the input), `help.ts` (shared help/keybinding tables + `/navigator help` entry layout), `images.ts` (pi-chafa detection, chafa probe/sanitize/geometry, native capability ladder + bounded pi-tui native renderer).
+Files: `index.ts` (entry, command routing, async data ownership), `navigator.ts` (overlay component state, caches, input routing, render orchestration), `frame.ts` / `layout.ts` / `files_view.ts` / `git_view.ts` / `viewer_view.ts` / `help_view.ts` (extracted pure view-models — frame composition/assembly, overlay geometry, files rows, git rows, viewer pane, `?` modal), `tree.ts` (tree model, fs walk), `git.ts` (async git access and porcelain parsing), `viewer.ts` (load caps, highlighting, search, display rows, `hardTruncate`), `theme.ts` (token mapping), `types.ts`, `constants.ts`, `env.ts` (shared env truth table), `settings.ts` (pi-navigator settings terrain), `settings_menu.ts` (`/navigator settings` menu, rendered in the editor area above the input), `help.ts` (the one keybinding table + `/navigator help` entry layout), `images.ts` (pi-chafa detection, chafa probe/sanitize/geometry, native capability ladder + bounded pi-tui native renderer).
 
 Planning documents live in `docs/plans/`: `ui-standards-report.md` (platform and reference findings), `pi-navigator-implementation-plan.md` (the original plan — now superseded; see `docs/issues/issues_index.md` for current state), and `qa-evidence.md`. Issues are tracked in `docs/issues/`. The throwaway visual mock is `mockups/navigator.html` — open it in a browser and drive it with the same keymap.
 
@@ -204,7 +204,7 @@ runtime dependencies, ever — `node_modules` is dev-only.
   than the plan's original "NodeNext" because pi loads extensions through jiti,
   which resolves the code's intentionally extensionless relative imports;
   NodeNext would demand `.js` extensions the runtime does not need.
-- `npm test` — 21 vitest suites: porcelain `-z` parsing plus a
+- `npm test` — 22 vitest suites: porcelain `-z` parsing plus a
   real-git scratch-repo integration pass, tree building/fs-walk fixtures
   (ignores, dot entries, symlink cycles), viewer caps and UTF-8 head decoding,
   the keymap reducer (escape precedence, focus cycling, copy), settings
