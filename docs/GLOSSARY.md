@@ -47,6 +47,23 @@ plus the color mode. Retained content records the key it was styled under; a mis
 the theme changed and the content is stale. A resize invalidate leaves the key unchanged, so
 the restyle path costs nothing there (Issues #136/#141).
 
+## Settings field rule
+
+One registry row's complete declaration (`NAVIGATOR_CONFIG_FIELDS` in `settings.ts`): the
+settings path, kind, label, default, the per-kind accept/parse rules the JSON normalizer and
+the string editor both consume, and — when a startup layer can set it — its env name, flag
+descriptor and override parser. Adding a field is this row plus its section interface: the
+loader, the settings menu, `/navigator set` and flag registration all read the table
+(Issue #145).
+
+## Override origin
+
+The loader's sparse per-field record of which startup layer *actually won* an effective
+setting (`origins` from `loadNavigatorSettings`): `{ layer: "env" | "flag"; source }`. The
+settings menu annotates shadowed rows from it and `/navigator set` warns from it, so neither
+re-derives precedence from raw presence — a present-but-invalid flag reports no origin
+(Issue #145).
+
 ## Retained source
 
 The pre-style material a viewer file carries so its lines can be re-styled under a new style

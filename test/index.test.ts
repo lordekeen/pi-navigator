@@ -26,7 +26,7 @@ import {
 
 import { IMAGE_NATIVE_CACHE_MAX_CHARS, MAX_FS_ENTRIES } from "../constants";
 import { DEFAULT_PI_CHAFA_SUBSET, KITTY_PROBE_SAMPLE, makeImagePipeline, type ImageSupport, type KittyProbeVerdict } from "../images";
-import { serializeNavigatorSettings, type NavigatorSettings } from "../settings";
+import { NAVIGATOR_CONFIG_FIELDS, serializeNavigatorSettings, type NavigatorSettings } from "../settings";
 import type { ViewerFile } from "../types";
 import { loadFile } from "../viewer";
 import registerNavigatorExtension, {
@@ -328,6 +328,14 @@ describe("extension lifecycle & routing (Issue #095)", () => {
     expect(flagRegistrations.get("navigator-icons")?.type).toBe("boolean");
     expect(flagRegistrations.get("navigator-images")?.type).toBe("string");
     expect(flagRegistrations.get("navigator-layout")?.type).toBe("string");
+    // Issue #145: registration is a loop over the registry rows that declare a
+    // flag, so names, types and descriptions cannot drift from the settings
+    // table; no default key is ever added.
+    for (const field of NAVIGATOR_CONFIG_FIELDS) {
+      const flag = field.override?.flag;
+      if (flag === undefined) continue;
+      expect(flagRegistrations.get(flag.name)).toEqual({ type: flag.type, description: flag.description });
+    }
   });
 
   it("carries a flag value into the settings loader, naming the flag when it is invalid (Issue #131)", async () => {

@@ -29,19 +29,19 @@ import {
 import { getCapabilities, type KeybindingsManager, Text } from "@earendil-works/pi-tui";
 
 import {
-  NAVIGATOR_IMAGES_ENV,
-  NAVIGATOR_IMAGES_FLAG,
-  NAVIGATOR_ICONS_FLAG,
-  NAVIGATOR_LAYOUT_ENV,
-  NAVIGATOR_LAYOUT_FLAG,
   NAVIGATOR_SETTINGS_FILE,
   OVERLAY_OPTIONS,
 } from "./constants";
-import { ICONS_ENV } from "./icons";
 import { buildHelpLines, HELP_COMMANDS_TITLE, HELP_HEADER_PREFIX, HELP_HINT, HELP_ENTRY_TYPE, helpCommandColumnWidth, NAVIGATOR_CMD_PREFIX, NAVIGATOR_SUBCOMMANDS, type NavigatorHelpData } from "./help";
 import type { NavigatorLayout } from "./types";
 import { buildKittyProbeQuery, consumeKittyProbeReply, createKittyProbeState, detectPiChafa, makeDeferredImageSupport, type KittyProbeState, type KittyProbeVerdict } from "./images";
-import { applyFieldEdit, loadNavigatorSettings, writeNavigatorSettings } from "./settings";
+import {
+  applyFieldEdit,
+  commitNavigatorSettings,
+  loadNavigatorSettings,
+  NAVIGATOR_CONFIG_FIELDS,
+  resolveOverrideOrigins,
+} from "./settings";
 import { countChangedFields, navigatorFieldNotes, openSettingsMenu } from "./settings_menu";
 import { NavigatorOverlay } from "./navigator";
 import { createSession, type OverlaySink } from "./session";
@@ -255,43 +255,21 @@ function unknownSubcommandNotice(raw: string): string {
 }
 
 /**
- * Reads one host flag as a string (Issue #131). `getFlag` is typed
- * `boolean | string | undefined`, so a value of the wrong shape is treated as
- * absent rather than coerced: the flags are registered without a default, so
- * "absent" is a real state the precedence chain depends on.
+ * The startup flag values keyed by flag name (Issue #145): one entry per
+ * registry row that declares a flag, so the loader and the origins report can
+ * never disagree about which flags exist. A registered-but-unset flag stays
+ * `undefined` — registration declares no default, so `getFlag` only returns a
+ * value the user actually passed, which is what makes "absent" observable.
+ * The loader ignores a value of the wrong shape for the row's flag type.
  */
-function flagString(pi: ExtensionAPI, name: string): string | undefined {
-  const value = pi.getFlag(name);
-  return typeof value === "string" ? value : undefined;
-}
-
-/** Boolean twin of {@link flagString}: only a real boolean counts as passed. */
-function flagBoolean(pi: ExtensionAPI, name: string): boolean | undefined {
-  const value = pi.getFlag(name);
-  return typeof value === "boolean" ? value : undefined;
-}
-
-/**
- * The startup layers that override a field, as a label per field id (Issue
- * #131). The settings menu annotates its rows with this and `/navigator set`
- * warns with it, so both read one place instead of duplicating the raw
- * presence rules; flags beat env, so the more explicit layer wins the label.
- */
-function collectOverrides(pi: ExtensionAPI): Record<string, string> {
-  const overrides: Record<string, string> = {};
-  const imagesFlag = flagString(pi, NAVIGATOR_IMAGES_FLAG);
-  const imagesEnv = process.env[NAVIGATOR_IMAGES_ENV];
-  if (imagesFlag !== undefined && imagesFlag.trim() !== "") overrides["images.mode"] = `--${NAVIGATOR_IMAGES_FLAG}`;
-  else if (imagesEnv !== undefined && imagesEnv.trim() !== "") overrides["images.mode"] = NAVIGATOR_IMAGES_ENV;
-  const iconsFlag = flagBoolean(pi, NAVIGATOR_ICONS_FLAG);
-  const iconsEnv = process.env[ICONS_ENV];
-  if (iconsFlag !== undefined) overrides["icons.enabled"] = `--${NAVIGATOR_ICONS_FLAG}`;
-  else if (iconsEnv !== undefined && iconsEnv.trim() !== "") overrides["icons.enabled"] = ICONS_ENV;
-  const layoutFlag = flagString(pi, NAVIGATOR_LAYOUT_FLAG);
-  const layoutEnv = process.env[NAVIGATOR_LAYOUT_ENV];
-  if (layoutFlag !== undefined && layoutFlag.trim() !== "") overrides["layout.default"] = `--${NAVIGATOR_LAYOUT_FLAG}`;
-  else if (layoutEnv !== undefined && layoutEnv.trim() !== "") overrides["layout.default"] = NAVIGATOR_LAYOUT_ENV;
-  return overrides;
+function flagValues(pi: ExtensionAPI): Record<string, string | boolean | undefined> {
+  const values: Record<string, string | boolean | undefined> = {};
+  for (const field of NAVIGATOR_CONFIG_FIELDS) {
+    const flag = field.override?.flag;
+    if (flag === undefined) continue;
+    values[flag.name] = pi.getFlag(flag.name);
+  }
+  return values;
 }
 
 /**
@@ -327,19 +305,14 @@ function runSet(
     ctx.ui.notify(`pi-navigator: ${edited.error} — usage: /navigator set <setting> <value>`, "warning");
     return;
   }
-  try {
-    writeNavigatorSettings(userPath, edited.settings);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    ctx.ui.notify(
-      `pi-navigator: could not write settings: ${message.length <= 160 ? message : `${message.slice(0, 160)}…`}`,
-      "warning",
-    );
+  const committed = commitNavigatorSettings(userPath, edited.settings);
+  if (!committed.ok) {
+    ctx.ui.notify(`pi-navigator: could not write settings: ${committed.error}`, "warning");
     return;
   }
-  const shadowed = collectOverrides(pi)[field];
+  const shadowed = resolveOverrideOrigins(process.env, flagValues(pi))[field];
   ctx.ui.notify(
-    `pi-navigator: set ${field} = ${value} → ${userPath}${shadowed !== undefined ? ` (${shadowed} overrides it for this run)` : ""}`,
+    `pi-navigator: set ${field} = ${value} → ${userPath}${shadowed !== undefined ? ` (${shadowed.source} overrides it for this run)` : ""}`,
     "info",
   );
 }
@@ -401,21 +374,14 @@ async function runNavigator(
 
       // ── Image support (optional chafa rendering) — resolved per invocation ──
       // Settings are read once here (never in the component, Issue #028/#039
-      // pattern); warnings notify once per distinct message (§5.2).
+      // pattern); warnings notify once per distinct message (§5.2). The
+      // registry rows drive both startup layers (Issue #145).
       const agentDir = getAgentDir();
       const loaded = loadNavigatorSettings({
         userPath: join(agentDir, NAVIGATOR_SETTINGS_FILE),
-        env: {
-          images: process.env[NAVIGATOR_IMAGES_ENV],
-          icons: process.env[ICONS_ENV],
-          layout: process.env[NAVIGATOR_LAYOUT_ENV],
-        },
+        env: process.env,
         // Flags beat env inside the loader (Issue #131).
-        flags: {
-          images: flagString(pi, NAVIGATOR_IMAGES_FLAG),
-          icons: flagBoolean(pi, NAVIGATOR_ICONS_FLAG),
-          layout: flagString(pi, NAVIGATOR_LAYOUT_FLAG),
-        },
+        flags: flagValues(pi),
       });
       const notifyWarning = makeWarningNotifier(ctx.ui);
       for (const warning of loaded.warnings) notifyWarning(warning);
@@ -560,7 +526,12 @@ async function runSettings(pi: ExtensionAPI, ctx: ExtensionCommandContext): Prom
   const fileLoaded = loadNavigatorSettings({ userPath });
   for (const warning of fileLoaded.warnings) notifyWarning(warning);
 
-  const overrides = collectOverrides(pi);
+  // Startup layers shadow the file view (Issue #145): the origins report names
+  // the layer that actually won, so the menu annotations are truthful — a
+  // present-but-invalid flag no longer labels its row as overridden.
+  const origins = resolveOverrideOrigins(process.env, flagValues(pi));
+  const overrides: Record<string, string> = {};
+  for (const [fieldId, origin] of Object.entries(origins)) overrides[fieldId] = origin.source;
 
   try {
     const outcome = await openSettingsMenu(ctx.ui, {
@@ -568,15 +539,11 @@ async function runSettings(pi: ExtensionAPI, ctx: ExtensionCommandContext): Prom
       overrides,
       notes: navigatorFieldNotes({ piChafaPresent }),
       commit: (next) => {
-        try {
-          writeNavigatorSettings(userPath, next);
-          const reloaded = loadNavigatorSettings({ userPath });
-          for (const warning of reloaded.warnings) notifyWarning(warning);
-          return { ok: true, settings: reloaded.settings };
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          return { ok: false, error: message.length <= 160 ? message : `${message.slice(0, 160)}…` };
+        const committed = commitNavigatorSettings(userPath, next);
+        if (committed.ok) {
+          for (const warning of committed.warnings) notifyWarning(warning);
         }
+        return committed;
       },
       onWarning: (message) => ctx.ui.notify(message, "warning"),
     });
@@ -594,23 +561,22 @@ async function runSettings(pi: ExtensionAPI, ctx: ExtensionCommandContext): Prom
 }
 
 export default function (pi: ExtensionAPI): void {
-  // Startup overrides (Issue #131). Registered so they surface in `pi --help`
-  // (env vars never do) and WITHOUT a default: the host stores a declared
-  // default into the flag's value, and getFlag would then return it even when
-  // the user passed nothing — flattening the precedence chain
-  // (defaults ← file ← env ← flag). Read through flagString/flagBoolean.
-  pi.registerFlag(NAVIGATOR_IMAGES_FLAG, {
-    type: "string",
-    description: "pi-navigator image rendering: native, chafa, auto or off (beats PI_NAV_IMAGES and the settings file)",
-  });
-  pi.registerFlag(NAVIGATOR_ICONS_FLAG, {
-    type: "boolean",
-    description: "pi-navigator: show the Nerd Font icon column (beats PI_NAV_ICONS and the settings file)",
-  });
-  pi.registerFlag(NAVIGATOR_LAYOUT_FLAG, {
-    type: "string",
-    description: "pi-navigator overlay layout: files-git-viewer, files-viewer or git-viewer (beats PI_NAV_LAYOUT and the settings file)",
-  });
+  // Startup overrides (Issues #131/#145): one registration per registry row
+  // that declares a flag, driven by the row's descriptor so the registered
+  // flag set cannot drift from the settings table. Registered WITHOUT a
+  // default on purpose: the host stores a declared default into the flag's
+  // value, so getFlag would then return it even when the user passed nothing —
+  // flattening the precedence chain (defaults ← file ← env ← flag). Absent
+  // must stay `undefined`, which is what `flagValues` reads.
+  for (const field of NAVIGATOR_CONFIG_FIELDS) {
+    const flag = field.override?.flag;
+    if (flag === undefined) continue;
+    if (flag.type === "boolean") {
+      pi.registerFlag(flag.name, { type: "boolean", description: flag.description });
+    } else {
+      pi.registerFlag(flag.name, { type: "string", description: flag.description });
+    }
+  }
 
   // Durable help entry renderer (Issue #061): delivered via appendEntry +
   // registerEntryRenderer, never ctx.ui.notify. Restored/old entries with no

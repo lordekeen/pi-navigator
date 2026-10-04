@@ -1,10 +1,10 @@
 /**
  * settings.ts unit suites (§12.1): the versioned settings terrain — typed
- * defaults, the never-throw pure normalizer, the loader with file/env
- * provenance, the canonical serializer, the atomic writer, the field
- * registry sync guard, and `applyFieldEdit` (pi-overseer pattern). The env
- * overrides are always passed in explicitly; no test reads or mutates
- * process.env.
+ * defaults, the never-throw pure normalizer, the loader with file/env/flag
+ * provenance and override origins, the canonical serializer, the atomic
+ * writer, the one commit operation, the field registry sync guard, and
+ * `applyFieldEdit` (pi-overseer pattern). The env/flags layers are always
+ * passed in explicitly; no test reads or mutates process.env.
  */
 
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -16,16 +16,26 @@ import {
   DEFAULT_NAVIGATOR_SETTINGS,
   NAVIGATOR_CONFIG_FIELDS,
   applyFieldEdit,
+  commitNavigatorSettings,
   loadNavigatorSettings,
   normalizeNavigatorSettings,
   parseImageMode,
   parseLayoutMode,
   parseNumberField,
+  resolveOverrideOrigins,
   serializeNavigatorSettings,
   writeNavigatorSettings,
 } from "../settings";
 
-import type { NavigatorImageMode } from "../settings";
+import type { NavigatorConfigField, NavigatorImageMode } from "../settings";
+import { ICONS_ENV } from "../icons";
+import {
+  NAVIGATOR_IMAGES_ENV,
+  NAVIGATOR_IMAGES_FLAG,
+  NAVIGATOR_ICONS_FLAG,
+  NAVIGATOR_LAYOUT_ENV,
+  NAVIGATOR_LAYOUT_FLAG,
+} from "../constants";
 import { NAVIGATOR_LAYOUTS } from "../types";
 
 function deepFreeze<T>(value: T): T {
@@ -72,6 +82,23 @@ function cloneDefaultsLike(): {
     tree: { showHidden: false },
     layout: { default: "files-git-viewer" },
   };
+}
+
+/** By-id registry access (Issue #145): positional indexing is a drift trap. */
+function fieldById(id: string): NavigatorConfigField {
+  const field = NAVIGATOR_CONFIG_FIELDS.find((candidate) => candidate.id === id);
+  if (field === undefined) throw new Error(`no registry field "${id}"`);
+  return field;
+}
+
+/** The value a settings object holds at a registry path. */
+function valueAt(settings: unknown, path: readonly string[]): unknown {
+  let current: unknown = settings;
+  for (const segment of path) {
+    if (typeof current !== "object" || current === null) return undefined;
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
 }
 
 // ── PI_NAV_IMAGES truth table (§5.1) ──
@@ -502,7 +529,10 @@ describe("loadNavigatorSettings", () => {
     const result = loadNavigatorSettings({ userPath: join(dir, "missing.json") });
     expect(result.settings).toEqual(DEFAULT_NAVIGATOR_SETTINGS);
     expect(result.warnings).toEqual([]);
-    expect(result.sources).toEqual(["defaults"]);
+    expect(result.origins).toEqual({});
+    // `sources` is gone (Issue #145): the loader reports origins, not read
+    // provenance, and a file-only load has no origin at all.
+    expect(Object.keys(result).sort()).toEqual(["origins", "settings", "warnings"]);
   });
 
   it("warns once on corrupt JSON and falls back to defaults", () => {
@@ -512,68 +542,76 @@ describe("loadNavigatorSettings", () => {
     expect(result.settings).toEqual(DEFAULT_NAVIGATOR_SETTINGS);
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0] ?? "").toContain("unreadable");
-    expect(result.sources).toEqual(["defaults"]);
+    expect(result.origins).toEqual({});
   });
 
-  it("loads a valid file and reports its path as the source", () => {
+  it("loads a valid file without reporting any override origin", () => {
     const path = join(dir, "valid.json");
     writeFileSync(path, JSON.stringify(fullSettings({ images: { mode: "chafa" } })), "utf8");
     const result = loadNavigatorSettings({ userPath: path });
     expect(result.settings.images.mode).toBe("chafa");
     expect(result.warnings).toEqual([]);
-    expect(result.sources).toEqual([path]);
+    expect(result.origins).toEqual({});
   });
 
   it("lets the env override beat the file (precedence: defaults ← file ← env)", () => {
     const offFile = join(dir, "file-off.json");
     writeFileSync(offFile, JSON.stringify(fullSettings({ images: { mode: "off" } })), "utf8");
-    const enabled = loadNavigatorSettings({ userPath: offFile, env: { images: "chafa" } });
+    const enabled = loadNavigatorSettings({ userPath: offFile, env: { [NAVIGATOR_IMAGES_ENV]: "chafa" } });
     expect(enabled.settings.images.mode).toBe("chafa");
     expect(enabled.warnings).toEqual([]);
-    expect(enabled.sources).toEqual([offFile]);
+    expect(enabled.origins).toEqual({ "images.mode": { layer: "env", source: NAVIGATOR_IMAGES_ENV } });
 
     const onFile = join(dir, "file-on.json");
     writeFileSync(onFile, JSON.stringify(fullSettings({ images: { mode: "chafa" } })), "utf8");
-    const disabled = loadNavigatorSettings({ userPath: onFile, env: { images: "0" } });
+    const disabled = loadNavigatorSettings({ userPath: onFile, env: { [NAVIGATOR_IMAGES_ENV]: "0" } });
     expect(disabled.settings.images.mode).toBe("off");
     expect(disabled.warnings).toEqual([]);
+    expect(disabled.origins).toEqual({ "images.mode": { layer: "env", source: NAVIGATOR_IMAGES_ENV } });
   });
 
   it("resolves PI_NAV_ICONS precedence inside the loader (file ← env)", () => {
     const offFile = join(dir, "icons-off.json");
     writeFileSync(offFile, JSON.stringify(fullSettings({ icons: { enabled: false } })), "utf8");
-    const enabled = loadNavigatorSettings({ userPath: offFile, env: { icons: "1" } });
+    const enabled = loadNavigatorSettings({ userPath: offFile, env: { [ICONS_ENV]: "1" } });
     expect(enabled.settings.icons.enabled).toBe(true);
     expect(enabled.warnings).toEqual([]);
-    expect(enabled.sources).toEqual([offFile]);
+    expect(enabled.origins).toEqual({ "icons.enabled": { layer: "env", source: ICONS_ENV } });
 
     const onFile = join(dir, "icons-on.json");
     writeFileSync(onFile, JSON.stringify(fullSettings({ icons: { enabled: true } })), "utf8");
-    const disabled = loadNavigatorSettings({ userPath: onFile, env: { icons: "no" } });
+    const disabled = loadNavigatorSettings({ userPath: onFile, env: { [ICONS_ENV]: "no" } });
     expect(disabled.settings.icons.enabled).toBe(false);
     expect(disabled.warnings).toEqual([]);
   });
 
   it("applies the env overrides with no file present", () => {
-    const result = loadNavigatorSettings({ userPath: join(dir, "missing.json"), env: { images: "1", icons: "on", layout: "git-viewer" } });
+    const result = loadNavigatorSettings({
+      userPath: join(dir, "missing.json"),
+      env: { [NAVIGATOR_IMAGES_ENV]: "1", [ICONS_ENV]: "on", [NAVIGATOR_LAYOUT_ENV]: "git-viewer" },
+    });
     expect(result.settings.images.mode).toBe("chafa");
     expect(result.settings.icons.enabled).toBe(true);
     expect(result.settings.layout.default).toBe("git-viewer");
     expect(result.warnings).toEqual([]);
-    expect(result.sources).toEqual(["defaults"]);
+    expect(result.origins).toEqual({
+      "images.mode": { layer: "env", source: NAVIGATOR_IMAGES_ENV },
+      "icons.enabled": { layer: "env", source: ICONS_ENV },
+      "layout.default": { layer: "env", source: NAVIGATOR_LAYOUT_ENV },
+    });
   });
 
   it("resolves PI_NAV_LAYOUT precedence inside the loader (file ← env, Issue #119)", () => {
     const splitFile = join(dir, "layout-split.json");
     writeFileSync(splitFile, JSON.stringify(fullSettings({ layout: { default: "files-git-viewer" } })), "utf8");
-    const overridden = loadNavigatorSettings({ userPath: splitFile, env: { layout: "files-viewer" } });
+    const overridden = loadNavigatorSettings({ userPath: splitFile, env: { [NAVIGATOR_LAYOUT_ENV]: "files-viewer" } });
     expect(overridden.settings.layout.default).toBe("files-viewer");
     expect(overridden.warnings).toEqual([]);
-    expect(overridden.sources).toEqual([splitFile]);
+    expect(overridden.origins).toEqual({ "layout.default": { layer: "env", source: NAVIGATOR_LAYOUT_ENV } });
 
     const gitFile = join(dir, "layout-git.json");
     writeFileSync(gitFile, JSON.stringify(fullSettings({ layout: { default: "git-viewer" } })), "utf8");
-    const reverted = loadNavigatorSettings({ userPath: gitFile, env: { layout: "files-git-viewer" } });
+    const reverted = loadNavigatorSettings({ userPath: gitFile, env: { [NAVIGATOR_LAYOUT_ENV]: "files-git-viewer" } });
     expect(reverted.settings.layout.default).toBe("files-git-viewer");
     expect(reverted.warnings).toEqual([]);
   });
@@ -582,42 +620,46 @@ describe("loadNavigatorSettings", () => {
     const path = join(dir, "layout-file.json");
     writeFileSync(path, JSON.stringify(fullSettings({ layout: { default: "files-viewer" } })), "utf8");
     for (const layout of ["", "   ", undefined]) {
-      const result = loadNavigatorSettings({ userPath: path, env: { layout } });
+      const result = loadNavigatorSettings({ userPath: path, env: { [NAVIGATOR_LAYOUT_ENV]: layout } });
       expect(result.settings.layout.default).toBe("files-viewer");
       expect(result.warnings).toEqual([]);
+      expect(result.origins).toEqual({});
     }
   });
 
   it("warns on an invalid layout env and falls back to the file value", () => {
     const path = join(dir, "layout-file.json");
     writeFileSync(path, JSON.stringify(fullSettings({ layout: { default: "files-viewer" } })), "utf8");
-    const result = loadNavigatorSettings({ userPath: path, env: { layout: "sixel" } });
+    const result = loadNavigatorSettings({ userPath: path, env: { [NAVIGATOR_LAYOUT_ENV]: "sixel" } });
     expect(result.settings.layout.default).toBe("files-viewer");
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0] ?? "").toContain("PI_NAV_LAYOUT");
+    // Invalid env never wins, so it reports no origin.
+    expect(result.origins).toEqual({});
   });
 
   it("ignores empty or whitespace env values without a warning", () => {
     const path = join(dir, "file.json");
     writeFileSync(path, JSON.stringify(fullSettings({ images: { mode: "chafa" }, icons: { enabled: false } })), "utf8");
     for (const images of ["", "   ", undefined]) {
-      const result = loadNavigatorSettings({ userPath: path, env: { images, icons: "  " } });
+      const result = loadNavigatorSettings({ userPath: path, env: { [NAVIGATOR_IMAGES_ENV]: images, [ICONS_ENV]: "  " } });
       expect(result.settings.images.mode).toBe("chafa");
       expect(result.settings.icons.enabled).toBe(false);
       expect(result.warnings).toEqual([]);
-      expect(result.sources).toEqual([path]);
+      expect(result.origins).toEqual({});
     }
   });
 
   it("warns on garbage env and falls back to the file/default setting", () => {
     const path = join(dir, "file.json");
     writeFileSync(path, JSON.stringify(fullSettings({ images: { mode: "off" }, icons: { enabled: false } })), "utf8");
-    const result = loadNavigatorSettings({ userPath: path, env: { images: "sixel", icons: "sometimes" } });
+    const result = loadNavigatorSettings({ userPath: path, env: { [NAVIGATOR_IMAGES_ENV]: "sixel", [ICONS_ENV]: "sometimes" } });
     expect(result.settings.images.mode).toBe("off");
     expect(result.settings.icons.enabled).toBe(false);
     expect(result.warnings).toHaveLength(2);
     expect(result.warnings[0] ?? "").toContain("PI_NAV_IMAGES");
     expect(result.warnings[1] ?? "").toContain("PI_NAV_ICONS");
+    expect(result.origins).toEqual({});
   });
 
   it("surfaces normalizer warnings through the loader (version too new)", () => {
@@ -627,7 +669,7 @@ describe("loadNavigatorSettings", () => {
     expect(result.settings).toEqual(DEFAULT_NAVIGATOR_SETTINGS);
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0] ?? "").toContain("newer than this navigator supports");
-    expect(result.sources).toEqual([path]);
+    expect(result.origins).toEqual({});
   });
 
   it("warns on unknown file keys through the loader", () => {
@@ -655,41 +697,184 @@ describe("loadNavigatorSettings", () => {
     writeFileSync(path, JSON.stringify(fullSettings({ images: { mode: "off" } })), "utf8");
     const result = loadNavigatorSettings({
       userPath: path,
-      env: { images: "chafa" },
-      flags: { images: "native" },
+      env: { [NAVIGATOR_IMAGES_ENV]: "chafa" },
+      flags: { [NAVIGATOR_IMAGES_FLAG]: "native" },
     });
     expect(result.settings.images.mode).toBe("native");
-    expect(result.sources).toContain("navigator-images");
+    expect(result.origins).toEqual({ "images.mode": { layer: "flag", source: `--${NAVIGATOR_IMAGES_FLAG}` } });
   });
 
   it("applies a boolean icons flag in both directions, beating env either way", () => {
     const path = join(dir, "flag-icons.json");
     writeFileSync(path, JSON.stringify(fullSettings({ icons: { enabled: true } })), "utf8");
-    const off = loadNavigatorSettings({ userPath: path, env: { icons: "1" }, flags: { icons: false } });
+    const off = loadNavigatorSettings({ userPath: path, env: { [ICONS_ENV]: "1" }, flags: { [NAVIGATOR_ICONS_FLAG]: false } });
     expect(off.settings.icons.enabled).toBe(false);
-    const on = loadNavigatorSettings({ userPath: path, env: { icons: "0" }, flags: { icons: true } });
+    expect(off.origins).toEqual({ "icons.enabled": { layer: "flag", source: `--${NAVIGATOR_ICONS_FLAG}` } });
+    const on = loadNavigatorSettings({ userPath: path, env: { [ICONS_ENV]: "0" }, flags: { [NAVIGATOR_ICONS_FLAG]: true } });
     expect(on.settings.icons.enabled).toBe(true);
+    // A boolean flag applies directly; it cannot warn, and it still wins.
+    expect(on.warnings).toEqual([]);
+    expect(on.origins).toEqual({ "icons.enabled": { layer: "flag", source: `--${NAVIGATOR_ICONS_FLAG}` } });
   });
 
   it("names the flag, not the env var, when a flag value is invalid", () => {
     const result = loadNavigatorSettings({
       userPath: join(dir, "missing.json"),
-      flags: { layout: "split", images: "sixel" },
+      flags: { [NAVIGATOR_LAYOUT_FLAG]: "split", [NAVIGATOR_IMAGES_FLAG]: "sixel" },
     });
     expect(result.warnings.some((w) => w.includes("--navigator-layout"))).toBe(true);
     expect(result.warnings.some((w) => w.includes("--navigator-images"))).toBe(true);
     expect(result.warnings.some((w) => w.includes("PI_NAV_"))).toBe(false);
+    // Present but invalid: neither flag won a field.
+    expect(result.origins).toEqual({});
+  });
+
+  it("ignores a flag whose runtime value has the wrong shape for its row type", () => {
+    // The old flagString/flagBoolean helpers filtered this before the loader
+    // saw it; the registry walk owns it now, and a wrong-shape value must stay
+    // "absent" rather than being coerced.
+    const result = loadNavigatorSettings({
+      userPath: join(dir, "missing.json"),
+      env: { [NAVIGATOR_IMAGES_ENV]: "chafa" },
+      flags: { [NAVIGATOR_IMAGES_FLAG]: true, [NAVIGATOR_ICONS_FLAG]: "on" },
+    });
+    expect(result.settings.images.mode).toBe("chafa");
+    expect(result.settings.icons.enabled).toBe(DEFAULT_NAVIGATOR_SETTINGS.icons.enabled);
+    expect(result.warnings).toEqual([]);
+    expect(result.origins).toEqual({ "images.mode": { layer: "env", source: NAVIGATOR_IMAGES_ENV } });
   });
 
   it("treats an absent or empty flag as no override", () => {
     const result = loadNavigatorSettings({
       userPath: join(dir, "missing.json"),
-      env: { images: "chafa" },
-      flags: { images: "", layout: "  " },
+      env: { [NAVIGATOR_IMAGES_ENV]: "chafa" },
+      flags: { [NAVIGATOR_IMAGES_FLAG]: "", [NAVIGATOR_LAYOUT_FLAG]: "  " },
     });
     expect(result.settings.images.mode).toBe("chafa");
     expect(result.settings.layout.default).toBe(DEFAULT_NAVIGATOR_SETTINGS.layout.default);
-    expect(result.sources).toEqual(["defaults"]);
+    expect(result.origins).toEqual({ "images.mode": { layer: "env", source: NAVIGATOR_IMAGES_ENV } });
+  });
+
+  // ── origins (Issue #145): the layer that actually won ──
+
+  it("reports the effective layer per field — flag beats env, files and defaults report nothing", () => {
+    const path = join(dir, "origins.json");
+    writeFileSync(path, JSON.stringify(fullSettings({ images: { mode: "off" }, layout: { default: "git-viewer" } })), "utf8");
+    const result = loadNavigatorSettings({
+      userPath: path,
+      env: { [NAVIGATOR_IMAGES_ENV]: "chafa", [ICONS_ENV]: "1" },
+      flags: { [NAVIGATOR_IMAGES_FLAG]: "native" },
+    });
+    expect(result.settings.images.mode).toBe("native");
+    expect(result.origins).toEqual({
+      "images.mode": { layer: "flag", source: `--${NAVIGATOR_IMAGES_FLAG}` },
+      "icons.enabled": { layer: "env", source: ICONS_ENV },
+    });
+  });
+
+  it("reports no origin for a present-but-invalid flag (the accepted truthfulness delta)", () => {
+    const path = join(dir, "invalid-flag.json");
+    writeFileSync(path, JSON.stringify(fullSettings({ images: { mode: "chafa" } })), "utf8");
+    const result = loadNavigatorSettings({
+      userPath: path,
+      flags: { [NAVIGATOR_IMAGES_FLAG]: "sixel" },
+    });
+    expect(result.settings.images.mode).toBe("chafa");
+    expect(result.warnings).toHaveLength(1);
+    expect(result.origins).toEqual({});
+  });
+
+  it("keeps the env origin when an invalid flag did not win the field", () => {
+    const result = loadNavigatorSettings({
+      userPath: join(dir, "missing.json"),
+      env: { [NAVIGATOR_IMAGES_ENV]: "chafa" },
+      flags: { [NAVIGATOR_IMAGES_FLAG]: "sixel" },
+    });
+    expect(result.settings.images.mode).toBe("chafa");
+    expect(result.origins).toEqual({ "images.mode": { layer: "env", source: NAVIGATOR_IMAGES_ENV } });
+  });
+
+  it("keeps the layer warning order: all env warnings before all flag warnings", () => {
+    const result = loadNavigatorSettings({
+      userPath: join(dir, "missing.json"),
+      env: { [NAVIGATOR_IMAGES_ENV]: "sixel", [ICONS_ENV]: "sometimes", [NAVIGATOR_LAYOUT_ENV]: "split" },
+      flags: { [NAVIGATOR_IMAGES_FLAG]: "nope", [NAVIGATOR_LAYOUT_FLAG]: "nope" },
+    });
+    expect(result.warnings).toEqual([
+      "sixel is not a valid PI_NAV_IMAGES value; using the file/default setting",
+      "sometimes is not a valid PI_NAV_ICONS value; using the file/default setting",
+      "split is not a valid PI_NAV_LAYOUT value; using the file/default setting",
+      "nope is not a valid --navigator-images value; using the file/default setting",
+      "nope is not a valid --navigator-layout value; using the file/default setting",
+    ]);
+    expect(result.origins).toEqual({});
+  });
+
+  it("applies overrides by iterating registry rows, not a hardcoded field list (Issue #145)", () => {
+    const synthetic: NavigatorConfigField = {
+      id: "viewer.tabWidth",
+      path: ["viewer", "tabWidth"],
+      kind: "number",
+      section: "Viewer",
+      label: "Tab width",
+      description: "Synthetic registry row proving the loader walks the table.",
+      min: 1,
+      max: 8,
+      default: 4,
+      live: false,
+      override: {
+        env: "PI_NAV_SYNTHETIC",
+        flag: { name: "navigator-synthetic", description: "synthetic", type: "string" },
+        parse: (raw, source) => {
+          const trimmed = raw.trim();
+          if (trimmed === "") return { value: undefined };
+          const value = Number(trimmed);
+          if (!Number.isFinite(value)) {
+            return { value: undefined, warning: `${trimmed} is not a valid ${source} value; using the file/default setting` };
+          }
+          return { value: Math.min(8, Math.max(1, value)) };
+        },
+      },
+    };
+    (NAVIGATOR_CONFIG_FIELDS as unknown as NavigatorConfigField[]).push(synthetic);
+    try {
+      const env = loadNavigatorSettings({ userPath: join(dir, "missing.json"), env: { PI_NAV_SYNTHETIC: "6" } });
+      expect(valueAt(env.settings, synthetic.path)).toBe(6);
+      expect(env.origins["viewer.tabWidth"]).toEqual({ layer: "env", source: "PI_NAV_SYNTHETIC" });
+
+      const flagged = loadNavigatorSettings({
+        userPath: join(dir, "missing.json"),
+        env: { PI_NAV_SYNTHETIC: "6" },
+        flags: { "navigator-synthetic": "2" },
+      });
+      expect(valueAt(flagged.settings, synthetic.path)).toBe(2);
+      expect(flagged.origins["viewer.tabWidth"]).toEqual({ layer: "flag", source: "--navigator-synthetic" });
+
+      const invalid = loadNavigatorSettings({
+        userPath: join(dir, "missing.json"),
+        flags: { "navigator-synthetic": "abc" },
+      });
+      expect(valueAt(invalid.settings, synthetic.path)).toBe(synthetic.default);
+      expect(invalid.origins).toEqual({});
+    } finally {
+      (NAVIGATOR_CONFIG_FIELDS as unknown as NavigatorConfigField[]).pop();
+    }
+  });
+
+  it("resolveOverrideOrigins mirrors the loader's precedence without reading the file", () => {
+    const env = { [NAVIGATOR_IMAGES_ENV]: "chafa", [NAVIGATOR_LAYOUT_ENV]: "files-viewer" };
+    const flags = { [NAVIGATOR_IMAGES_FLAG]: "native", [NAVIGATOR_ICONS_FLAG]: true, [NAVIGATOR_LAYOUT_FLAG]: "sixel" };
+    const expected = {
+      "images.mode": { layer: "flag" as const, source: `--${NAVIGATOR_IMAGES_FLAG}` },
+      "icons.enabled": { layer: "flag" as const, source: `--${NAVIGATOR_ICONS_FLAG}` },
+      "layout.default": { layer: "env" as const, source: NAVIGATOR_LAYOUT_ENV },
+    };
+    expect(resolveOverrideOrigins(env, flags)).toEqual(expected);
+    // The resolver is the loader's own walk, so the two must agree.
+    expect(resolveOverrideOrigins(env, flags)).toEqual(
+      loadNavigatorSettings({ userPath: join(dir, "missing.json"), env, flags }).origins,
+    );
+    expect(resolveOverrideOrigins()).toEqual({});
   });
 });
 
@@ -729,7 +914,7 @@ describe("writeNavigatorSettings", () => {
     const result = loadNavigatorSettings({ userPath: path });
     expect(result.settings).toEqual(fullSettings({ images: { mode: "chafa" } }));
     expect(result.warnings).toEqual([]);
-    expect(result.sources).toEqual([path]);
+    expect(result.origins).toEqual({});
   });
 
   it("overwrites an existing file atomically", () => {
@@ -753,6 +938,46 @@ describe("writeNavigatorSettings", () => {
     expect(() => writeNavigatorSettings(path, fullSettings())).toThrow();
     const entries = readdirSync(dir);
     expect(entries.filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+});
+
+// ── commitNavigatorSettings: the one persist operation (Issue #145) ──
+
+describe("commitNavigatorSettings", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "pi-nav-commit-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("writes atomically, reloads file-only, and returns the persisted settings with the reload warnings", () => {
+    const path = join(dir, "nested", "pi-navigator.json");
+    const committed = commitNavigatorSettings(
+      path,
+      fullSettings({ images: { mode: "native" }, layout: { default: "files-viewer" } }),
+    );
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) return;
+    expect(committed.settings).toEqual(fullSettings({ images: { mode: "native" }, layout: { default: "files-viewer" } }));
+    expect(committed.warnings).toEqual([]);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(
+      serializeNavigatorSettings(fullSettings({ images: { mode: "native" }, layout: { default: "files-viewer" } })),
+    );
+    expect(readdirSync(join(dir, "nested")).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("returns a bounded error when the write fails", () => {
+    const path = join(dir, "not-a-file.json");
+    mkdirSync(path); // renaming the tmp file onto a directory fails
+    const committed = commitNavigatorSettings(path, fullSettings());
+    expect(committed.ok).toBe(false);
+    if (committed.ok) return;
+    expect(committed.error.length).toBeGreaterThan(0);
+    expect(committed.error.length).toBeLessThanOrEqual(161); // 160 + the ellipsis
   });
 });
 
@@ -820,12 +1045,78 @@ describe("applyFieldEdit", () => {
   });
 });
 
+// ── field rule parity (Issue #145): one rule table, two faces ──
+
+describe("field rule parity (Issue #145)", () => {
+  it("accepts every field's default and every enum option through the string and JSON faces", () => {
+    for (const field of NAVIGATOR_CONFIG_FIELDS) {
+      const candidates = new Set<string>();
+      if (field.kind === "boolean") {
+        candidates.add("on");
+        candidates.add("off");
+      } else {
+        candidates.add(String(field.default));
+      }
+      for (const option of field.options ?? []) candidates.add(option);
+      for (const candidate of candidates) {
+        const edited = applyFieldEdit(DEFAULT_NAVIGATOR_SETTINGS, field.id, candidate);
+        expect(edited.ok, `${field.id} = ${candidate}`).toBe(true);
+        if (!edited.ok) continue;
+        const accepted = valueAt(edited.settings, field.path);
+        // JSON face A: serialize what the string face accepted, then normalize.
+        const reloaded = normalizeNavigatorSettings(serializeNavigatorSettings(edited.settings));
+        expect(reloaded.warnings, `${field.id} = ${candidate}`).toEqual([]);
+        expect(valueAt(reloaded.settings, field.path), `${field.id} = ${candidate}`).toEqual(accepted);
+        // JSON face B: the typed value the string face produced is accepted directly.
+        const typed = normalizeNavigatorSettings({ [field.path[0] ?? ""]: { [field.path[1] ?? ""]: accepted } });
+        expect(typed.warnings, `${field.id} = ${candidate}`).toEqual([]);
+        expect(valueAt(typed.settings, field.path), `${field.id} = ${candidate}`).toEqual(accepted);
+      }
+      // The registry default is what both faces fall back to.
+      const defaults = normalizeNavigatorSettings(serializeNavigatorSettings(DEFAULT_NAVIGATOR_SETTINGS));
+      expect(defaults.warnings, field.id).toEqual([]);
+      expect(valueAt(defaults.settings, field.path), field.id).toEqual(field.default);
+    }
+  });
+
+  it("keeps the number rules in parity through a synthetic registry row", () => {
+    const numberField: NavigatorConfigField = {
+      id: "viewer.tabWidth",
+      path: ["viewer", "tabWidth"],
+      kind: "number",
+      section: "Viewer",
+      label: "Tab width",
+      description: "Synthetic numeric row for the rule-parity sweep.",
+      min: 1,
+      max: 8,
+      default: 4,
+      live: false,
+    };
+    (NAVIGATOR_CONFIG_FIELDS as unknown as NavigatorConfigField[]).push(numberField);
+    try {
+      const high = applyFieldEdit(DEFAULT_NAVIGATOR_SETTINGS, "viewer.tabWidth", "99");
+      expect(high.ok).toBe(true);
+      if (high.ok) expect(valueAt(high.settings, numberField.path)).toBe(8);
+      const low = normalizeNavigatorSettings({ viewer: { tabWidth: 0 } });
+      expect(low.warnings).toEqual([]);
+      expect(valueAt(low.settings, numberField.path)).toBe(1);
+      const invalid = normalizeNavigatorSettings({ viewer: { tabWidth: "wide" } });
+      expect(invalid.warnings).toEqual(['viewer.tabWidth "wide" is invalid; using 4']);
+      const rejected = applyFieldEdit(DEFAULT_NAVIGATOR_SETTINGS, "viewer.tabWidth", "wide");
+      expect(rejected.ok).toBe(false);
+      if (!rejected.ok) expect(rejected.error).toBe('invalid number "wide" for "viewer.tabWidth"');
+    } finally {
+      (NAVIGATOR_CONFIG_FIELDS as unknown as NavigatorConfigField[]).pop();
+    }
+  });
+});
+
 // ── NAVIGATOR_CONFIG_FIELDS sync guard (overseer pattern) ──
 
 describe("NAVIGATOR_CONFIG_FIELDS", () => {
   it("has exactly six entries matching the spec table", () => {
     expect(NAVIGATOR_CONFIG_FIELDS).toHaveLength(6);
-    expect(NAVIGATOR_CONFIG_FIELDS[0]).toMatchObject({
+    expect(fieldById("images.mode")).toMatchObject({
       id: "images.mode",
       path: ["images", "mode"],
       kind: "enum",
@@ -834,7 +1125,7 @@ describe("NAVIGATOR_CONFIG_FIELDS", () => {
       options: ["off", "chafa", "native", "auto"],
       live: false,
     });
-    expect(NAVIGATOR_CONFIG_FIELDS[1]).toMatchObject({
+    expect(fieldById("icons.enabled")).toMatchObject({
       id: "icons.enabled",
       path: ["icons", "enabled"],
       kind: "boolean",
@@ -842,7 +1133,7 @@ describe("NAVIGATOR_CONFIG_FIELDS", () => {
       label: "Nerd Font icons",
       live: false,
     });
-    expect(NAVIGATOR_CONFIG_FIELDS[2]).toMatchObject({
+    expect(fieldById("viewer.wrap")).toMatchObject({
       id: "viewer.wrap",
       path: ["viewer", "wrap"],
       kind: "boolean",
@@ -850,7 +1141,7 @@ describe("NAVIGATOR_CONFIG_FIELDS", () => {
       label: "Word wrap",
       live: false,
     });
-    expect(NAVIGATOR_CONFIG_FIELDS[3]).toMatchObject({
+    expect(fieldById("viewer.markdown")).toMatchObject({
       id: "viewer.markdown",
       path: ["viewer", "markdown"],
       kind: "enum",
@@ -859,7 +1150,7 @@ describe("NAVIGATOR_CONFIG_FIELDS", () => {
       options: ["code", "rendered"],
       live: false,
     });
-    expect(NAVIGATOR_CONFIG_FIELDS[4]).toMatchObject({
+    expect(fieldById("tree.showHidden")).toMatchObject({
       id: "tree.showHidden",
       path: ["tree", "showHidden"],
       kind: "boolean",
@@ -867,7 +1158,7 @@ describe("NAVIGATOR_CONFIG_FIELDS", () => {
       label: "Hidden files",
       live: false,
     });
-    expect(NAVIGATOR_CONFIG_FIELDS[5]).toMatchObject({
+    expect(fieldById("layout.default")).toMatchObject({
       id: "layout.default",
       path: ["layout", "default"],
       kind: "enum",
@@ -887,6 +1178,45 @@ describe("NAVIGATOR_CONFIG_FIELDS", () => {
     expect(new Set(ids).size).toBe(ids.length);
     const paths = NAVIGATOR_CONFIG_FIELDS.map((f) => f.path.join("."));
     expect(new Set(paths).size).toBe(paths.length);
+  });
+
+  it("declares the startup layers on exactly the three override-backed rows (Issue #145)", () => {
+    expect(NAVIGATOR_CONFIG_FIELDS.filter((field) => field.override !== undefined).map((field) => field.id)).toEqual([
+      "images.mode",
+      "icons.enabled",
+      "layout.default",
+    ]);
+    expect(fieldById("images.mode").override).toEqual({
+      env: NAVIGATOR_IMAGES_ENV,
+      flag: {
+        name: NAVIGATOR_IMAGES_FLAG,
+        description: "pi-navigator image rendering: native, chafa, auto or off (beats PI_NAV_IMAGES and the settings file)",
+        type: "string",
+      },
+      parse: expect.any(Function),
+    });
+    expect(fieldById("icons.enabled").override).toEqual({
+      env: ICONS_ENV,
+      flag: {
+        name: NAVIGATOR_ICONS_FLAG,
+        description: "pi-navigator: show the Nerd Font icon column (beats PI_NAV_ICONS and the settings file)",
+        type: "boolean",
+      },
+      parse: expect.any(Function),
+    });
+    expect(fieldById("layout.default").override).toEqual({
+      env: NAVIGATOR_LAYOUT_ENV,
+      flag: {
+        name: NAVIGATOR_LAYOUT_FLAG,
+        description: "pi-navigator overlay layout: files-git-viewer, files-viewer or git-viewer (beats PI_NAV_LAYOUT and the settings file)",
+        type: "string",
+      },
+      parse: expect.any(Function),
+    });
+    // File-only rows carry no startup layer at all.
+    for (const id of ["viewer.wrap", "viewer.markdown", "tree.showHidden"]) {
+      expect(fieldById(id).override, id).toBeUndefined();
+    }
   });
 
   it("every field path resolves in DEFAULT_NAVIGATOR_SETTINGS", () => {
@@ -911,19 +1241,19 @@ describe("NAVIGATOR_CONFIG_FIELDS", () => {
       }
     }
     // The registry options must match what the normalizer actually accepts.
-    const modeField = NAVIGATOR_CONFIG_FIELDS[0];
+    const modeField = fieldById("images.mode");
     expect(modeField?.options).toEqual(["off", "chafa", "native", "auto"]);
     expect(normalizeNavigatorSettings({ version: 1, images: { mode: "off" } }).warnings).toEqual([]);
     expect(normalizeNavigatorSettings({ version: 1, images: { mode: "chafa" } }).warnings).toEqual([]);
     expect(normalizeNavigatorSettings({ version: 1, images: { mode: "native" } }).warnings).toEqual([]);
     expect(normalizeNavigatorSettings({ version: 1, images: { mode: "auto" } }).warnings).toEqual([]);
     expect(normalizeNavigatorSettings({ version: 1, images: { mode: "sixel" } }).warnings.length).toBeGreaterThan(0);
-    const markdownField = NAVIGATOR_CONFIG_FIELDS[3];
+    const markdownField = fieldById("viewer.markdown");
     expect(markdownField?.options).toEqual(["code", "rendered"]);
     expect(normalizeNavigatorSettings({ version: 1, viewer: { markdown: "rendered" } }).warnings).toEqual([]);
     expect(normalizeNavigatorSettings({ version: 1, viewer: { markdown: "preview" } }).warnings.length).toBeGreaterThan(0);
     // Issue #119: the layout enum's options are exactly NAVIGATOR_LAYOUTS.
-    const layoutField = NAVIGATOR_CONFIG_FIELDS[5];
+    const layoutField = fieldById("layout.default");
     expect(layoutField?.options).toEqual([...NAVIGATOR_LAYOUTS]);
     for (const layout of NAVIGATOR_LAYOUTS) {
       expect(normalizeNavigatorSettings({ version: 1, layout: { default: layout } }).warnings).toEqual([]);

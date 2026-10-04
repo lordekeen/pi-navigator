@@ -1,13 +1,17 @@
 /**
  * pi-navigator settings — versioned user-level settings terrain (§5.1/§5.2):
- * typed defaults, a never-throw pure normalizer, a loader with file/env
- * provenance, a canonical serializer, an atomic tmp+rename writer, and the
- * field registry for the `/navigator settings` modal (pi-overseer pattern,
- * JSON instead of YAML — this repo has zero runtime dependencies).
+ * typed defaults, a never-throw pure normalizer, a loader with file/env/flag
+ * provenance and truthful override origins, a canonical serializer, an atomic
+ * tmp+rename writer plus the one commit operation on top of it, and the field
+ * registry for the `/navigator settings` modal (pi-overseer pattern, JSON
+ * instead of YAML — this repo has zero runtime dependencies).
  *
- * Warnings are short and user-facing: they travel through ctx.ui.notify
- * exactly once per load. The env overrides are passed in explicitly (like
- * PI_NAV_ICONS) — nothing in this module reads process.env.
+ * The registry rows are the single source of the schema (Issue #145): they
+ * carry the per-kind accept/parse rules both settings faces share and, when a
+ * startup layer can set a field, its env name, flag descriptor and override
+ * parser. Warnings are short and user-facing: they travel through ctx.ui.notify
+ * exactly once per load. The env/flags layers are passed in explicitly — nothing
+ * in this module reads process.env.
  */
 
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
@@ -21,7 +25,7 @@ import {
   NAVIGATOR_LAYOUT_ENV,
   NAVIGATOR_LAYOUT_FLAG,
 } from "./constants";
-import { parseIconMode } from "./icons";
+import { ICONS_ENV, parseIconMode } from "./icons";
 import { parseTruthyEnv } from "./env";
 import { NAVIGATOR_LAYOUTS, type NavigatorLayout } from "./types";
 
@@ -77,6 +81,17 @@ export interface NavigatorConfigField {
   readonly default: string | number | boolean;
   /** Whether changing this field takes effect immediately without restart; reserved for future live-reload. */
   readonly live: boolean;
+  /**
+   * The startup layers that can set this field (Issue #145): the env var name,
+   * the flag descriptor `registerFlag` registers, and the one parser both
+   * layers share. Absent for fields only the file can set. A boolean flag
+   * applies its raw value directly, without running `parse`.
+   */
+  readonly override?: {
+    readonly env: string;
+    readonly flag: { readonly name: string; readonly description: string; readonly type: "string" | "boolean" };
+    readonly parse?: (raw: string, source: string) => { value?: string | number | boolean; warning?: string };
+  };
 }
 
 /** Ordered registry for the `/navigator settings` modal (§5.2, §2.1). */
@@ -91,6 +106,18 @@ export const NAVIGATOR_CONFIG_FIELDS: readonly NavigatorConfigField[] = [
     options: [...IMAGE_MODES],
     default: "off",
     live: false,
+    override: {
+      env: NAVIGATOR_IMAGES_ENV,
+      flag: {
+        name: NAVIGATOR_IMAGES_FLAG,
+        description: "pi-navigator image rendering: native, chafa, auto or off (beats PI_NAV_IMAGES and the settings file)",
+        type: "string",
+      },
+      parse: (raw, source) => {
+        const parsed = parseImageMode(raw, source);
+        return { value: parsed.mode, warning: parsed.warning };
+      },
+    },
   },
   {
     id: "icons.enabled",
@@ -101,6 +128,18 @@ export const NAVIGATOR_CONFIG_FIELDS: readonly NavigatorConfigField[] = [
     description: "Show a Nerd Font filetype icon column in the file tree (requires a Nerd Font terminal).",
     default: false,
     live: false,
+    override: {
+      env: ICONS_ENV,
+      flag: {
+        name: NAVIGATOR_ICONS_FLAG,
+        description: "pi-navigator: show the Nerd Font icon column (beats PI_NAV_ICONS and the settings file)",
+        type: "boolean",
+      },
+      parse: (raw) => {
+        const parsed = parseIconMode(raw);
+        return { value: parsed.enabled, warning: parsed.warning };
+      },
+    },
   },
   {
     id: "viewer.wrap",
@@ -144,6 +183,18 @@ export const NAVIGATOR_CONFIG_FIELDS: readonly NavigatorConfigField[] = [
     options: [...NAVIGATOR_LAYOUTS],
     default: "files-git-viewer",
     live: false,
+    override: {
+      env: NAVIGATOR_LAYOUT_ENV,
+      flag: {
+        name: NAVIGATOR_LAYOUT_FLAG,
+        description: "pi-navigator overlay layout: files-git-viewer, files-viewer or git-viewer (beats PI_NAV_LAYOUT and the settings file)",
+        type: "string",
+      },
+      parse: (raw, source) => {
+        const parsed = parseLayoutMode(raw, source);
+        return { value: parsed.layout, warning: parsed.warning };
+      },
+    },
   },
 ];
 
@@ -211,38 +262,76 @@ function bounded(text: string, max: number): string {
 }
 
 /**
- * One per-kind validator for the normalizer's registry walk: boolean must be
- * a boolean, enum must be one of `field.options`, number must be a finite
- * number clamped into [min, max] (mirroring `parseNumberField`). Warning
- * phrasing is pinned byte-for-byte by test/settings.test.ts: string
- * defaults are quoted, boolean/number defaults bare — exactly what the
- * hand-written section blocks emitted.
+ * The one per-kind rule table (Issue #145): `accept` is the JSON face (the
+ * normalizer's typed-value check) and `parse` is the string face (the editor's
+ * raw edit). Both faces share these rules, so the two can never disagree about
+ * what a field accepts; warning/error phrasing is pinned byte-for-byte by
+ * test/settings.test.ts (string defaults quoted, boolean/number defaults bare
+ * — exactly what the hand-written section blocks emitted).
  */
-function validateFieldValue(
-  field: NavigatorConfigField,
-  rawValue: unknown,
-): { ok: true; value: string | number | boolean } | { ok: false; error: string } {
-  switch (field.kind) {
-    case "boolean":
-      if (typeof rawValue === "boolean") return { ok: true, value: rawValue };
-      return { ok: false, error: `${field.id} "${String(rawValue)}" is invalid; using ${String(field.default)}` };
-    case "enum": {
+interface FieldKindRule {
+  accept: (
+    field: NavigatorConfigField,
+    raw: unknown,
+  ) => { ok: true; value: string | number | boolean } | { ok: false; error: string };
+  parse: (
+    field: NavigatorConfigField,
+    raw: string,
+  ) => { ok: true; value: string | number | boolean } | { ok: false; error: string };
+}
+
+export const FIELD_KIND_RULES: Record<"enum" | "boolean" | "number", FieldKindRule> = {
+  boolean: {
+    accept(field, raw) {
+      if (typeof raw === "boolean") return { ok: true, value: raw };
+      return { ok: false, error: `${field.id} "${String(raw)}" is invalid; using ${String(field.default)}` };
+    },
+    parse(field, raw) {
+      if (raw === "on") return { ok: true, value: true };
+      if (raw === "off") return { ok: true, value: false };
+      return { ok: false, error: `invalid value "${raw}" for "${field.id}"; expected on or off` };
+    },
+  },
+  enum: {
+    accept(field, raw) {
       const options = field.options ?? [];
       for (const option of options) {
-        if (option === rawValue) return { ok: true, value: option };
+        if (option === raw) return { ok: true, value: option };
       }
-      return { ok: false, error: `${field.id} "${String(rawValue)}" is invalid; using "${String(field.default)}"` };
-    }
-    case "number": {
-      if (typeof rawValue === "number" && Number.isFinite(rawValue)) {
-        let value = rawValue;
+      return { ok: false, error: `${field.id} "${String(raw)}" is invalid; using "${String(field.default)}"` };
+    },
+    parse(field, raw) {
+      const options = field.options ?? [];
+      if (!options.includes(raw)) {
+        return { ok: false, error: `invalid value "${raw}" for "${field.id}"; expected one of ${options.join(", ")}` };
+      }
+      return { ok: true, value: raw };
+    },
+  },
+  number: {
+    accept(field, raw) {
+      if (typeof raw === "number" && Number.isFinite(raw)) {
+        let value = raw;
         if (field.min !== undefined) value = Math.max(field.min, value);
         if (field.max !== undefined) value = Math.min(field.max, value);
         return { ok: true, value };
       }
-      return { ok: false, error: `${field.id} "${String(rawValue)}" is invalid; using ${String(field.default)}` };
-    }
-  }
+      return { ok: false, error: `${field.id} "${String(raw)}" is invalid; using ${String(field.default)}` };
+    },
+    parse(field, raw) {
+      const parsed = parseNumberField(raw, field.min, field.max);
+      if (!parsed.ok) return { ok: false, error: `${parsed.error} for "${field.id}"` };
+      return { ok: true, value: parsed.value };
+    },
+  },
+};
+
+/** Thin JSON-face call into the shared per-kind rules (Issue #145). */
+function validateFieldValue(
+  field: NavigatorConfigField,
+  rawValue: unknown,
+): { ok: true; value: string | number | boolean } | { ok: false; error: string } {
+  return FIELD_KIND_RULES[field.kind].accept(field, rawValue);
 }
 
 /**
@@ -399,26 +488,114 @@ export function parseLayoutMode(
   };
 }
 
+/** One override origin: the startup layer that actually won a field (Issue #145). */
+export interface OverrideOrigin {
+  readonly layer: "env" | "flag";
+  readonly source: string;
+}
+
+export interface LoadedNavigatorSettings {
+  readonly settings: NavigatorSettings;
+  readonly warnings: string[];
+  /** Sparse per-field origin report: only fields a startup layer actually won. */
+  readonly origins: Record<string, OverrideOrigin>;
+}
+
+interface ResolvedOverrideLayers {
+  readonly applied: ReadonlyArray<{ field: NavigatorConfigField; value: string | number | boolean }>;
+  readonly warnings: readonly string[];
+  readonly origins: Record<string, OverrideOrigin>;
+}
+
+/**
+ * The one registry walk behind both the loader and `resolveOverrideOrigins`
+ * (Issue #145): all env layers first (registry order), then all flag layers,
+ * so flags beat env per field and the warning order stays the documented
+ * defaults ← file ← env ← flag. Only a layer that produced a value is applied
+ * and reported — presence alone is not enough, so a present-but-invalid flag
+ * yields no origin.
+ */
+function resolveOverrideLayers(
+  env: Readonly<Record<string, string | undefined>>,
+  flags: Readonly<Record<string, string | boolean | undefined>>,
+): ResolvedOverrideLayers {
+  const applied: Array<{ field: NavigatorConfigField; value: string | number | boolean }> = [];
+  const warnings: string[] = [];
+  const origins: Record<string, OverrideOrigin> = {};
+
+  // Pass 1 — env layers, in registry order. The parsers treat undefined and
+  // blank values as "no override", but the trimming check here keeps that
+  // contract visible at the walk that owns layer order.
+  for (const field of NAVIGATOR_CONFIG_FIELDS) {
+    const override = field.override;
+    if (override === undefined) continue;
+    const raw = env[override.env];
+    if (typeof raw !== "string" || raw.trim() === "") continue;
+    const parsed = override.parse?.(raw, override.env);
+    if (parsed?.warning !== undefined) warnings.push(parsed.warning);
+    if (parsed?.value === undefined) continue;
+    applied.push({ field, value: parsed.value });
+    origins[field.id] = { layer: "env", source: override.env };
+  }
+
+  // Pass 2 — flag layers: the most explicit layer, so they beat env for the
+  // same field. A boolean flag passes true/false directly — there is no parse
+  // step to warn about; a string flag reuses the row's parser with the flag
+  // name as the warning source, so a bad flag value names the flag.
+  for (const field of NAVIGATOR_CONFIG_FIELDS) {
+    const override = field.override;
+    if (override === undefined) continue;
+    const { name, type } = override.flag;
+    const raw = flags[name];
+    if (type === "boolean") {
+      if (typeof raw !== "boolean") continue;
+      applied.push({ field, value: raw });
+    } else {
+      if (typeof raw !== "string" || raw.trim() === "") continue;
+      const parsed = override.parse?.(raw, `--${name}`);
+      if (parsed?.warning !== undefined) warnings.push(parsed.warning);
+      if (parsed?.value === undefined) continue;
+      applied.push({ field, value: parsed.value });
+    }
+    origins[field.id] = { layer: "flag", source: `--${name}` };
+  }
+
+  return { applied, warnings, origins };
+}
+
+/**
+ * The loader's origin report without touching the file (Issue #145): the same
+ * registry walk the loader uses, exported so callers that only need "which
+ * startup layer wins" (the `/navigator set` shadow warning, the settings-menu
+ * row annotations) do not re-derive precedence from raw presence.
+ */
+export function resolveOverrideOrigins(
+  env: Readonly<Record<string, string | undefined>> = {},
+  flags: Readonly<Record<string, string | boolean | undefined>> = {},
+): Record<string, OverrideOrigin> {
+  return resolveOverrideLayers(env, flags).origins;
+}
+
 /**
  * Loads settings with precedence defaults ← user file ← env ← flag (§5.2,
- * Issue #131). A missing file is not a warning (sources: ["defaults"]); an
- * unreadable or corrupt file is one bounded warning (sources: ["defaults"]);
- * a valid file contributes its path to `sources`, and each flag that actually
- * overrides contributes its own name. `undefined` means "not passed"; an
- * empty or whitespace value is "no override", never a warning.
+ * Issue #131). A missing file is not a warning; an unreadable or corrupt file
+ * is one bounded warning. `env` is keyed by the env var names the registry
+ * rows declare (`process.env`), `flags` by flag name; both walks are registry-
+ * driven (Issue #145). `undefined` means "not passed"; an empty or whitespace
+ * value is "no override", never a warning. `origins` reports, sparsely, which
+ * startup layer won each field — the layer the setting actually came from, so
+ * a present-but-invalid flag reports nothing.
  */
 export function loadNavigatorSettings(paths: {
   userPath: string;
-  env?: { images?: string | undefined; icons?: string | undefined; layout?: string | undefined };
-  flags?: { images?: string | undefined; icons?: boolean | undefined; layout?: string | undefined };
-}): { settings: NavigatorSettings; warnings: string[]; sources: string[] } {
+  env?: Readonly<Record<string, string | undefined>>;
+  flags?: Readonly<Record<string, string | boolean | undefined>>;
+}): LoadedNavigatorSettings {
   const warnings: string[] = [];
-  const sources: string[] = [];
 
   let raw: unknown = {};
   try {
     raw = JSON.parse(readFileSync(paths.userPath, "utf8"));
-    sources.push(paths.userPath);
   } catch (error) {
     if ((error as { code?: string } | null)?.code !== "ENOENT") {
       warnings.push(`pi-navigator settings unreadable: ${bounded(String(error), 160)}`);
@@ -437,56 +614,15 @@ export function loadNavigatorSettings(paths: {
   // env var, and prefixing them with a file path would misattribute them.
   for (const warning of normalized.warnings) warnings.push(`${paths.userPath}: ${warning}`);
 
+  // The startup layers, applied in the walk's order and reported as origins.
+  const layers = resolveOverrideLayers(paths.env ?? {}, paths.flags ?? {});
   let settings = normalized.settings;
-  const envMode = parseImageMode(paths.env?.images);
-  if (envMode.mode !== undefined) {
-    settings = { ...settings, images: { ...settings.images, mode: envMode.mode } };
+  for (const entry of layers.applied) {
+    settings = setField(settings, entry.field.path, entry.value);
   }
-  if (envMode.warning !== undefined) warnings.push(envMode.warning);
+  for (const warning of layers.warnings) warnings.push(warning);
 
-  const iconMode = parseIconMode(paths.env?.icons);
-  if (iconMode.enabled !== undefined) {
-    settings = { ...settings, icons: { ...settings.icons, enabled: iconMode.enabled } };
-  }
-  if (iconMode.warning !== undefined) warnings.push(iconMode.warning);
-
-  const layoutMode = parseLayoutMode(paths.env?.layout);
-  if (layoutMode.layout !== undefined) {
-    settings = { ...settings, layout: { ...settings.layout, default: layoutMode.layout } };
-  }
-  if (layoutMode.warning !== undefined) warnings.push(layoutMode.warning);
-
-  // Flags are the most explicit layer, so they are applied last and beat env
-  // (Issue #131). A boolean flag passes true/false directly — there is no
-  // parse step to warn about; a string flag reuses the env parsers with the
-  // flag name as the warning source, so a bad flag value names the flag.
-  const imagesFlag = paths.flags?.images;
-  if (imagesFlag !== undefined && imagesFlag.trim() !== "") {
-    const parsed = parseImageMode(imagesFlag, `--${NAVIGATOR_IMAGES_FLAG}`);
-    if (parsed.mode !== undefined) {
-      settings = { ...settings, images: { ...settings.images, mode: parsed.mode } };
-      sources.push(NAVIGATOR_IMAGES_FLAG);
-    }
-    if (parsed.warning !== undefined) warnings.push(parsed.warning);
-  }
-
-  if (typeof paths.flags?.icons === "boolean") {
-    settings = { ...settings, icons: { ...settings.icons, enabled: paths.flags.icons } };
-    sources.push(NAVIGATOR_ICONS_FLAG);
-  }
-
-  const layoutFlag = paths.flags?.layout;
-  if (layoutFlag !== undefined && layoutFlag.trim() !== "") {
-    const parsed = parseLayoutMode(layoutFlag, `--${NAVIGATOR_LAYOUT_FLAG}`);
-    if (parsed.layout !== undefined) {
-      settings = { ...settings, layout: { ...settings.layout, default: parsed.layout } };
-      sources.push(NAVIGATOR_LAYOUT_FLAG);
-    }
-    if (parsed.warning !== undefined) warnings.push(parsed.warning);
-  }
-
-  if (sources.length === 0) sources.push("defaults");
-  return { settings, warnings, sources };
+  return { settings, warnings, origins: layers.origins };
 }
 
 /** Inverse of the normalizer: the canonical nested object for persistence. */
@@ -512,7 +648,8 @@ export function serializeNavigatorSettings(settings: NavigatorSettings): Record<
 
 /**
  * Atomically persist the canonical settings to `path` (tmp file + rename).
- * Used only by the settings menu and tests — never by the feature.
+ * Tests use it directly for the writer contract; production callers go through
+ * `commitNavigatorSettings`, which owns the reload and error wrapping (#145).
  */
 export function writeNavigatorSettings(path: string, settings: NavigatorSettings): void {
   const dir = dirname(path);
@@ -532,6 +669,26 @@ export function writeNavigatorSettings(path: string, settings: NavigatorSettings
       }
     }
   }
+}
+
+/**
+ * The one persist operation (Issue #145): atomic write through the existing
+ * writer, then a file-only reload so the caller receives what actually landed
+ * plus the reload warnings. Write failures become a bounded `{ok:false}` — the
+ * shape both `/navigator set` and the settings menu already report.
+ */
+export function commitNavigatorSettings(
+  path: string,
+  settings: NavigatorSettings,
+): { ok: true; settings: NavigatorSettings; warnings: string[] } | { ok: false; error: string } {
+  try {
+    writeNavigatorSettings(path, settings);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, error: bounded(message, 160) };
+  }
+  const reloaded = loadNavigatorSettings({ userPath: path });
+  return { ok: true, settings: reloaded.settings, warnings: reloaded.warnings };
 }
 
 /**
@@ -568,38 +725,16 @@ export function applyFieldEdit(
   const field = NAVIGATOR_CONFIG_FIELDS.find((candidate) => candidate.id === fieldId);
   if (field === undefined) return { ok: false, error: `unknown setting "${fieldId}"` };
 
-  let value: string | number | boolean;
-  switch (field.kind) {
-    case "boolean": {
-      if (rawValue === "on") value = true;
-      else if (rawValue === "off") value = false;
-      else return { ok: false, error: `invalid value "${rawValue}" for "${fieldId}"; expected on or off` };
-      break;
-    }
-    case "enum": {
-      const options = field.options ?? [];
-      if (!options.includes(rawValue)) {
-        return { ok: false, error: `invalid value "${rawValue}" for "${fieldId}"; expected one of ${options.join(", ")}` };
-      }
-      value = rawValue;
-      break;
-    }
-    case "number": {
-      const parsed = parseNumberField(rawValue, field.min, field.max);
-      if (!parsed.ok) return { ok: false, error: `${parsed.error} for "${fieldId}"` };
-      value = parsed.value;
-      break;
-    }
-  }
-
-  return { ok: true, settings: setField(settings, field.path, value) };
+  const parsed = FIELD_KIND_RULES[field.kind].parse(field, rawValue);
+  if (!parsed.ok) return parsed;
+  return { ok: true, settings: setField(settings, field.path, parsed.value) };
 }
 
 /**
  * Shallow-clone the settings with one registry path set. All five registry
  * paths are exactly two segments deep, so the section is cloned explicitly.
- * The cast is safe: `applyFieldEdit` validated the value against the field's
- * kind before this runs.
+ * The cast is safe: the caller (the string face or an override parser via the
+ * loader) accepted the value against the field before this runs.
  */
 function setField(settings: NavigatorSettings, path: readonly string[], value: string | number | boolean): NavigatorSettings {
   if (path.length !== 2) return settings;
