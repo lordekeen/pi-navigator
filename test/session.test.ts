@@ -8,9 +8,10 @@
  * git.ts and tree.ts are mocked: the session's real collaborators do fs
  * walking and spawn git, and the closure wiring under test (probe compare,
  * stamping, backoff, cache, abort) talks to those seams. The image path keeps
- * session.ts's real makeImageSeams; only the expensive resolveImageSupport
- * resolution and the chafa execution are stubbed, and the chafa stub mirrors
- * runChafaRender's pre-spawn abort contract (Issue #117 follow-up).
+ * session.ts's real binding to images.makeImagePipeline; only the expensive
+ * resolveImageSupport resolution is stubbed, and the chafa child is captured
+ * at node:child_process (the real runChafaRender 
+ * pre-spawn abort contract, Issue #117 follow-up, stays exercised).
  *
  * No `as any` into private state (Issue #098 precedent): every observation is
  * a sink call, an injected-loader call, or an injected seam argument.
@@ -23,7 +24,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
-import { MAX_POLL_INTERVAL_MS, REFRESH_INTERVAL_MS } from "../constants";
+import { IMAGE_RESIZE_DEBOUNCE_MS, MAX_POLL_INTERVAL_MS, REFRESH_INTERVAL_MS } from "../constants";
 import type { ImageSupport, KittyProbeVerdict, PiChafaApi } from "../images";
 import { DEFAULT_NAVIGATOR_SETTINGS, type NavigatorSettings } from "../settings";
 import { makeNavigatorTheme } from "../theme";
@@ -48,9 +49,11 @@ const ctl = vi.hoisted(() => ({
   buildCalls: 0,
   codeStamps: 0,
   // images.ts (mocked seams)
-  support: "deferred" as "deferred" | "chafa",
+  support: "deferred" as "deferred" | "chafa" | "native",
   supportResolved: 0,
   chafaCalls: [] as Array<{ path: string; signal: AbortSignal }>,
+  /** Releases the captured chafa child callback (null until one is spawned). */
+  chafaRelease: null as null | (() => void),
 }));
 
 vi.mock("../git", () => ({
@@ -108,46 +111,73 @@ vi.mock("../images", async (importOriginal) => {
     ...actual,
     resolveImageSupport: async () => {
       ctl.supportResolved += 1;
-      return ctl.support === "deferred"
-        ? actual.makeDeferredImageSupport("off")
-        : {
-            mode: "chafa",
-            nativeProtocol: null,
-            tier: "chafa",
-            piChafa: { present: true, via: "settings" },
-            chafa: { state: "ok", binary: "chafa", version: { major: 1, minor: 11 } },
-            config: {
-              version: 1,
-              binaryPath: null,
-              cellWidth: 60,
-              maxRows: 50,
-              colors: "240",
-              symbolsSet: "block+border",
-              dither: "none",
-              timeoutMs: 8000,
-              preferNative: true,
-            },
-            hostShowImages: true,
-            hostImageWidthCells: 60,
-          };
-    },
-    runChafaRender: (
-      absPath: string,
-      _req: { cols: number; rows: number },
-      ctx: { binary: string; config: unknown; signal?: AbortSignal },
-    ) => {
-      // Mirror runChafaRender's pre-spawn abort check (Issue #117 follow-up).
-      if (ctx.signal?.aborted) {
-        return Promise.resolve({ ok: false as const, reason: "render aborted" });
+      if (ctl.support === "deferred") return actual.makeDeferredImageSupport("off");
+      if (ctl.support === "chafa") {
+        return {
+          mode: "chafa",
+          nativeProtocol: null,
+          tier: "chafa",
+          piChafa: { present: true, via: "settings" },
+          chafa: { state: "ok", binary: "chafa", version: { major: 1, minor: 11 } },
+          config: {
+            version: 1,
+            binaryPath: null,
+            cellWidth: 60,
+            maxRows: 50,
+            colors: "240",
+            symbolsSet: "block+border",
+            dither: "none",
+            timeoutMs: 8000,
+            preferNative: true,
+          },
+          hostShowImages: true,
+          hostImageWidthCells: 60,
+        };
       }
-      ctl.chafaCalls.push({ path: absPath, signal: ctx.signal as AbortSignal });
-      // An active render never settles here; supersession and disposal are
-      // observed through the recorded signal instead.
-      return new Promise<{ ok: true; lines: string[]; cols: number; rows: number } | {
-        ok: false;
-        reason: string;
-      }>(() => {});
+      // native: strict kitty — a native-only plan (no chafa fallback).
+      return {
+        mode: "native",
+        nativeProtocol: "kitty",
+        tier: "native",
+        piChafa: { present: false, via: "none" },
+        chafa: { state: "deferred" },
+        config: {
+          version: 1,
+          binaryPath: null,
+          cellWidth: 60,
+          maxRows: 50,
+          colors: "240",
+          symbolsSet: "block+border",
+          dither: "none",
+          timeoutMs: 8000,
+          preferNative: true,
+        },
+        hostShowImages: true,
+        hostImageWidthCells: 60,
+      };
     },
+  };
+});
+
+/**
+ * The chafa child is captured at node:child_process (Issue #144): the real
+ * images.makeImagePipeline and runChafaRender run end to end, and an active
+ * render never settles unless a test releases it — supersession and disposal
+ * are observed through the recorded signal.
+ */
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFile: ((
+      _bin: string,
+      args: string[],
+      opts: { signal?: AbortSignal },
+      cb: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      ctl.chafaCalls.push({ path: args[args.length - 1] ?? "", signal: opts.signal as AbortSignal });
+      ctl.chafaRelease = () => cb(null, "\u2588", "");
+    }) as unknown as typeof actual.execFile,
   };
 });
 
@@ -203,6 +233,8 @@ interface Sink {
   setImageSupport: Mock<(support: ImageSupport) => void>;
   getOpenTarget: Mock<() => OpenTarget | null>;
   checkOpenTarget: Mock<(target: OpenTarget, mtimeMs: number | null) => boolean>;
+  getImageView: Mock<() => { rendered: boolean; asCard: boolean } | null>;
+  reflowOpenImage: Mock<() => void>;
   requestRender: Mock<() => void>;
 }
 
@@ -227,6 +259,8 @@ function makeSession(overrides: Partial<SessionDeps> = {}): Harness {
     setImageSupport: vi.fn(),
     getOpenTarget: vi.fn<() => OpenTarget | null>(() => null),
     checkOpenTarget: vi.fn<(target: OpenTarget, mtimeMs: number | null) => boolean>(() => false),
+    getImageView: vi.fn<() => { rendered: boolean; asCard: boolean } | null>(() => null),
+    reflowOpenImage: vi.fn<() => void>(),
     requestRender: vi.fn(),
   };
   const notify = vi.fn<(message: string) => void>();
@@ -234,22 +268,32 @@ function makeSession(overrides: Partial<SessionDeps> = {}): Harness {
 
   // Stand-in for viewer.ts's loadFile: records calls and mirrors its mtime
   // reporting so the session's cache keys match a real run. The image branch
-  // mirrors the executor contract (Issue #143): run the first planned attempt
-  // and report its verdict.
+  // mirrors the loader mapping (Issue #144): one pipeline call, one typed
+  // outcome.
   const loadFile = vi.fn<LoadFn>(async (absPath, relPath, opts) => {
     const image = opts?.image;
-    const attempt = opts?.attempts?.[0];
-    if (image !== undefined && attempt !== undefined) {
-      const out = await attempt.render(absPath, image);
+    const renderer = opts?.imageRenderer;
+    if (image !== undefined && renderer !== undefined) {
+      const out = await renderer(absPath);
       const mtimeMs = (await stat(absPath)).mtimeMs;
-      if (!out.ok) {
+      if (out.kind === "aborted") {
         return {
           kind: "image",
           relPath,
           lines: [],
           sizeBytes: 16,
           mtimeMs,
-          imageVerdict: { kind: "card", failed: { renderer: attempt.renderer, detail: out.reason } },
+          imageVerdict: { kind: "card" },
+        };
+      }
+      if (out.kind === "failed") {
+        return {
+          kind: "image",
+          relPath,
+          lines: [],
+          sizeBytes: 16,
+          mtimeMs,
+          imageVerdict: { kind: "card", failed: { renderer: out.renderer, detail: out.reason } },
         };
       }
       return {
@@ -260,7 +304,7 @@ function makeSession(overrides: Partial<SessionDeps> = {}): Harness {
         mtimeMs,
         imageVerdict: {
           kind: "rendered",
-          renderer: attempt.renderer,
+          renderer: out.renderer,
           lines: out.lines,
           cols: out.cols,
           rows: out.rows,
@@ -366,6 +410,7 @@ beforeEach(async () => {
   ctl.support = "deferred";
   ctl.supportResolved = 0;
   ctl.chafaCalls = [];
+  ctl.chafaRelease = null;
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -677,7 +722,13 @@ describe("createSession: viewer cache (Issue #020)", () => {
 
     const first = await session.loadFile("w.txt");
     expect(loadFile).toHaveBeenCalledTimes(1);
-    expect(loadFile.mock.calls[0]?.[2]).toEqual({ styleKey: "key-A" });
+    expect(loadFile.mock.calls[0]?.[2]).toMatchObject({ styleKey: "key-A" });
+    // One stat per load (Issue #144): the session's record rides along.
+    expect(loadFile.mock.calls[0]?.[2]?.stat).toEqual({
+      isFile: true,
+      sizeBytes: 3,
+      mtimeMs: 1000 * 1000 * 1000,
+    });
     expect(first.styleKey).toBe("key-A");
     expect(first.lines).toEqual(["stale"]);
 
@@ -732,6 +783,220 @@ describe("createSession: per-load abort ownership (Issue #117)", () => {
     expect(ctl.chafaCalls[0]?.signal.aborted).toBe(false);
     session.dispose();
     expect(ctl.chafaCalls[0]?.signal.aborted).toBe(true);
+  });
+});
+
+describe("createSession: one stat per load (Issue #144)", () => {
+  it("hands the performed stat to the loader and keeps the stat-failure path stat-less", async () => {
+    const path = join(dir, "w.txt");
+    await writeFile(path, "hello");
+    const { session, loadFile } = makeSession();
+
+    await session.loadFile("w.txt");
+    const opts = loadFile.mock.calls[0]?.[2];
+    expect(opts?.stat).toEqual({ isFile: true, sizeBytes: 5, mtimeMs: expect.any(Number) });
+
+    // A failed stat defers to the loader's own stat and error card.
+    const missing = await session.loadFile("missing.txt");
+    expect(missing.kind).toBe("error");
+    expect(loadFile.mock.calls[1]?.[2]).toBeUndefined();
+  });
+});
+
+describe("createSession: image plan → variant and cacheability (Issue #144)", () => {
+  /** A loader that resolves without invoking the (never-settling) chafa child. */
+  const resolvingImageLoader = (renderer: "native" | "chafa"): Mock<LoadFn> =>
+    vi.fn<LoadFn>(async (absPath, relPath, opts) => {
+      const image = opts?.image;
+      const mtimeMs = (await stat(absPath)).mtimeMs;
+      if (image !== undefined && opts?.imageRenderer !== undefined) {
+        return {
+          kind: "image",
+          relPath,
+          lines: [],
+          sizeBytes: 16,
+          mtimeMs,
+          imageVerdict: {
+            kind: "rendered",
+            renderer,
+            lines: ["row"],
+            cols: image.cols,
+            rows: image.rows,
+          },
+        };
+      }
+      return { kind: "text", relPath, sizeBytes: 5, lineCount: 1, lines: ["x"], mtimeMs };
+    });
+
+  it("chafa: the same geometry hits the plan-derived variant; a geometry change misses", async () => {
+    writeFileSync(join(dir, "img.png"), "png-bytes");
+    ctl.support = "chafa";
+    const loadFile = resolvingImageLoader("chafa");
+    const { session } = makeSession({ loadFile });
+    session.refresh();
+    await settle();
+
+    await session.loadFile("img.png", { image: IMAGE_REQ });
+    await session.loadFile("img.png", { image: IMAGE_REQ });
+    expect(loadFile).toHaveBeenCalledTimes(1); // cache hit: variant matches
+
+    await session.loadFile("img.png", { image: { cols: 30, rows: 12 } });
+    expect(loadFile).toHaveBeenCalledTimes(2); // geometry is part of the variant
+  });
+
+  it("kitty native: the render is never retained (the protocol table's cacheable column)", async () => {
+    writeFileSync(join(dir, "img.png"), "png-bytes");
+    ctl.support = "native";
+    const loadFile = resolvingImageLoader("native");
+    const { session } = makeSession({ loadFile });
+    session.refresh();
+    await settle();
+
+    await session.loadFile("img.png", { image: IMAGE_REQ });
+    await session.loadFile("img.png", { image: IMAGE_REQ });
+    expect(loadFile).toHaveBeenCalledTimes(2); // not cacheable: every open re-renders
+  });
+});
+
+describe("createSession: reflow clock (Issue #144)", () => {
+  const TARGET: OpenTarget = { kind: "file", relPath: "pic.png" };
+
+  it("arms on a landed support push for an unrendered displayed image and fires reflowOpenImage after the debounce", async () => {
+    vi.useFakeTimers();
+    const { session, sink } = makeSession();
+    sink.getOpenTarget.mockReturnValue(TARGET);
+    sink.getImageView.mockReturnValue({ rendered: false, asCard: false });
+
+    ctl.support = "chafa";
+    session.refresh();
+    await flushTicks();
+    expect(sink.setImageSupport).toHaveBeenCalledWith(expect.objectContaining({ tier: "chafa" }));
+    expect(sink.reflowOpenImage).not.toHaveBeenCalled(); // debounced
+
+    await vi.advanceTimersByTimeAsync(IMAGE_RESIZE_DEBOUNCE_MS);
+    expect(sink.reflowOpenImage).toHaveBeenCalledTimes(1);
+    session.dispose();
+  });
+
+  it("does not re-arm a rendered image when the fingerprint and the view both stand still", async () => {
+    vi.useFakeTimers();
+    const { session, sink } = makeSession();
+    sink.getOpenTarget.mockReturnValue(TARGET);
+    sink.getImageView.mockReturnValue({ rendered: true, asCard: false });
+
+    ctl.support = "chafa";
+    session.refresh();
+    await flushTicks();
+    // The first push counts as changed → arms the deferred→resolved upgrade.
+    await vi.advanceTimersByTimeAsync(IMAGE_RESIZE_DEBOUNCE_MS);
+    expect(sink.reflowOpenImage).toHaveBeenCalledTimes(1);
+
+    sink.reflowOpenImage.mockClear();
+    session.refresh(); // identical snapshot: unchanged fingerprint, rendered view
+    await flushTicks();
+    await vi.advanceTimersByTimeAsync(IMAGE_RESIZE_DEBOUNCE_MS * 2);
+    expect(sink.reflowOpenImage).not.toHaveBeenCalled();
+    session.dispose();
+  });
+
+  it("never arms for a carded view or a non-image target", async () => {
+    vi.useFakeTimers();
+    const { session, sink } = makeSession();
+    sink.getOpenTarget.mockReturnValue({ kind: "file", relPath: "notes.txt" });
+    ctl.support = "chafa";
+    session.refresh();
+    await flushTicks();
+    await vi.advanceTimersByTimeAsync(IMAGE_RESIZE_DEBOUNCE_MS * 2);
+    expect(sink.reflowOpenImage).not.toHaveBeenCalled();
+
+    sink.getOpenTarget.mockReturnValue(TARGET);
+    sink.getImageView.mockReturnValue({ rendered: false, asCard: true });
+    session.refresh();
+    await flushTicks();
+    await vi.advanceTimersByTimeAsync(IMAGE_RESIZE_DEBOUNCE_MS * 2);
+    expect(sink.reflowOpenImage).not.toHaveBeenCalled();
+    session.dispose();
+  });
+
+  it("drops the reflow when the displayed target changed before the debounce", async () => {
+    vi.useFakeTimers();
+    const { session, sink } = makeSession();
+    sink.getOpenTarget.mockReturnValue(TARGET);
+    sink.getImageView.mockReturnValue({ rendered: false, asCard: false });
+    ctl.support = "chafa";
+    session.refresh();
+    await flushTicks();
+
+    sink.getOpenTarget.mockReturnValue({ kind: "file", relPath: "other.png" });
+    await vi.advanceTimersByTimeAsync(IMAGE_RESIZE_DEBOUNCE_MS);
+    expect(sink.reflowOpenImage).not.toHaveBeenCalled();
+    session.dispose();
+  });
+
+  it("dispose clears a pending reflow", async () => {
+    vi.useFakeTimers();
+    const { session, sink } = makeSession();
+    sink.getOpenTarget.mockReturnValue(TARGET);
+    sink.getImageView.mockReturnValue({ rendered: false, asCard: false });
+    ctl.support = "chafa";
+    session.refresh();
+    await flushTicks();
+
+    session.dispose();
+    await vi.advanceTimersByTimeAsync(IMAGE_RESIZE_DEBOUNCE_MS * 2);
+    expect(sink.reflowOpenImage).not.toHaveBeenCalled();
+  });
+
+  it("re-arms while a load is in flight and fires once it settles", async () => {
+    vi.useFakeTimers();
+    writeFileSync(join(dir, "img.png"), "png-bytes");
+    ctl.support = "chafa";
+    const { session, sink } = makeSession();
+    sink.getOpenTarget.mockReturnValue({ kind: "file", relPath: "img.png" });
+    sink.getImageView.mockReturnValue({ rendered: false, asCard: false });
+
+    // Resolve the support snapshot first: it arms the upgrade reflow against
+    // the (mock-)displayed target before any load starts.
+    session.refresh();
+    await flushTicks();
+
+    void session.loadFile("img.png", { image: IMAGE_REQ });
+    await flushTicks();
+    expect(ctl.chafaCalls).toHaveLength(1); // in flight, parked on its child
+
+    await vi.advanceTimersByTimeAsync(IMAGE_RESIZE_DEBOUNCE_MS);
+    await vi.advanceTimersByTimeAsync(IMAGE_RESIZE_DEBOUNCE_MS);
+    expect(sink.reflowOpenImage).not.toHaveBeenCalled(); // re-armed, not fired
+
+    // Let the load settle; the re-armed timer now re-validates and fires.
+    ctl.chafaRelease?.();
+    await flushTicks();
+    await vi.advanceTimersByTimeAsync(IMAGE_RESIZE_DEBOUNCE_MS);
+    expect(sink.reflowOpenImage).toHaveBeenCalledTimes(1);
+    session.dispose();
+  });
+
+  it("imageViewChanged debounces one timer, ignores repeats, and is inert without a tier", async () => {
+    vi.useFakeTimers();
+    const { session, sink } = makeSession();
+    sink.getOpenTarget.mockReturnValue(TARGET);
+
+    // Deferred support resolves tier none: nothing can re-render.
+    session.imageViewChanged();
+    await vi.advanceTimersByTimeAsync(IMAGE_RESIZE_DEBOUNCE_MS * 2);
+    expect(sink.reflowOpenImage).not.toHaveBeenCalled();
+
+    ctl.support = "chafa";
+    session.refresh(); // no displayed target yet → the support push arms nothing
+    await flushTicks();
+    sink.getOpenTarget.mockReturnValue(TARGET);
+    sink.getImageView.mockReturnValue({ rendered: true, asCard: false });
+
+    session.imageViewChanged();
+    session.imageViewChanged(); // one timer at a time
+    await vi.advanceTimersByTimeAsync(IMAGE_RESIZE_DEBOUNCE_MS);
+    expect(sink.reflowOpenImage).toHaveBeenCalledTimes(1);
+    session.dispose();
   });
 });
 

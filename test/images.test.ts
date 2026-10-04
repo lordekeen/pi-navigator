@@ -27,6 +27,8 @@ import {
   KITTY_PROBE_SAMPLE,
   loadPiChafaConfig,
   makeDeferredImageSupport,
+  makeImagePipeline,
+  NATIVE_PROTOCOL_RULES,
   planImageLoad,
   probeChafa,
   readHostImageSettings,
@@ -683,7 +685,7 @@ describe("runChafaRender", () => {
       return { stdout: "\x1b[?25l\x1b[31m█\x1b[0m\n\x1b[?25h", stderr: "" };
     };
     expect(await runChafaRender("/tmp/a.png", render, { ...ctx, exec })).toEqual({
-      ok: true,
+      kind: "ok",
       lines: ["\x1b[31m█\x1b[0m"],
     });
   });
@@ -707,26 +709,20 @@ describe("runChafaRender", () => {
     expect(seen).toEqual([500, 60000]);
   });
 
-  it("reports aborts (error, code, and signal) as render aborted", async () => {
+  it("reports aborts (error, code, and signal) as a typed aborted outcome", async () => {
     const aborting: ExecFn = async () => {
       const error = new Error("The operation was aborted") as NodeJS.ErrnoException;
       error.name = "AbortError";
       throw error;
     };
-    expect(await runChafaRender("a.png", render, { ...ctx, exec: aborting })).toEqual({
-      ok: false,
-      reason: "render aborted",
-    });
+    expect(await runChafaRender("a.png", render, { ...ctx, exec: aborting })).toEqual({ kind: "aborted" });
 
     const codeAbort: ExecFn = async () => {
       const error = new Error("aborted") as NodeJS.ErrnoException;
       error.code = "ABORT_ERR";
       throw error;
     };
-    expect(await runChafaRender("a.png", render, { ...ctx, exec: codeAbort })).toEqual({
-      ok: false,
-      reason: "render aborted",
-    });
+    expect(await runChafaRender("a.png", render, { ...ctx, exec: codeAbort })).toEqual({ kind: "aborted" });
 
     const controller = new AbortController();
     const signalAbort: ExecFn = async () => {
@@ -739,7 +735,7 @@ describe("runChafaRender", () => {
         signal: controller.signal,
         exec: signalAbort,
       }),
-    ).toEqual({ ok: false, reason: "render aborted" });
+    ).toEqual({ kind: "aborted" });
   });
 
   it("reports killed/SIGTERM as a timeout", async () => {
@@ -752,8 +748,8 @@ describe("runChafaRender", () => {
       throw error;
     };
     const out = await runChafaRender("a.png", render, { ...ctx, exec: timedOut });
-    expect(out.ok).toBe(false);
-    if (!out.ok) {
+    expect(out.kind).toBe("failed");
+    if (out.kind === "failed") {
       expect(out.reason).toBe(
         "chafa timed out after 8000ms. Reduce the image size, lower cellWidth/maxRows, or raise timeoutMs in pi-chafa config.",
       );
@@ -770,7 +766,7 @@ describe("runChafaRender", () => {
       throw error;
     };
     expect(await runChafaRender("a.png", render, { ...ctx, exec: stderrExec })).toEqual({
-      ok: false,
+      kind: "failed",
       reason: "chafa exited with an error: chafa: cannot open file",
     });
 
@@ -780,8 +776,218 @@ describe("runChafaRender", () => {
       throw error;
     };
     expect(await runChafaRender("a.png", render, { ...ctx, exec: codeExec })).toEqual({
-      ok: false,
+      kind: "failed",
       reason: "chafa failed (code 7)",
+    });
+  });
+});
+
+describe("makeImagePipeline (Issue #144)", () => {
+  const geometry = { cols: 30, rows: 8 };
+
+  /** A resolved auto-mode snapshot; overrides narrow it per case. */
+  function support(overrides: Partial<ImageSupport> = {}): ImageSupport {
+    return {
+      mode: "auto",
+      nativeProtocol: "kitty",
+      tier: "native",
+      piChafa: { present: true, via: "settings" },
+      chafa: { state: "ok", binary: "chafa", version: { major: 1, minor: 18 } },
+      config: { ...DEFAULT_PI_CHAFA_SUBSET },
+      hostShowImages: true,
+      hostImageWidthCells: 60,
+      ...overrides,
+    };
+  }
+
+  const neverProbe = async (): Promise<KittyProbeVerdict> => "no-reply";
+  const liveSignal = new AbortController().signal;
+
+  /** Real 1×1 PNG bytes (the kitty probe sample is a valid PNG fixture). */
+  const pngBytes = async (): Promise<Uint8Array> =>
+    new Uint8Array(Buffer.from(KITTY_PROBE_SAMPLE, "base64"));
+
+  /** pi-tui encoder stand-in (no capability mutation needed). */
+  const encoder = (sequence = "\x1b_Gnative\x1b\\") =>
+    vi.fn(() => ({ sequence, columns: 7, rows: 3 }));
+
+  /** A chafa exec stand-in producing one row. */
+  const chafaExec = (rows: string[] = ["\x1b[31m██\x1b[0m"]) =>
+    vi.fn<ExecFn>(async () => ({ stdout: rows.join("\n"), stderr: "" }));
+
+  it("exposes the plan's attempts and runs them in order; a native ok stops the list", async () => {
+    const exec = chafaExec();
+    const pipeline = makeImagePipeline(support(), geometry, {
+      probeDecode: neverProbe,
+      signal: liveSignal,
+      readBytes: pngBytes,
+      renderImage: encoder(),
+      exec,
+    });
+    expect(pipeline.attempts).toEqual(["native", "chafa"]);
+
+    await expect(pipeline.render("/work/x.png")).resolves.toEqual({
+      kind: "ok",
+      renderer: "native",
+      lines: ["\x1b_Gnative\x1b\\", "", ""],
+      cols: geometry.cols,
+      rows: geometry.rows,
+    });
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("stamps the requested geometry on an ok outcome, not pi-tui's aspect-fitted result", async () => {
+    const pipeline = makeImagePipeline(support({ mode: "native", chafa: { state: "deferred" } }), geometry, {
+      probeDecode: neverProbe,
+      signal: liveSignal,
+      readBytes: pngBytes,
+      renderImage: encoder("SEQ"),
+    });
+    const out = await pipeline.render("/work/x.png");
+    expect(out).toEqual({
+      kind: "ok",
+      renderer: "native",
+      lines: ["SEQ", "", ""],
+      cols: 30,
+      rows: 8,
+    });
+  });
+
+  it("falls through native → chafa in order after a clean native failure", async () => {
+    const exec = chafaExec();
+    const pipeline = makeImagePipeline(support(), geometry, {
+      probeDecode: async () => "error", // native clean failure before any read
+      signal: liveSignal,
+      exec,
+    });
+    await expect(pipeline.render("/work/x.png")).resolves.toEqual({
+      kind: "ok",
+      renderer: "chafa",
+      lines: ["\x1b[31m██\x1b[0m"],
+      cols: geometry.cols,
+      rows: geometry.rows,
+    });
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns the last clean failure after the list", async () => {
+    const exec = vi.fn<ExecFn>(async () => {
+      const error = new Error("chafa died") as NodeJS.ErrnoException & { stderr?: string };
+      error.stderr = "chafa: boom";
+      throw error;
+    });
+    const pipeline = makeImagePipeline(support(), geometry, {
+      probeDecode: async () => "error",
+      signal: liveSignal,
+      exec,
+    });
+    await expect(pipeline.render("/work/x.png")).resolves.toEqual({
+      kind: "failed",
+      renderer: "chafa",
+      reason: "chafa exited with an error: chafa: boom",
+    });
+  });
+
+  it("stops on an aborted render: no later attempt runs", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const exec = chafaExec();
+    const readBytes = vi.fn(pngBytes);
+    const pipeline = makeImagePipeline(support(), geometry, {
+      probeDecode: neverProbe,
+      signal: controller.signal,
+      readBytes,
+      renderImage: encoder(),
+      exec,
+    });
+    await expect(pipeline.render("/work/x.png")).resolves.toEqual({ kind: "aborted" });
+    expect(readBytes).not.toHaveBeenCalled();
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("treats a throwing renderer as that renderer's hard failure and stops the list", async () => {
+    const exec = chafaExec();
+    const pipeline = makeImagePipeline(support(), geometry, {
+      probeDecode: neverProbe,
+      signal: liveSignal,
+      readBytes: pngBytes,
+      renderImage: vi.fn(() => {
+        throw new Error("encoder exploded");
+      }),
+      exec,
+    });
+    await expect(pipeline.render("/work/x.png")).resolves.toEqual({
+      kind: "failed",
+      renderer: "native",
+      reason: "encoder exploded",
+    });
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("never throws: a non-Error throw degrades to the generic reason", async () => {
+    const pipeline = makeImagePipeline(
+      support({ mode: "native", chafa: { state: "deferred" } }),
+      geometry,
+      {
+        probeDecode: neverProbe,
+        signal: liveSignal,
+        readBytes: pngBytes,
+        renderImage: vi.fn(() => {
+          throw "not an error";
+        }),
+      },
+    );
+    await expect(pipeline.render("/work/x.png")).resolves.toEqual({
+      kind: "failed",
+      renderer: "native",
+      reason: "unexpected renderer failure",
+    });
+  });
+
+  it("fails chafa cleanly when the snapshot is not ok, without spawning", async () => {
+    const exec = chafaExec();
+    const pipeline = makeImagePipeline(
+      support({ mode: "chafa", tier: "chafa", nativeProtocol: null, chafa: { state: "missing", detail: "nope" } }),
+      geometry,
+      { probeDecode: neverProbe, signal: liveSignal, exec },
+    );
+    expect(pipeline.attempts).toEqual(["chafa"]);
+    await expect(pipeline.render("/work/x.png")).resolves.toEqual({
+      kind: "failed",
+      renderer: "chafa",
+      reason: "chafa is not available",
+    });
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("fails the native attempt cleanly when the snapshot carries no protocol", async () => {
+    const snapshot = support({ mode: "native", chafa: { state: "deferred" } });
+    const pipeline = makeImagePipeline(snapshot, geometry, { probeDecode: neverProbe, signal: liveSignal });
+    expect(pipeline.attempts).toEqual(["native"]);
+    // Defense in depth: a snapshot whose plan says native but whose protocol
+    // is null must reject cleanly rather than render.
+    snapshot.nativeProtocol = null;
+    await expect(pipeline.render("/work/x.png")).resolves.toEqual({
+      kind: "failed",
+      renderer: "native",
+      reason: "native rendering is not available",
+    });
+  });
+
+  it("derives the protocol rules from the table (kitty five clauses, iterm2 the complements)", () => {
+    expect(NATIVE_PROTOCOL_RULES.kitty).toEqual({
+      decodeProbe: true,
+      requiresPng: true,
+      freshImageId: true,
+      layout: "sequence-first",
+      cacheable: false,
+    });
+    expect(NATIVE_PROTOCOL_RULES.iterm2).toEqual({
+      decodeProbe: false,
+      requiresPng: false,
+      freshImageId: false,
+      layout: "cursor-up-tail",
+      cacheable: true,
     });
   });
 });
@@ -1806,6 +2012,14 @@ describe("runNativeRender", () => {
     setCapabilities({ ...saved, images });
   };
 
+  /**
+   * pi-tui encoder stand-in for the cases where real protocol bytes are not
+   * the point (Issue #144): the layout contract is exercised without mutating
+   * pi-tui's capability cache.
+   */
+  const encoder = (sequence = "SEQ", columns = 7, rows = 3) =>
+    vi.fn(() => ({ sequence, columns, rows }));
+
   afterEach(() => {
     resetCapabilitiesCache();
   });
@@ -1817,8 +2031,8 @@ describe("runNativeRender", () => {
       protocol: "kitty",
       readBytes,
     });
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") return;
     const sequence = result.lines[0] ?? "";
     expect(sequence.startsWith("\x1b_G")).toBe(true);
     expect(sequence).toContain("a=T,f=100,q=2,C=1");
@@ -1848,8 +2062,8 @@ describe("runNativeRender", () => {
       protocol: "iterm2",
       readBytes,
     });
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") return;
     expect(result.rows).toBeGreaterThan(0);
     expect(result.cols).toBeGreaterThan(0);
     expect(readBytes).toHaveBeenCalledWith("/tmp/pixel.jpg");
@@ -1862,8 +2076,8 @@ describe("runNativeRender", () => {
       protocol: "iterm2",
       readBytes,
     });
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") return;
     expect(result.rows).toBeGreaterThan(0);
     expect(result.cols).toBeGreaterThan(0);
     expect(readBytes).toHaveBeenCalledWith("/tmp/pixel.webp");
@@ -1881,8 +2095,8 @@ describe("runNativeRender", () => {
         protocol: "kitty",
         readBytes,
       });
-      expect(result.ok).toBe(true);
-      if (!result.ok) return;
+      expect(result.kind).toBe("ok");
+      if (result.kind !== "ok") return;
       expect(result.lines[0]).toContain("a=T,f=100,q=2,C=1");
       expect(result.rows).toBeGreaterThan(0);
       expect(result.cols).toBeGreaterThan(0);
@@ -1891,7 +2105,6 @@ describe("runNativeRender", () => {
   });
 
   it("kitty degrades cleanly when convertToPng fails or returns null", async () => {
-    withProtocol("kitty");
     const readBytes = readBytesOf(JPEG_1X1_BASE64);
     const nullResult = await runNativeRender("/tmp/pixel.jpg", geometry, {
       protocol: "kitty",
@@ -1899,7 +2112,7 @@ describe("runNativeRender", () => {
       convertToPng: async () => null,
     });
     expect(nullResult).toEqual({
-      ok: false,
+      kind: "failed",
       reason: "could not convert image to PNG for Kitty rendering",
     });
 
@@ -1911,13 +2124,12 @@ describe("runNativeRender", () => {
       },
     });
     expect(throwResult).toEqual({
-      ok: false,
+      kind: "failed",
       reason: "could not convert image to PNG for Kitty rendering",
     });
   });
 
   it("kitty respects abort signal during conversion", async () => {
-    withProtocol("kitty");
     const controller = new AbortController();
     const readBytes = readBytesOf(JPEG_1X1_BASE64);
     const result = await runNativeRender("/tmp/pixel.jpg", geometry, {
@@ -1929,7 +2141,7 @@ describe("runNativeRender", () => {
         return { data: PNG_1X1_BASE64, mimeType: "image/png" };
       },
     });
-    expect(result).toEqual({ ok: false, reason: "render aborted" });
+    expect(result).toEqual({ kind: "aborted" });
   });
 
   it("iterm2: fillers are empty and the last line is moveUp + File= with inline=1 and width=", async () => {
@@ -1939,8 +2151,8 @@ describe("runNativeRender", () => {
       protocol: "iterm2",
       readBytes,
     });
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") return;
     expect(result.rows).toBeGreaterThan(1);
     expect(result.lines).toHaveLength(result.rows);
     for (const filler of result.lines.slice(0, result.rows - 1)) {
@@ -1956,7 +2168,6 @@ describe("runNativeRender", () => {
   });
 
   it("runNativeRender degrades when the decode probe reports an error (Issue #101)", async () => {
-    withProtocol("kitty");
     const readBytes = readBytesOf(PNG_1X1_BASE64);
     const result = await runNativeRender("/tmp/pixel.png", geometry, {
       protocol: "kitty",
@@ -1964,49 +2175,49 @@ describe("runNativeRender", () => {
       probeDecode: async () => "error",
     });
     expect(result).toEqual({
-      ok: false,
+      kind: "failed",
       reason: "terminal does not support kitty graphics",
     });
     expect(readBytes).not.toHaveBeenCalled();
   });
 
   it("runNativeRender proceeds on probe ok and no-reply, and tolerates a throwing probe (Issue #101)", async () => {
-    withProtocol("kitty");
     for (const verdict of ["ok", "no-reply"] as const) {
       const readBytes = readBytesOf(PNG_1X1_BASE64);
       const result = await runNativeRender("/tmp/pixel.png", geometry, {
         protocol: "kitty",
         readBytes,
         probeDecode: async () => verdict,
+        renderImage: encoder(),
       });
-      expect(result.ok).toBe(true);
+      expect(result.kind).toBe("ok");
     }
     const throwing = readBytesOf(PNG_1X1_BASE64);
     const result = await runNativeRender("/tmp/pixel.png", geometry, {
       protocol: "kitty",
       readBytes: throwing,
+      renderImage: encoder(),
       probeDecode: async () => {
         throw new Error("boom");
       },
     });
-    expect(result.ok).toBe(true);
+    expect(result.kind).toBe("ok");
   });
 
   it("runNativeRender only probes kitty renders, never iterm2 (Issue #101)", async () => {
-    withProtocol("iterm2");
     const probeDecode = vi.fn<() => Promise<KittyProbeVerdict>>(async () => "error");
     const readBytes = readBytesOf(PNG_1X1_BASE64);
     const result = await runNativeRender("/tmp/pixel.png", geometry, {
       protocol: "iterm2",
       readBytes,
       probeDecode,
+      renderImage: encoder(),
     });
-    expect(result.ok).toBe(true);
+    expect(result.kind).toBe("ok");
     expect(probeDecode).not.toHaveBeenCalled();
   });
 
   it("runNativeRender refuses to render on known no-image terminals even when a protocol is forced (Issue #100)", async () => {
-    withProtocol("kitty");
     const readBytes = readBytesOf(PNG_1X1_BASE64);
     const result = await runNativeRender("/tmp/pixel.png", geometry, {
       protocol: "kitty",
@@ -2014,14 +2225,13 @@ describe("runNativeRender", () => {
       env: { TERM_PROGRAM: "alacritty" },
     });
     expect(result).toEqual({
-      ok: false,
+      kind: "failed",
       reason: "terminal does not support image protocols",
     });
     expect(readBytes).not.toHaveBeenCalled();
   });
 
   it("runNativeRender refuses to render under multiplexer (#070)", async () => {
-    withProtocol("kitty");
     const readBytes = readBytesOf(PNG_1X1_BASE64);
     const result = await runNativeRender("/tmp/pixel.png", geometry, {
       protocol: "kitty",
@@ -2029,7 +2239,7 @@ describe("runNativeRender", () => {
       env: { TMUX: "1" },
     });
     expect(result).toEqual({
-      ok: false,
+      kind: "failed",
       reason: "image protocols disabled under tmux/screen",
     });
     expect(readBytes).not.toHaveBeenCalled();
@@ -2041,14 +2251,13 @@ describe("runNativeRender", () => {
     ["no extension", "/tmp/pixel"],
     ["leading dot", "/tmp/.pixel"],
   ])("%s → unsupported format, never reads", async (_label, path) => {
-    withProtocol("iterm2");
     const readBytes = vi.fn();
     const result = await runNativeRender(path, geometry, {
       protocol: "iterm2",
       readBytes,
     });
     expect(result).toEqual({
-      ok: false,
+      kind: "failed",
       reason: "native rendering does not support this image format",
     });
     expect(readBytes).not.toHaveBeenCalled();
@@ -2061,8 +2270,8 @@ describe("runNativeRender", () => {
       protocol: "iterm2",
       readBytes,
     });
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") return;
     expect(result.rows).toBeGreaterThan(0);
     expect(result.cols).toBeGreaterThan(0);
     expect(result.lines).toHaveLength(result.rows);
@@ -2070,7 +2279,6 @@ describe("runNativeRender", () => {
   });
 
   it("oversized read fails with the exact 4 MiB cap reason (D7)", async () => {
-    withProtocol("kitty");
     const readBytes = vi.fn(
       async () => new Uint8Array(IMAGE_NATIVE_MAX_BYTES + 1),
     );
@@ -2079,39 +2287,36 @@ describe("runNativeRender", () => {
       readBytes,
     });
     expect(result).toEqual({
-      ok: false,
+      kind: "failed",
       reason: "image exceeds the 4 MiB native rendering cap",
     });
     expect(readBytes).toHaveBeenCalledTimes(1);
   });
 
   it("a pre-aborted signal fails before any read", async () => {
-    withProtocol("kitty");
     const readBytes = vi.fn();
     const result = await runNativeRender("/tmp/pixel.png", geometry, {
       protocol: "kitty",
       signal: AbortSignal.abort(),
       readBytes,
     });
-    expect(result).toEqual({ ok: false, reason: "render aborted" });
+    expect(result).toEqual({ kind: "aborted" });
     expect(readBytes).not.toHaveBeenCalled();
   });
 
   it("garbage bytes under .png fail with could not read image dimensions", async () => {
-    withProtocol("kitty");
     const readBytes = vi.fn(async () => new Uint8Array([1, 2, 3, 4, 5]));
     const result = await runNativeRender("/tmp/pixel.png", geometry, {
       protocol: "kitty",
       readBytes,
     });
     expect(result).toEqual({
-      ok: false,
+      kind: "failed",
       reason: "could not read image dimensions",
     });
   });
 
   it("a rejecting readBytes becomes a clean failure, never a throw", async () => {
-    withProtocol("kitty");
     const readBytes = vi.fn(async () => {
       throw new Error("boom");
     });
@@ -2119,6 +2324,6 @@ describe("runNativeRender", () => {
       protocol: "kitty",
       readBytes,
     });
-    expect(result).toEqual({ ok: false, reason: "could not read the image file" });
+    expect(result).toEqual({ kind: "failed", reason: "could not read the image file" });
   });
 });

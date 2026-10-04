@@ -12,8 +12,8 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { IMAGE_ERROR_MAX_CHARS, IMAGE_NATIVE_MAX_BYTES, MAX_HIGHLIGHT_LINES } from "../constants";
-import { runNativeRender } from "../images";
+import { MAX_HIGHLIGHT_LINES } from "../constants";
+import type { RenderOutcome } from "../images";
 import type { ImageVerdict, ViewerFile } from "../types";
 import {
   computeRows,
@@ -33,7 +33,22 @@ import {
   stripAnsi,
   visibleTextWidth,
 } from "../viewer";
-import type { ImageAttempt, ImageRenderer } from "../viewer";
+import type { ImageRenderer } from "../viewer";
+
+// Stat-call counter (Issue #144): the loader must not stat a path the session
+// already statted. The mock delegates to the real fs; only the call count is
+// observed.
+const statLog = vi.hoisted(() => ({ calls: 0 }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    stat: ((...args: Parameters<typeof actual.stat>) => {
+      statLog.calls += 1;
+      return actual.stat(...args);
+    }) as typeof actual.stat,
+  };
+});
 
 // The highlighter input log (Issue #136): `restyleViewerFile` must re-run the
 // highlighter on exactly the retained `styleText`. The real highlighter stays
@@ -500,11 +515,8 @@ describe("loadFile", () => {
     return path;
   }
 
-  /** One planned attempt in the shape loadFile executes (Issue #143). */
-  const attempt = (renderer: "native" | "chafa", render: ImageRenderer): ImageAttempt => ({
-    renderer,
-    render,
-  });
+  /** A one-call image renderer stand-in (the loader makes exactly one call). */
+  const imageRenderer = (render: () => Promise<RenderOutcome>): ImageRenderer => render;
 
   /** The rendered verdict, failing the test when the load produced a card. */
   function rendered(file: ViewerFile): Extract<ImageVerdict, { kind: "rendered" }> {
@@ -524,18 +536,18 @@ describe("loadFile", () => {
     return verdict.failed;
   }
 
-  it("renders through the injected renderer on ok: chafa verdict, rows, geometry, message preserved", async () => {
+  it("maps an ok outcome to the rendered verdict: renderer, rows, captured geometry, message preserved", async () => {
     const path = await writePng("pic.png");
-    const renderer: ImageRenderer = async (_absPath, req) => ({
-      ok: true,
-      lines: ["\x1b[31m██\x1b[0m", "\x1b[32m░░\x1b[0m"],
-      cols: req.cols,
-      rows: req.rows,
-    });
     const card = await loadFile(path, "pic.png");
     const file = await loadFile(path, "pic.png", {
-      attempts: [attempt("chafa", renderer)],
       image: { cols: 80, rows: 24 },
+      imageRenderer: imageRenderer(async () => ({
+        kind: "ok",
+        renderer: "chafa",
+        lines: ["\x1b[31m██\x1b[0m", "\x1b[32m░░\x1b[0m"],
+        cols: 80,
+        rows: 24,
+      })),
     });
     expect(file.kind).toBe("image");
     const verdict = rendered(file);
@@ -548,12 +560,36 @@ describe("loadFile", () => {
     expect(file.mtimeMs).toBe(card.mtimeMs);
   });
 
-  it("falls back to the metadata card with a bounded failure when the renderer reports failure", async () => {
+  it("maps a native ok outcome's geometry verbatim: the pipeline already stamped the request", async () => {
+    const path = await writePng("native-ok.png");
+    const file = await loadFile(path, "native-ok.png", {
+      image: { cols: 60, rows: 20 },
+      // pi-tui's aspect-fitted geometry is the pipeline's business; the outcome
+      // carries the captured request and the loader keeps it as-is.
+      imageRenderer: imageRenderer(async () => ({
+        kind: "ok",
+        renderer: "native",
+        lines: ["\x1b]10;…\x1b\\"],
+        cols: 60,
+        rows: 20,
+      })),
+    });
+    const verdict = rendered(file);
+    expect(verdict.renderer).toBe("native");
+    expect(verdict.lines).toEqual(["\x1b]10;…\x1b\\"]);
+    expect(verdict.cols).toBe(60);
+    expect(verdict.rows).toBe(20);
+  });
+
+  it("maps a failed outcome to the metadata card with the bounded failure", async () => {
     const path = await writePng("sad.png");
-    const renderer: ImageRenderer = async () => ({ ok: false, reason: "x".repeat(500) });
     const file = await loadFile(path, "sad.png", {
-      attempts: [attempt("chafa", renderer)],
       image: { cols: 40, rows: 10 },
+      imageRenderer: imageRenderer(async () => ({
+        kind: "failed",
+        renderer: "chafa",
+        reason: "x".repeat(500),
+      })),
     });
     expect(file.kind).toBe("image");
     expect(file.imageVerdict?.kind).toBe("card");
@@ -562,32 +598,32 @@ describe("loadFile", () => {
     expect(failure.detail.length).toBeLessThanOrEqual(200);
   });
 
-  it("treats a throwing renderer as a failed render, never rejecting loadFile", async () => {
-    const path = await writePng("boom.png");
-    const file = await loadFile(path, "boom.png", {
-      attempts: [
-        attempt("chafa", async () => {
-          throw new Error("chafa exploded");
-        }),
-      ],
+  it("maps an aborted outcome to a card with NO failure (the load is discarded upstream)", async () => {
+    const path = await writePng("aborted.png");
+    const file = await loadFile(path, "aborted.png", {
       image: { cols: 40, rows: 10 },
+      imageRenderer: imageRenderer(async () => ({ kind: "aborted" })),
     });
     expect(file.kind).toBe("image");
-    expect(failed(file)).toEqual({ renderer: "chafa", detail: "chafa exploded" });
-
-    // A non-Error throw degrades to a generic bounded reason.
-    const stringThrow = await loadFile(path, "boom.png", {
-      attempts: [
-        attempt("chafa", async () => {
-          throw "not an error";
-        }),
-      ],
-      image: { cols: 40, rows: 10 },
-    });
-    expect(failed(stringThrow)).toEqual({ renderer: "chafa", detail: "unexpected renderer failure" });
+    // A supersession is not a renderer failure: no `failed` entry at all.
+    expect(file.imageVerdict).toEqual({ kind: "card" });
   });
 
-  it("keeps today's metadata card byte-for-byte when no attempts are injected", async () => {
+  it("treats a throwing renderer override as a failure-free card, never rejecting loadFile", async () => {
+    // The pipeline never throws by contract; an override that does must not
+    // reject the load (the defensive branch).
+    const path = await writePng("boom.png");
+    const file = await loadFile(path, "boom.png", {
+      image: { cols: 40, rows: 10 },
+      imageRenderer: async () => {
+        throw new Error("pipeline exploded");
+      },
+    });
+    expect(file.kind).toBe("image");
+    expect(file.imageVerdict).toEqual({ kind: "card" });
+  });
+
+  it("keeps today's metadata card byte-for-byte without a renderer", async () => {
     const path = await writePng("plain.png");
     const file = await loadFile(path, "plain.png");
     expect(file.kind).toBe("image");
@@ -603,222 +639,23 @@ describe("loadFile", () => {
     );
   });
 
-  // ── Image attempt executor (§12.2, Issue #143) ──
+  // ── Loader contract details (Issue #144) ──
 
-  describe("loadFile image attempt executor (§12.2, Issue #143)", () => {
-    it("renders through the native attempt on ok: native verdict, requested geometry, message preserved", async () => {
-      const path = await writePng("native-ok.png");
-      const card = await loadFile(path, "native-ok.png");
-      const native: ImageRenderer = async () => ({
-        ok: true,
-        lines: ["\x1b]10;…\x1b\\"],
-        // pi-tui's aspect-fitted geometry: the verdict must keep the REQUEST.
-        cols: 1,
-        rows: 1,
-      });
-      const file = await loadFile(path, "native-ok.png", {
-        attempts: [attempt("native", native)],
-        image: { cols: 60, rows: 20 },
-      });
-      expect(file.kind).toBe("image");
-      const verdict = rendered(file);
-      expect(verdict.renderer).toBe("native");
-      expect(verdict.lines).toEqual(["\x1b]10;…\x1b\\"]);
-      expect(verdict.cols).toBe(60);
-      expect(verdict.rows).toBe(20);
-      expect(file.lines).toEqual([]);
-      expect(file.message).toBe(card.message); // size + dimensions message intact
-      expect(file.sizeBytes).toBe(64);
-      expect(file.mtimeMs).toBe(card.mtimeMs);
-    });
-
-    it("calls the native attempt first and never the chafa attempt when native succeeds", async () => {
-      const path = await writePng("native-first.png");
-      const order: string[] = [];
-      const native: ImageRenderer = async () => {
-        order.push("native");
-        return { ok: true, lines: ["n"], cols: 1, rows: 1 };
-      };
-      const chafa: ImageRenderer = async () => {
-        order.push("chafa");
-        return { ok: true, lines: ["c"], cols: 1, rows: 1 };
-      };
-      const file = await loadFile(path, "native-first.png", {
-        attempts: [attempt("native", native), attempt("chafa", chafa)],
-        image: { cols: 40, rows: 10 },
-      });
-      expect(order).toEqual(["native"]);
-      const verdict = rendered(file);
-      expect(verdict.renderer).toBe("native");
-      expect(verdict.lines).toEqual(["n"]);
-    });
-
-    it("falls through native → chafa in order when native fails cleanly, landing on the chafa output", async () => {
-      const path = await writePng("native-fallback.png");
-      const order: string[] = [];
-      const native: ImageRenderer = async () => {
-        order.push("native");
-        return { ok: false, reason: "terminal protocol unsupported" };
-      };
-      const chafa: ImageRenderer = async (_absPath, req) => {
-        order.push("chafa");
-        return { ok: true, lines: ["\x1b[32m██\x1b[0m"], cols: req.cols, rows: req.rows };
-      };
-      const file = await loadFile(path, "native-fallback.png", {
-        attempts: [attempt("native", native), attempt("chafa", chafa)],
-        image: { cols: 30, rows: 8 },
-      });
-      expect(order).toEqual(["native", "chafa"]);
-      expect(file.kind).toBe("image");
-      const verdict = rendered(file);
-      expect(verdict.renderer).toBe("chafa");
-      expect(verdict.lines).toEqual(["\x1b[32m██\x1b[0m"]);
-      expect(verdict.cols).toBe(30);
-      expect(verdict.rows).toBe(8);
-    });
-
-    it("does not fall through to chafa when the native render was aborted (Issue #117)", async () => {
-      const path = await writePng("native-aborted.png");
-      let chafaCalled = false;
-      const file = await loadFile(path, "native-aborted.png", {
-        attempts: [
-          attempt("native", async () => ({ ok: false, reason: "render aborted" })),
-          attempt("chafa", async () => {
-            chafaCalled = true;
-            return { ok: true, lines: ["c"], cols: 1, rows: 1 };
-          }),
-        ],
-        image: { cols: 40, rows: 10 },
-      });
-      // A superseded load must not start a chafa render: its native attempt
-      // was aborted (load superseded), so the fallback would be pointless work
-      // against an already-aborted load signal (#117).
-      expect(chafaCalled).toBe(false);
-      expect(file.kind).toBe("image");
-      expect(failed(file)).toEqual({ renderer: "native", detail: "render aborted" });
-    });
-
-    it("runs no attempt when the geometry hint is absent", async () => {
+  describe("loadFile image loader contract (Issue #144)", () => {
+    it("runs no renderer when the geometry hint is absent", async () => {
       const path = await writePng("no-geometry.png");
       let called = false;
       const file = await loadFile(path, "no-geometry.png", {
-        attempts: [
-          attempt("chafa", async () => {
-            called = true;
-            return { ok: true, lines: ["unused"], cols: 1, rows: 1 };
-          }),
-        ],
+        imageRenderer: async () => {
+          called = true;
+          return { kind: "ok", renderer: "chafa", lines: ["unused"], cols: 1, rows: 1 };
+        },
       });
       expect(called).toBe(false);
       expect(file.imageVerdict).toEqual({ kind: "card" });
     });
 
-    it("stops the attempt list after an aborted chafa attempt", async () => {
-      const path = await writePng("chafa-aborted.png");
-      let laterCalled = false;
-      const file = await loadFile(path, "chafa-aborted.png", {
-        attempts: [
-          attempt("chafa", async () => ({ ok: false, reason: "render aborted" })),
-          attempt("chafa", async () => {
-            laterCalled = true;
-            return { ok: true, lines: ["unused"], cols: 1, rows: 1 };
-          }),
-        ],
-        image: { cols: 40, rows: 10 },
-      });
-      expect(laterCalled).toBe(false);
-      expect(failed(file)).toEqual({ renderer: "chafa", detail: "render aborted" });
-    });
-
-    it("falls back to chafa under auto without error, and keeps native reason on card under strict native", async () => {
-      const path = await writePng("over-cap.png");
-      const native: ImageRenderer = (absPath, req) =>
-        runNativeRender(absPath, req, {
-          protocol: "kitty",
-          readBytes: async () => new Uint8Array(IMAGE_NATIVE_MAX_BYTES + 1),
-        });
-      const chafa: ImageRenderer = async (_absPath, req) => ({
-        ok: true,
-        lines: ["\x1b[32m██\x1b[0m"],
-        cols: req.cols,
-        rows: req.rows,
-      });
-      // mode auto: the plan includes the chafa fallback → chafa renders cleanly.
-      const auto = await loadFile(path, "over-cap.png", {
-        attempts: [attempt("native", native), attempt("chafa", chafa)],
-        image: { cols: 30, rows: 8 },
-      });
-      expect(rendered(auto).renderer).toBe("chafa");
-      // mode native: the plan has no chafa attempt → the card carries the
-      // native failure reason.
-      const strict = await loadFile(path, "over-cap.png", {
-        attempts: [attempt("native", native)],
-        image: { cols: 30, rows: 8 },
-      });
-      expect(failed(strict)).toEqual({
-        renderer: "native",
-        detail: "image exceeds the 4 MiB native rendering cap",
-      });
-    });
-
-    it("returns a metadata card with the native reason when native fails cleanly and no chafa attempt exists", async () => {
-      const path = await writePng("native-only-fail.png");
-      const file = await loadFile(path, "native-only-fail.png", {
-        attempts: [attempt("native", async () => ({ ok: false, reason: "no kitty graphics support" }))],
-        image: { cols: 40, rows: 10 },
-      });
-      expect(file.kind).toBe("image");
-      expect(file.imageVerdict?.kind).toBe("card");
-      expect(failed(file)).toEqual({ renderer: "native", detail: "no kitty graphics support" });
-    });
-
-    it("carries the chafa reason (not the native one) when both attempts fail cleanly", async () => {
-      const path = await writePng("both-fail.png");
-      const file = await loadFile(path, "both-fail.png", {
-        attempts: [
-          attempt("native", async () => ({ ok: false, reason: "native reason" })),
-          attempt("chafa", async () => ({ ok: false, reason: "chafa reason" })),
-        ],
-        image: { cols: 40, rows: 10 },
-      });
-      expect(file.kind).toBe("image");
-      // The LAST clean failure is the card's failure.
-      expect(failed(file)).toEqual({ renderer: "chafa", detail: "chafa reason" });
-    });
-
-    it("treats a throwing native attempt as a hard failure: card with the message, chafa never called", async () => {
-      const path = await writePng("native-throw.png");
-      let chafaCalled = false;
-      const file = await loadFile(path, "native-throw.png", {
-        attempts: [
-          attempt("native", async () => {
-            throw new Error("native renderer exploded");
-          }),
-          attempt("chafa", async () => {
-            chafaCalled = true;
-            return { ok: true, lines: ["unused"], cols: 1, rows: 1 };
-          }),
-        ],
-        image: { cols: 40, rows: 10 },
-      });
-      expect(file.kind).toBe("image");
-      expect(failed(file)).toEqual({ renderer: "native", detail: "native renderer exploded" });
-      expect(chafaCalled).toBe(false);
-    });
-
-    it("bounds a long native clean-failure reason to IMAGE_ERROR_MAX_CHARS", async () => {
-      const path = await writePng("native-long.png");
-      const file = await loadFile(path, "native-long.png", {
-        attempts: [attempt("native", async () => ({ ok: false, reason: "x".repeat(300) }))],
-        image: { cols: 40, rows: 10 },
-      });
-      expect(file.kind).toBe("image");
-      const failure = failed(file);
-      expect(failure.detail).toBe("x".repeat(IMAGE_ERROR_MAX_CHARS - 1) + "\u2026");
-      expect(failure.detail.length).toBeLessThanOrEqual(IMAGE_ERROR_MAX_CHARS);
-    });
-
-    it("produces the plain metadata card without a failure when only image opts are given (no attempts)", async () => {
+    it("produces the plain metadata card without a failure when only image opts are given (no renderer)", async () => {
       const path = await writePng("no-seam.png");
       const bare = await loadFile(path, "no-seam.png");
       const file = await loadFile(path, "no-seam.png", { image: { cols: 40, rows: 10 } });
@@ -828,6 +665,38 @@ describe("loadFile", () => {
       // Identical shape to the no-opts metadata card.
       expect({ ...file, mtimeMs: 0 }).toEqual({ ...bare, mtimeMs: 0 });
     });
+
+    it("performs no second stat when the session supplies the record", async () => {
+      const path = await writePng("stat-handoff.png");
+      statLog.calls = 0;
+      const file = await loadFile(path, "stat-handoff.png", {
+        stat: { isFile: true, sizeBytes: 64, mtimeMs: 1234 },
+      });
+      expect(statLog.calls).toBe(0);
+      expect(file.kind).toBe("image");
+      expect(file.sizeBytes).toBe(64);
+      expect(file.mtimeMs).toBe(1234);
+      expect(file.message).toContain("64 B");
+    });
+
+    it("falls back to its own stat when no record is supplied", async () => {
+      const path = await writePng("own-stat.png");
+      statLog.calls = 0;
+      const file = await loadFile(path, "own-stat.png");
+      expect(statLog.calls).toBe(1);
+      expect(file.sizeBytes).toBe(64);
+    });
+
+    it("uses the supplied stat's isFile instead of touching the disk", async () => {
+      const path = await writePng("not-a-file.png");
+      statLog.calls = 0;
+      const file = await loadFile(path, "not-a-file.png", {
+        stat: { isFile: false, sizeBytes: 1, mtimeMs: 1 },
+      });
+      expect(file.kind).toBe("error");
+      expect(file.message).toBe("not a regular file");
+      expect(statLog.calls).toBe(0);
+    });
   });
 
   it("ignores the image params on markdown files (rawText regression)", async () => {
@@ -835,7 +704,7 @@ describe("loadFile", () => {
     const content = "# Title\n\t- tab item\n";
     await writeFile(path, content);
     const file = await loadFile(path, "doc.md", {
-      attempts: [attempt("chafa", async () => ({ ok: true, lines: ["unused"], cols: 1, rows: 1 }))],
+      imageRenderer: async () => ({ kind: "ok", renderer: "chafa", lines: ["unused"], cols: 1, rows: 1 }),
       image: { cols: 80, rows: 24 },
     });
     expect(file.kind).toBe("text");

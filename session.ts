@@ -2,9 +2,10 @@
  * Navigator session module (Issue #140): the overlay's data lifecycle —
  * poll timer and backoff, tree collection and stamping (`signature`,
  * `treeProbe`, `lastStampedProbe`), the git read, the tree truncation
- * warning, the per-file viewer cache with its image seams and per-load abort
- * ownership (`viewerCache`, `beginImageLoad`), image-support resolution, and
- * the refresh-error dedupe.
+ * warning, the per-file viewer cache with the image pipeline binding and
+ * per-load abort ownership (`viewerCache`, `beginImageLoad`), the reflow
+ * clock (`imageViewChanged`), image-support resolution, and the refresh-error
+ * dedupe.
  *
  * This is a pure move of the `ctx.ui.custom` closure that used to live in
  * `runNavigator` (index.ts): same behavior, same policy comments (Issues
@@ -20,6 +21,7 @@ import { join } from "node:path";
 import {
   IMAGE_EXTENSIONS,
   IMAGE_NATIVE_CACHE_MAX_CHARS,
+  IMAGE_RESIZE_DEBOUNCE_MS,
   MAX_FS_ENTRIES,
   MAX_POLL_INTERVAL_MS,
   MAX_VIEWER_CACHE_ENTRIES,
@@ -38,10 +40,9 @@ import {
 } from "./git";
 import {
   makeDeferredImageSupport,
-  planImageLoad,
+  makeImagePipeline,
+  NATIVE_PROTOCOL_RULES,
   resolveImageSupport,
-  runChafaRender,
-  runNativeRender,
   type ImageSupport,
   type ImageSupportPaths,
   type KittyProbeVerdict,
@@ -64,7 +65,7 @@ import {
   type TreeEntry,
 } from "./tree";
 import type { FileNode, GitState, OpenTarget, ViewerFile } from "./types";
-import { extOf, restyleViewerFile, type ImageAttempt, type ImageRenderer, type LoadFileOptions } from "./viewer";
+import { extOf, restyleViewerFile, sameTarget, type LoadFileOptions } from "./viewer";
 
 /**
  * One-shot file-tree truncation warning (Issue #108): the three tree walks —
@@ -106,11 +107,14 @@ export function touchCacheEntry<K, V>(cache: Map<K, V>, key: K): void {
  * nothing once the terminal has dropped the image — which the `i` card
  * roundtrip, a reopen and a support reflow all cause — so kitty native renders
  * are never retained: every open re-renders through pi-tui with a fresh id.
- * iTerm2 renders inline their whole payload and carry no id state, so they
- * stay cacheable (still bounded by `IMAGE_NATIVE_CACHE_MAX_CHARS`).
+ * Since Issue #144 the policy is the protocol table's `cacheable` column:
+ * kitty is false, iTerm2 true (it renders its whole payload inline and carries
+ * no id state), and a non-native render or a null protocol is trivially
+ * cacheable.
  */
 export function isCacheableRender(useNative: boolean, protocol: NativeProtocol | null): boolean {
-  return !(useNative && protocol === "kitty");
+  if (!useNative || protocol === null) return true;
+  return NATIVE_PROTOCOL_RULES[protocol].cacheable;
 }
 
 /**
@@ -191,61 +195,25 @@ export function createViewerCache(maxEntries: number): ViewerCache {
 }
 
 /**
- * One immutable-snapshot-bound pair of image render seams (Issue #116 fix 1).
- *
- * The loader captures `const s = imageSupport` at load start and derives the
- * attempt list and variant from it; the seams must gate and render from THAT
- * same snapshot. Re-reading the live `imageSupport` mid-load let a
- * `setImageSupport` that lands between the capture and the seam call make the
- * seam disagree with the loader that chose it (e.g. a native-bound load
- * answering "native rendering is not available" and silently degrading to
- * chafa through viewer.ts's fallback).
- *
- * The seams own no controller: they forward the OWNING load's signal (Issue
- * #117 follow-up), so a render can only be aborted by its own load being
- * superseded or disposed — never by another load's fallback.
+ * Support fingerprint for reflow arming (Issue #144; moved from navigator):
+ * the knobs that change what a render looks like (effective tier, native
+ * protocol, host width preference, chafa knobs). A fingerprint change on an
+ * already-rendered image arms a debounced reflow; loading uses the variant
+ * key for the cache.
  */
-export function makeImageSeams(opts: {
-  /** The ONE snapshot this load renders under (Issue #116). */
-  support: ImageSupport;
-  probeDecode: () => Promise<KittyProbeVerdict>;
-  /** The owning load's abort signal (Issue #117 follow-up). */
-  signal: AbortSignal;
-}): { renderNativeImage: ImageRenderer; renderImage: ImageRenderer } {
-  /** Injected render seam (viewer.ts ImageRenderer contract): the chafa
-   * availability check plus the owning load's signal, so a superseded load's
-   * child never outlives the view. The result carries the requested geometry
-   * back so the viewer records it on the chafa verdict. */
-  const renderImage: ImageRenderer = async (absPath, req) => {
-    const support = opts.support;
-    if (support.chafa.state !== "ok") return { ok: false, reason: "chafa is not available" };
-    const out = await runChafaRender(absPath, req, {
-      binary: support.chafa.binary,
-      config: support.config,
-      signal: opts.signal,
-    });
-    return out.ok ? { ok: true, lines: out.lines, cols: req.cols, rows: req.rows } : out;
-  };
-
-  /** Injected native render seam (same ImageRenderer contract and load-bound
-   * signal as renderImage): keeps only the structural protocol guard — a load
-   * whose plan excluded native cannot reach here (Issue #143 dropped the
-   * redundant tier re-gate), but a snapshot without a protocol still rejects
-   * cleanly instead of rendering. runNativeRender never throws; every
-   * failure is a bounded {ok:false}. */
-  const renderNativeImage: ImageRenderer = async (absPath, req) => {
-    const support = opts.support;
-    if (support.nativeProtocol === null) {
-      return { ok: false, reason: "native rendering is not available" };
-    }
-    return runNativeRender(absPath, req, {
-      protocol: support.nativeProtocol,
-      signal: opts.signal,
-      probeDecode: opts.probeDecode,
-    });
-  };
-
-  return { renderNativeImage, renderImage };
+function supportFingerprint(s: ImageSupport): string {
+  return [
+    s.tier,
+    s.nativeProtocol ?? "",
+    String(s.hostImageWidthCells),
+    s.config.binaryPath ?? "",
+    s.config.colors,
+    s.config.symbolsSet,
+    s.config.dither,
+    String(s.config.timeoutMs),
+    String(s.config.cellWidth),
+    String(s.config.maxRows),
+  ].join(":");
 }
 
 /**
@@ -272,6 +240,20 @@ export interface OverlaySink {
    * the displayed one (the #040 TOCTOU guard, structural now).
    */
   checkOpenTarget(target: OpenTarget, mtimeMs: number | null): boolean;
+  /**
+   * The DISPLAYED image view's shape (Issue #144): null when nothing is
+   * displayed or the file is not `kind: "image"`. `rendered` is a rendered
+   * verdict carrying rows; `asCard` is the overlay's session-only `i` toggle
+   * that hides those rows.
+   */
+  getImageView(): { rendered: boolean; asCard: boolean } | null;
+  /**
+   * Re-open the DISPLAYED file target through the normal `openTarget` path,
+   * keeping scroll (Issue #144). No-op for commit and absent targets: the
+   * reflow clock validates before calling, and a targetless request must not
+   * become a load.
+   */
+  reflowOpenImage(): void;
   requestRender(): void;
 }
 
@@ -311,6 +293,14 @@ export interface SessionDeps {
 export interface NavigatorSession {
   loadFile(relPath: string, opts?: LoadFileOptions): Promise<ViewerFile>;
   loadCommit(shortHash: string): Promise<ViewerFile>;
+  /**
+   * Pane geometry drifted for a displayed image (Issue #144): debounce, then
+   * re-validate at fire time and command the overlay to re-open its displayed
+   * file through `reflowOpenImage`. The overlay only reports the drift; the
+   * session owns the clock, the re-arm-while-loading rule and the arming on a
+   * landed support snapshot.
+   */
+  imageViewChanged(): void;
   start(): void;
   refresh(): void;
   onActivity(): void;
@@ -340,6 +330,23 @@ export function createSession(deps: SessionDeps): NavigatorSession {
   let supportResolving = false;
   let currentImageLoad: AbortController | null = null;
 
+  // Reflow clock (Issue #144): the session owns the debounce, the
+  // re-arm-while-loading rule and the support-landing arming; the overlay
+  // only detects pane-geometry drift (imageViewChanged) and executes the
+  // re-open. `lastSupportFingerprint` is null until the first push, which
+  // counts as changed (the deferred→resolved upgrade).
+  let reflowTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingReflow: OpenTarget | null = null;
+  let lastSupportFingerprint: string | null = null;
+  /**
+   * The in-flight IMAGE load's target, or null when none is (a commit load
+   * sets it to null, matching the overlay's viewTarget semantics: a commit is
+   * never a reflow target). A landed support snapshot arms against this
+   * before the displayed target, so the FIRST image load of a session still
+   * upgrades when support resolves mid-load (Issue #116 fix 3).
+   */
+  let inFlightImageTarget: OpenTarget | null = null;
+
   // One-shot tree truncation warning (Issue #108): the tree walks share a
   // single MAX_FS_ENTRIES cap; the first truncating walk warns immediately.
   // Same injected notifier instance as index.ts's, so the warning dedupe is
@@ -349,15 +356,89 @@ export function createSession(deps: SessionDeps): NavigatorSession {
   /**
    * Per-load abort ownership (Issue #117 follow-up): every viewer load owns
    * one controller, and starting a load aborts the previous load's render —
-   * the ONLY place one load aborts another load's work. The seams receive
-   * their own load's signal, so a superseded load can never abort a newer
+   * the ONLY place one load aborts another load's work. The pipeline receives
+   * its own load's signal, so a superseded load can never abort a newer
    * load's render (the #117 cascade).
+   *
+   * Completing a load releases the controller (Issue #144): a non-null
+   * `currentImageLoad` therefore means exactly "a load is in flight", which
+   * is the signal the reflow clock re-arms on. Overlapping loads release only
+   * their own controller.
    */
   const beginImageLoad = (): AbortController => {
     currentImageLoad?.abort();
     const controller = new AbortController();
     currentImageLoad = controller;
     return controller;
+  };
+
+  const endImageLoad = (controller: AbortController): void => {
+    if (currentImageLoad === controller) currentImageLoad = null;
+  };
+
+  /**
+   * Arm the debounced reflow once (Issue #144): one timer at a time, so a
+   * pending reflow absorbs every later trigger until it fires.
+   */
+  const armReflow = (target: OpenTarget): void => {
+    if (closed || reflowTimer !== null) return;
+    pendingReflow = target;
+    reflowTimer = setTimeout(() => {
+      reflowTimer = null;
+      const pending = pendingReflow;
+      pendingReflow = null;
+      if (closed || pending === null) return;
+      // Issue #116 fix 4: never fire a reflow while a load is in flight —
+      // re-arm the debounce instead. Firing would supersede the pending
+      // load's controller and discard its work.
+      if (currentImageLoad !== null) {
+        armReflow(pending);
+        return;
+      }
+      // Re-validate at fire time: the displayed target must still be the one
+      // captured, and the view must still be an image.
+      const displayed = deps.sink.getOpenTarget();
+      if (displayed === null || !sameTarget(displayed, pending)) return;
+      if (deps.sink.getImageView() === null) return;
+      deps.sink.reflowOpenImage();
+    }, IMAGE_RESIZE_DEBOUNCE_MS);
+  };
+
+  /**
+   * Reflow arming on a landed support snapshot (Issue #144; moved from
+   * navigator.setImageSupport). The target is the session's own in-flight
+   * image target before the displayed one, so a support landing while the
+   * first image load is still pending arms the upgrade. A carded view never
+   * arms; an already-rendered displayed image arms only on a fingerprint
+   * change.
+   */
+  const armReflowOnSupport = (support: ImageSupport): void => {
+    const fingerprint = supportFingerprint(support);
+    const changed = fingerprint !== lastSupportFingerprint;
+    lastSupportFingerprint = fingerprint;
+    if (closed || support.tier === "none") return;
+    const target = inFlightImageTarget ?? deps.sink.getOpenTarget();
+    if (target === null || target.kind !== "file" || !IMAGE_EXTENSIONS.has(extOf(target.relPath))) {
+      return;
+    }
+    const view = deps.sink.getImageView();
+    if (view !== null && view.asCard) return;
+    const displayed = deps.sink.getOpenTarget();
+    const viewIsRendered =
+      view !== null && view.rendered && displayed !== null && sameTarget(displayed, target);
+    if (!viewIsRendered || changed) armReflow(target);
+  };
+
+  /**
+   * Pane geometry drifted for the displayed image (the overlay reported it):
+   * capture the currently displayed target and debounce. No-op while no tier
+   * exists (nothing can render) or while a reflow is already pending.
+   */
+  const imageViewChanged = (): void => {
+    if (closed || imageSupport.tier === "none") return;
+    const target = deps.sink.getOpenTarget();
+    if (target === null) return;
+    armReflow(target);
   };
 
   const scheduleRender = (): void => {
@@ -393,81 +474,95 @@ export function createSession(deps: SessionDeps): NavigatorSession {
     // Issue #117 follow-up: every load owns one controller and supersedes
     // the previous load's render — including a cache hit, a text file, or
     // a failed stat, so a stale chafa child or native render never
-    // outlives the view that requested it.
+    // outlives the view that requested it. Issue #144: the load also
+    // publishes its target while in flight (the reflow arming reads it) and
+    // releases the controller on completion, so a non-null `currentImageLoad`
+    // means exactly "a load is running".
     const loadAbort = beginImageLoad();
-    const absPath = join(cwd, relPath);
-    // Issue #136: the style key this load runs under, captured once per load.
-    const styleKey = deps.styleKey?.();
-    let mtimeMs: number;
+    const inFlightTarget: OpenTarget = { kind: "file", relPath };
+    inFlightImageTarget = inFlightTarget;
     try {
-      mtimeMs = (await stat(absPath)).mtimeMs;
-    } catch {
-      // Stat failed (deleted/permissions): let loadFile produce the error
-      // card; drop any stale cache entry for this path.
-      viewerCache.drop(relPath);
-      return deps.loadFile(absPath, relPath);
-    }
-    const image = opts?.image;
-    const isImage = IMAGE_EXTENSIONS.has(extOf(relPath));
-    const s = imageSupport;
-    // One decision per load (Issue #143): the snapshot + pane geometry plan
-    // the renderer attempts ONCE; the variant, cacheability and seams below
-    // all derive from that same list. Native first; chafa when the tier says
-    // so or as auto's per-file fallback (spec §7.1, §7.3, D5).
-    const attempts = isImage && image !== undefined ? planImageLoad(s, image) : [];
-    const variant =
-      attempts.includes("native") && image !== undefined
-        ? `native:${s.nativeProtocol}:${image.cols}x${image.rows}`
-        : attempts.length > 0 && image !== undefined
-          ? imageVariant(image, s)
-          : "";
-    const cacheable = isCacheableRender(attempts.includes("native"), s.nativeProtocol);
-    const cached = viewerCache.lookup(relPath, { cacheable, mtimeMs, variant });
-    if (cached) {
-      // Issue #136 self-heal on a hit: stale syntax lines are re-highlighted
-      // from the retained source under the current key. A theme switch thus
-      // costs one re-highlight per file actually reopened — never a re-read.
-      // The entry is not dropped or re-read; a restyled object is stored back
-      // (which also refreshes LRU recency) and returned. Without a key source
-      // (harness-only) there is no staleness notion: serve as stored.
-      if (deps.styleKey === undefined) return cached;
-      const restyled = restyleViewerFile(cached, styleKey ?? "");
-      if (restyled !== cached) {
-        viewerCache.store(relPath, { cacheable, variant, file: restyled });
-        return restyled;
+      const absPath = join(cwd, relPath);
+      // Issue #136: the style key this load runs under, captured once per load.
+      const styleKey = deps.styleKey?.();
+      let statInfo: { isFile: boolean; sizeBytes: number; mtimeMs: number };
+      try {
+        const info = await stat(absPath);
+        // One stat per load (Issue #144): the loader consumes this record
+        // instead of statting the same path again.
+        statInfo = { isFile: info.isFile(), sizeBytes: info.size, mtimeMs: info.mtimeMs };
+      } catch {
+        // Stat failed (deleted/permissions): let loadFile produce the error
+        // card; drop any stale cache entry for this path.
+        viewerCache.drop(relPath);
+        return deps.loadFile(absPath, relPath);
       }
-      return cached;
-    }
-    let file: ViewerFile;
-    if (attempts.length > 0 && image !== undefined) {
-      // The seams render under the ONE snapshot captured at load start
-      // (Issue #116 fix 1): a mid-load setImageSupport cannot make them
-      // disagree with the plan made above. The plan already ordered the
-      // renderers, so binding is a pure name→seam map (Issue #143).
-      const seams = makeImageSeams({
-        support: s,
-        probeDecode: deps.kittyProbe,
-        signal: loadAbort.signal,
+      const image = opts?.image;
+      const isImage = IMAGE_EXTENSIONS.has(extOf(relPath));
+      const s = imageSupport;
+      // One decision per load (Issue #144): the snapshot + pane geometry
+      // build ONE pipeline up front; its plan supplies the attempts, and the
+      // variant, cacheability and renderer below all derive from that same
+      // plan. Native first; chafa when the tier says so or as auto's
+      // per-file fallback (spec §7.1, §7.3, D5).
+      const pipeline =
+        isImage && image !== undefined
+          ? makeImagePipeline(s, image, { probeDecode: deps.kittyProbe, signal: loadAbort.signal })
+          : null;
+      const attempts = pipeline?.attempts ?? [];
+      const variant =
+        attempts.includes("native") && image !== undefined
+          ? `native:${s.nativeProtocol}:${image.cols}x${image.rows}`
+          : attempts.length > 0 && image !== undefined
+            ? imageVariant(image, s)
+            : "";
+      const cacheable = isCacheableRender(attempts.includes("native"), s.nativeProtocol);
+      const cached = viewerCache.lookup(relPath, {
+        cacheable,
+        mtimeMs: statInfo.mtimeMs,
+        variant,
       });
-      const boundAttempts: ImageAttempt[] = attempts.map((renderer) => ({
-        renderer,
-        render: renderer === "native" ? seams.renderNativeImage : seams.renderImage,
-      }));
-      file = await deps.loadFile(absPath, relPath, {
-        image,
-        attempts: boundAttempts,
-        ...(styleKey !== undefined ? { styleKey } : {}),
-      });
-    } else if (styleKey !== undefined) {
-      file = await deps.loadFile(absPath, relPath, { styleKey });
-    } else {
-      file = await deps.loadFile(absPath, relPath);
+      if (cached) {
+        // Issue #136 self-heal on a hit: stale syntax lines are re-highlighted
+        // from the retained source under the current key. A theme switch thus
+        // costs one re-highlight per file actually reopened — never a re-read.
+        // The entry is not dropped or re-read; a restyled object is stored back
+        // (which also refreshes LRU recency) and returned. Without a key source
+        // (harness-only) there is no staleness notion: serve as stored.
+        if (deps.styleKey === undefined) return cached;
+        const restyled = restyleViewerFile(cached, styleKey ?? "");
+        if (restyled !== cached) {
+          viewerCache.store(relPath, { cacheable, variant, file: restyled });
+          return restyled;
+        }
+        return cached;
+      }
+      let file: ViewerFile;
+      if (pipeline !== null && attempts.length > 0 && image !== undefined) {
+        // The pipeline renders under the ONE snapshot captured at load start
+        // (Issue #116 fix 1): a mid-load setImageSupport cannot make it
+        // disagree with the plan made above. viewer.ts consumes one typed
+        // outcome — the abort string is gone (Issue #144).
+        file = await deps.loadFile(absPath, relPath, {
+          image,
+          imageRenderer: pipeline.render,
+          stat: statInfo,
+          ...(styleKey !== undefined ? { styleKey } : {}),
+        });
+      } else if (styleKey !== undefined) {
+        file = await deps.loadFile(absPath, relPath, { stat: statInfo, styleKey });
+      } else {
+        file = await deps.loadFile(absPath, relPath, { stat: statInfo });
+      }
+      // Retention/eviction policy lives in createViewerCache (#109, #112,
+      // D7): cacheable gate, mtime requirement, native over-cap carve-out,
+      // and LRU eviction at capacity.
+      viewerCache.store(relPath, { cacheable, variant, file });
+      return file;
+    } finally {
+      if (inFlightImageTarget === inFlightTarget) inFlightImageTarget = null;
+      endImageLoad(loadAbort);
     }
-    // Retention/eviction policy lives in createViewerCache (#109, #112,
-    // D7): cacheable gate, mtime requirement, native over-cap carve-out,
-    // and LRU eviction at capacity.
-    viewerCache.store(relPath, { cacheable, variant, file });
-    return file;
   };
 
   // v3 commit-diff loader: readCommitDiff returns *plain* diff lines plus
@@ -476,28 +571,35 @@ export function createSession(deps: SessionDeps): NavigatorSession {
   // `git show` per open is cheap.
   const loadCommit = async (shortHash: string): Promise<ViewerFile> => {
     // A commit diff is also a viewer load: opening one supersedes any
-    // in-flight image render (Issue #117 follow-up).
-    beginImageLoad();
-    const diff = await readCommitDiff(cwd, shortHash);
-    // Issue #120: the commit message rides above the diff, `git show`
-    // style — subject bold, body plain, one blank separator line when a
-    // diff body follows. composeDiffLines lives in diff.ts so the message
-    // assembly joins styleDiffLines under the same theme-free split.
-    const lines = composeDiffLines(diff, deps.theme);
-    return {
-      kind: "diff",
-      relPath: `commit:${diff.shortHash}`,
-      commitHash: diff.shortHash,
-      parents: diff.parents,
-      lineCount: diff.lines.length,
-      lines,
-      notice: diff.notice,
-      // Issue #141: retain the plain styling source and the key it was styled
-      // under, so invalidate() can recompose the diff under a new theme
-      // without another `git show` — the #136 pattern for the diff pipeline.
-      styleDiff: { message: diff.message, lines: diff.lines },
-      styleKey: deps.styleKey?.(),
-    };
+    // in-flight image render (Issue #117 follow-up). No image target is the
+    // in-flight one while a commit loads (Issue #144), matching the overlay's
+    // viewTarget semantics: a commit is never a reflow target.
+    const loadAbort = beginImageLoad();
+    inFlightImageTarget = null;
+    try {
+      const diff = await readCommitDiff(cwd, shortHash);
+      // Issue #120: the commit message rides above the diff, `git show`
+      // style — subject bold, body plain, one blank separator line when a
+      // diff body follows. composeDiffLines lives in diff.ts so the message
+      // assembly joins styleDiffLines under the same theme-free split.
+      const lines = composeDiffLines(diff, deps.theme);
+      return {
+        kind: "diff",
+        relPath: `commit:${diff.shortHash}`,
+        commitHash: diff.shortHash,
+        parents: diff.parents,
+        lineCount: diff.lines.length,
+        lines,
+        notice: diff.notice,
+        // Issue #141: retain the plain styling source and the key it was styled
+        // under, so invalidate() can recompose the diff under a new theme
+        // without another `git show` — the #136 pattern for the diff pipeline.
+        styleDiff: { message: diff.message, lines: diff.lines },
+        styleKey: deps.styleKey?.(),
+      };
+    } finally {
+      endImageLoad(loadAbort);
+    }
   };
 
   /**
@@ -521,6 +623,9 @@ export function createSession(deps: SessionDeps): NavigatorSession {
       if (closed) return;
       imageSupport = support;
       deps.sink.setImageSupport(support);
+      // Support landing (Issue #144): arm the upgrade reflow against the
+      // in-flight image target before the displayed one (#116 fix 3).
+      armReflowOnSupport(support);
       scheduleRender();
     } finally {
       supportResolving = false;
@@ -730,9 +835,16 @@ export function createSession(deps: SessionDeps): NavigatorSession {
       clearTimeout(pollTimer);
       pollTimer = null;
     }
+    // The reflow clock belongs to the session (Issue #144): disposal drops
+    // any pending reflow outright.
+    if (reflowTimer) {
+      clearTimeout(reflowTimer);
+      reflowTimer = null;
+    }
+    pendingReflow = null;
     currentImageLoad?.abort();
     currentImageLoad = null;
   };
 
-  return { loadFile: loadFileCached, loadCommit, start, refresh, onActivity, dispose };
+  return { loadFile: loadFileCached, loadCommit, imageViewChanged, start, refresh, onActivity, dispose };
 }

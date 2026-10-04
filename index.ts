@@ -54,12 +54,11 @@ import { loadFile } from "./viewer";
 import {
   createViewerCache,
   isCacheableRender,
-  makeImageSeams,
   makeTreeTruncationWarner,
   touchCacheEntry,
   type ViewerCache,
 } from "./session";
-export { createViewerCache, isCacheableRender, makeImageSeams, makeTreeTruncationWarner, touchCacheEntry };
+export { createViewerCache, isCacheableRender, makeTreeTruncationWarner, touchCacheEntry };
 export type { ViewerCache };
 
 type TuiLike = {
@@ -436,6 +435,10 @@ async function runNavigator(
         setImageSupport: (support) => overlay.setImageSupport(support),
         getOpenTarget: () => overlay.getOpenTarget(),
         checkOpenTarget: (target, mtimeMs) => overlay.checkOpenTarget(target, mtimeMs),
+        // Issue #144: the reflow clock pulls the displayed image view and
+        // commands the re-open through the normal openTarget path.
+        getImageView: () => overlay.getImageView(),
+        reflowOpenImage: () => overlay.reflowOpenImage(),
         // The component has no requestRender method; renders go through the
         // host TUI callback the overlay was constructed with.
         requestRender: () => tui.requestRender(),
@@ -486,6 +489,10 @@ async function runNavigator(
         loadCommit: (hash) => session.loadCommit(hash),
         keybindings,
         refresh: () => session.refresh(),
+        // Issue #144: the overlay detects pane-geometry drift for a displayed
+        // image and reports it; the session owns the debounce, the
+        // re-arm-while-loading rule and the actual re-open.
+        onImageViewChanged: () => session.imageViewChanged(),
         // Env reads happen here, once, at overlay open; the component never
         // touches process.env (Issues #028, #039, #061). `enableIcons` and the
         // three initial-state options come from the env-resolved settings.

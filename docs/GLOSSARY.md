@@ -30,6 +30,16 @@ snapshot, the session binds them to its seams, and `viewer.ts` executes the list
 failure continues, a throw or an abort stops it). Labels read the verdict, never re-derive
 which renderer spoke (Issue #143).
 
+## Image pipeline
+
+The one render seam an image load runs through (`makeImagePipeline` in `images.ts`): given the
+support snapshot and the pane geometry it returns the planned attempts and a single
+`render(absPath)` that owns the attempt order, the per-renderer fallback, per-attempt throw
+handling, and typed supersession (`RenderOutcome`: `ok` / `failed` / `aborted`). The session
+binds it to the owning load's abort controller and reads its attempts for the cache key; the
+loader (`viewer.ts`) consumes one outcome and stamps the file's image verdict — it never sees
+the abort string (Issue #144).
+
 ## Style key
 
 A fingerprint (`makeStyleKey` in `theme.ts`) of the theme tokens viewer content is baked with,

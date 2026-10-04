@@ -25,14 +25,13 @@ import {
 } from "@earendil-works/pi-tui";
 
 import { IMAGE_NATIVE_CACHE_MAX_CHARS, MAX_FS_ENTRIES } from "../constants";
-import { DEFAULT_PI_CHAFA_SUBSET, KITTY_PROBE_SAMPLE, type ImageSupport, type KittyProbeVerdict } from "../images";
+import { DEFAULT_PI_CHAFA_SUBSET, KITTY_PROBE_SAMPLE, makeImagePipeline, type ImageSupport, type KittyProbeVerdict } from "../images";
 import { serializeNavigatorSettings, type NavigatorSettings } from "../settings";
 import type { ViewerFile } from "../types";
 import { loadFile } from "../viewer";
 import registerNavigatorExtension, {
   createViewerCache,
   isCacheableRender,
-  makeImageSeams,
   makeTreeTruncationWarner,
   makeTuiKittyDecodeProbe,
   makeWarningNotifier,
@@ -825,7 +824,7 @@ describe("makeTreeTruncationWarner (Issue #108)", () => {
   });
 });
 
-describe("makeImageSeams (Issue #116 fix 1)", () => {
+describe("makeImagePipeline (Issues #116/#144)", () => {
   /** A resolved auto-mode snapshot; overrides narrow it per case. */
   function snapshot(overrides: Partial<ImageSupport> = {}): ImageSupport {
     return {
@@ -843,79 +842,30 @@ describe("makeImageSeams (Issue #116 fix 1)", () => {
 
   const neverProbe = async (): Promise<KittyProbeVerdict> => "no-reply";
 
-  it("gates the native seam on the snapshot it was built from", async () => {
-    // The whole point of the snapshot binding: a load that captured a
-    // non-native support must refuse natively even if the session has since
-    // become native-capable, so the seam can never disagree with the tier the
-    // loader chose when it picked the seams. Since Issue #143 the guard is
-    // structural (the snapshot's protocol): eligibility itself is the plan's
-    // decision, made once at load start.
-    const seams = makeImageSeams({
-      support: snapshot({ tier: "chafa", nativeProtocol: null }),
-      probeDecode: neverProbe,
-      signal: new AbortController().signal,
-    });
-    await expect(seams.renderNativeImage("/work/x.png", { cols: 10, rows: 5 })).resolves.toEqual({
-      ok: false,
-      reason: "native rendering is not available",
-    });
-  });
+  it("binds the pipeline to the owning load's signal: live it reads, aborted it short-circuits (Issue #117 follow-up)", async () => {
+    const controller = new AbortController();
+    const pipeline = makeImagePipeline(
+      snapshot({ mode: "native", chafa: { state: "deferred" } }),
+      { cols: 10, rows: 5 },
+      { probeDecode: neverProbe, signal: controller.signal },
+    );
+    expect(pipeline.attempts).toEqual(["native"]);
 
-  it("keeps only the structural protocol guard: a protocol-bearing snapshot renders natively even at tier chafa (Issue #143)", async () => {
-    // The tier re-gate is deliberately gone — the plan decides eligibility, and
-    // the seam must not second-guess it. With a protocol present it proceeds to
-    // the render, here failing on the missing fixture path, not on a re-gate.
-    const seams = makeImageSeams({
-      support: snapshot({ tier: "chafa", nativeProtocol: "kitty" }),
-      probeDecode: neverProbe,
-      signal: new AbortController().signal,
-    });
-    await expect(seams.renderNativeImage("/work/x.png", { cols: 10, rows: 5 })).resolves.toEqual({
-      ok: false,
+    // A live load forwards its signal: the native attempt reaches the bounded
+    // read and fails cleanly on the missing path.
+    await expect(pipeline.render("/work/missing.png")).resolves.toEqual({
+      kind: "failed",
+      renderer: "native",
       reason: "could not read the image file",
     });
-  });
 
-  it("gates the chafa seam on the snapshot (deferred chafa refuses without spawning)", async () => {
-    // mode: "native" keeps chafa deferred, so the seam must refuse before it
-    // ever reaches the binary — that is what makes the no-fallback path work.
-    const seams = makeImageSeams({
-      support: snapshot({ mode: "native", chafa: { state: "deferred" } }),
-      probeDecode: neverProbe,
-      signal: new AbortController().signal,
-    });
-    await expect(seams.renderImage("/work/x.png", { cols: 10, rows: 5 })).resolves.toEqual({
-      ok: false,
-      reason: "chafa is not available",
-    });
-  });
-
-  it("binds both seams to the owning load's signal; an aborted load refuses without work (Issue #117 follow-up)", async () => {
-    const controller = new AbortController();
-    const seams = makeImageSeams({
-      support: snapshot(),
-      probeDecode: neverProbe,
-      signal: controller.signal,
-    });
-
-    // A live load forwards its signal: the native seam reaches the bounded
-    // read and fails on the missing path.
-    await expect(
-      seams.renderNativeImage("/work/missing.png", { cols: 10, rows: 5 }),
-    ).resolves.toEqual({ ok: false, reason: "could not read the image file" });
-
-    // A superseded load (its own signal aborted) short-circuits in BOTH seams
-    // without reading a file or forking a chafa child.
+    // A superseded load (its own signal aborted) short-circuits before any
+    // read or chafa child.
     controller.abort();
-    await expect(
-      seams.renderNativeImage("/work/missing.png", { cols: 10, rows: 5 }),
-    ).resolves.toEqual({ ok: false, reason: "render aborted" });
-    await expect(
-      seams.renderImage("/work/missing.png", { cols: 10, rows: 5 }),
-    ).resolves.toEqual({ ok: false, reason: "render aborted" });
+    await expect(pipeline.render("/work/missing.png")).resolves.toEqual({ kind: "aborted" });
   });
 
-  it("a superseded load's abort never reaches the chafa seam, so the newest load stays native (Issue #117)", async () => {
+  it("a superseded load's abort stops its list, so the newest load stays native (Issue #117)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "nav117-"));
     const saved = getCapabilities();
     try {
@@ -945,58 +895,40 @@ describe("makeImageSeams (Issue #116 fix 1)", () => {
         releaseB = resolve;
       });
 
-      const seamsA = makeImageSeams({
-        support: snapshot(),
+      const req = { cols: 20, rows: 10 };
+      const pipelineA = makeImagePipeline(snapshot(), req, {
         probeDecode: () => {
           markAEntered();
           return gateA;
         },
         signal: controllerA.signal,
       });
-      const seamsB = makeImageSeams({
-        support: snapshot(),
+      const pipelineB = makeImagePipeline(snapshot(), req, {
         probeDecode: () => {
           markBEntered();
           return gateB;
         },
         signal: controllerB.signal,
       });
-      const req = { cols: 20, rows: 10 };
 
       // Load A parks on its probe with its own controller; load B's start
       // (beginImageLoad) aborts A, exactly like index.ts.
-      const loadA = loadFile(png, "a.png", {
-        image: req,
-        attempts: [
-          { renderer: "native", render: seamsA.renderNativeImage },
-          { renderer: "chafa", render: seamsA.renderImage },
-        ],
-      });
+      const loadA = loadFile(png, "a.png", { image: req, imageRenderer: pipelineA.render });
       await aEntered;
       controllerA.abort();
-      const loadB = loadFile(png, "b.png", {
-        image: req,
-        attempts: [
-          { renderer: "native", render: seamsB.renderNativeImage },
-          { renderer: "chafa", render: seamsB.renderImage },
-        ],
-      });
+      const loadB = loadFile(png, "b.png", { image: req, imageRenderer: pipelineB.render });
       await bEntered;
 
       releaseA("no-reply");
       const a = await loadA;
-      expect(a.imageVerdict).toEqual({
-        kind: "card",
-        failed: { renderer: "native", detail: "render aborted" },
-      });
+      // A supersession stamps a card with no failure at all (Issue #144); the
+      // superseding load's sequence guard discards the result anyway.
+      expect(a.imageVerdict).toEqual({ kind: "card" });
 
-      // Defense in depth: even if the superseded load's chafa fallback ran
-      // (the pre-#117 viewer did), it can only observe its own aborted signal —
-      // load B's controller is untouched.
-      await expect(seamsA.renderImage(png, req)).resolves.toEqual({
-        ok: false,
-        reason: "render aborted",
-      });
+      // Defense in depth: even if the superseded pipeline were asked again, it
+      // can only observe its own aborted signal — load B's controller is
+      // untouched, and the abort stops before the chafa fallback would spawn.
+      await expect(pipelineA.render(png)).resolves.toEqual({ kind: "aborted" });
 
       releaseB("no-reply");
       const b = await loadB;

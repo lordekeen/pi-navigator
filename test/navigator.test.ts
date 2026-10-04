@@ -15,7 +15,7 @@ import {
 } from "@earendil-works/pi-tui";
 
 import { IMAGE_RESIZE_DEBOUNCE_MS } from "../constants";
-import { DEFAULT_PI_CHAFA_SUBSET, makeDeferredImageSupport, planImageLoad, resolveChafaGeometry, type ImageSupport } from "../images";
+import { DEFAULT_PI_CHAFA_SUBSET, makeDeferredImageSupport, resolveChafaGeometry, type ImageSupport } from "../images";
 import { makeNavigatorTheme } from "../theme";
 import { buildTree, entriesFromPaths, findNode } from "../tree";
 import { NAVIGATOR_LAYOUTS, type GitState, type NavigatorLayout, type ViewerFile } from "../types";
@@ -124,7 +124,7 @@ interface Harness {
   opened: string[];
   /** Every loader call: (relPath, opts) — the opts carry the chafa geometry hint. */
   loads: Array<{ relPath: string; opts?: LoadFileOptions }>;
-  state: { closed: number; refreshed: number; renders: number };
+  state: { closed: number; refreshed: number; renders: number; imageViewChanged: number };
 }
 
 function makeHarness(
@@ -139,7 +139,7 @@ function makeHarness(
 ): Harness {
   const opened: string[] = [];
   const loads: Array<{ relPath: string; opts?: LoadFileOptions }> = [];
-  const state = { closed: 0, refreshed: 0, renders: 0 };
+  const state = { closed: 0, refreshed: 0, renders: 0, imageViewChanged: 0 };
 
   const theme = makeNavigatorTheme({
     fg: (color: string, text: string) => (customTheme ? customTheme(color, text) : text),
@@ -158,6 +158,11 @@ function makeHarness(
     },
     onClose: () => {
       state.closed += 1;
+    },
+    // Issue #144: the session owns the reflow clock; the harness records the
+    // overlay's geometry-drift reports instead of scheduling timers.
+    onImageViewChanged: () => {
+      state.imageViewChanged += 1;
     },
     loadFile:
       (relPath: string, opts?: LoadFileOptions): Promise<ViewerFile> => {
@@ -2155,49 +2160,32 @@ describe("chafa image rendering", () => {
     expect(harness.state.closed).toBe(1);
   });
 
-  it("upgrades a deferred support: card first, then re-renders with geometry after the debounce", async () => {
-    vi.useFakeTimers();
-    try {
-      const loads: Array<{ relPath: string; opts?: LoadFileOptions }> = [];
-      // The harness stands in for the session (Issue #143): the navigator hands
-      // over only the pane geometry, and the plan under the CURRENT support
-      // snapshot decides whether any attempt runs.
-      let support = makeDeferredImageSupport("off");
-      const harness = makeHarness(
-        36,
-        async (relPath, opts): Promise<ViewerFile> => {
-          loads.push({ relPath, opts });
-          const image = opts?.image;
-          if (image === undefined || planImageLoad(support, image).length === 0) {
-            return metadataImage(relPath);
-          }
-          return chafaImage(relPath, image.cols, image.rows);
-        },
-      );
-      withTree(harness, ["sample.png"]);
-      harness.overlay.render(120); // layout recorded before the open
-      harness.overlay.handleInput(KEYS.enter); // support is deferred → metadata card
-      await Promise.resolve();
-      // Deferred support: the navigator still hands over the geometry hint,
-      // and the empty plan keeps the card.
-      expect(loads[0]?.opts?.image).toEqual({ cols: 60, rows: 24 });
-      expect(harness.overlay.render(120).join("\n")).toContain("Image");
+  it("setImageSupport is a plain install: hints refresh, nothing reloads, no drift is reported (Issue #144)", async () => {
+    const harness = makeHarness(
+      36,
+      async (relPath): Promise<ViewerFile> => metadataImage(relPath),
+      undefined,
+      undefined,
+      makeDeferredImageSupport("off"),
+    );
+    withTree(harness, ["sample.png"]);
+    harness.overlay.render(120);
+    harness.overlay.handleInput(KEYS.enter); // deferred support → metadata card
+    await Promise.resolve();
+    expect(harness.overlay.render(120).join("\n")).toContain("optional: install chafa + pi-chafa");
 
-      support = activeSupport();
-      harness.overlay.setImageSupport(support);
-      expect(loads).toHaveLength(1); // debounced: no immediate re-request
-      vi.advanceTimersByTime(IMAGE_RESIZE_DEBOUNCE_MS);
-      await Promise.resolve();
-      expect(loads).toHaveLength(2);
-      expect(loads[1]?.opts?.image).toEqual({ cols: 60, rows: 24 });
-      expect(harness.overlay.render(120).join("\n")).toContain("chafa-row-23");
-      harness.overlay.dispose();
-    } finally {
-      vi.useRealTimers();
-    }
+    // The session owns the upgrade reflow now: installing a live snapshot only
+    // re-touches the card hints. No timer, no reload, no drift report.
+    harness.overlay.setImageSupport(activeSupport());
+    expect(harness.state.imageViewChanged).toBe(0);
+    expect(harness.loads).toHaveLength(1);
+    const joined = harness.overlay.render(120).join("\n");
+    expect(joined).toContain("Image");
+    expect(joined).not.toContain("optional: install chafa + pi-chafa");
+    harness.overlay.dispose();
   });
 
-  it("arms the upgrade reflow when support lands while the first image load is in flight (Issue #116 fix 3)", async () => {
+  it("setImageSupport mid-load never disturbs the pending load (Issue #144)", async () => {
     vi.useFakeTimers();
     try {
       const loads: Array<{ relPath: string; opts?: LoadFileOptions }> = [];
@@ -2205,70 +2193,16 @@ describe("chafa image rendering", () => {
       const gate = new Promise<void>((resolve) => {
         release = resolve;
       });
-      let support = makeDeferredImageSupport("off");
       const harness = makeHarness(
         36,
         async (relPath, opts): Promise<ViewerFile> => {
           loads.push({ relPath, opts });
-          // Capture the snapshot at load start, like the session (Issue #116
-          // fix 1): a support landing mid-load must not change this result.
-          const snapshot = support;
           await gate; // hold the first load pending
-          const image = opts?.image;
-          if (image === undefined || planImageLoad(snapshot, image).length === 0) {
-            return metadataImage(relPath);
-          }
-          return chafaImage(relPath, image.cols, image.rows);
-        },
-      );
-      withTree(harness, ["sample.png"]);
-      harness.overlay.render(120); // layout recorded before the open
-      harness.overlay.handleInput(KEYS.enter); // deferred support → card requested
-      await Promise.resolve();
-      expect(loads).toHaveLength(1);
-
-      // Support resolves while that load is STILL in flight (viewFile is null),
-      // which is the case the old gate missed: it required viewFile to be an
-      // image, so no reflow was ever armed and the card stuck.
-      support = activeSupport();
-      harness.overlay.setImageSupport(support);
-      expect(loads).toHaveLength(1); // debounced, not immediate
-
-      release?.();
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(harness.overlay.render(120).join("\n")).toContain("Image");
-
-      vi.advanceTimersByTime(IMAGE_RESIZE_DEBOUNCE_MS);
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(loads).toHaveLength(2);
-      expect(loads[1]?.opts?.image).toBeDefined();
-      expect(harness.overlay.render(120).join("\n")).toContain("chafa-row-");
-      harness.overlay.dispose();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("re-arms a reflow while a load is in flight instead of firing it (Issue #116 fix 4)", async () => {
-    vi.useFakeTimers();
-    try {
-      const loads: Array<{ relPath: string; opts?: LoadFileOptions }> = [];
-      let release: (() => void) | undefined;
-      const gate = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      const harness = makeHarness(
-        36,
-        async (relPath, opts): Promise<ViewerFile> => {
-          loads.push({ relPath, opts });
-          await gate;
           return opts?.image ? chafaImage(relPath, opts.image.cols, opts.image.rows) : metadataImage(relPath);
         },
         undefined,
         undefined,
-        activeSupport(),
+        makeDeferredImageSupport("off"),
       );
       withTree(harness, ["sample.png"]);
       harness.overlay.render(120);
@@ -2276,81 +2210,104 @@ describe("chafa image rendering", () => {
       await Promise.resolve();
       expect(loads).toHaveLength(1);
 
-      // Support lands while that load is still in flight, which is what arms
-      // the upgrade reflow (fix 3). The timer must then re-arm rather than
-      // fire, so the pending load's work is not discarded by a loadSeq bump.
-      // (A resize pass cannot arm it here: with viewFile still null there is
-      // no rendered geometry to compare, so nothing is scheduled.)
+      // Support lands while the load is still in flight: the install must not
+      // arm a timer or bump loadSeq — the session owns both now.
       harness.overlay.setImageSupport(activeSupport());
       vi.advanceTimersByTime(IMAGE_RESIZE_DEBOUNCE_MS * 3);
       await Promise.resolve();
       expect(loads).toHaveLength(1);
+      expect(harness.state.imageViewChanged).toBe(0);
 
       release?.();
-      await vi.advanceTimersByTimeAsync(IMAGE_RESIZE_DEBOUNCE_MS * 2);
-      // The settle signal is the displayed open target: it stays null while
-      // the first load is pending and reports the file once the load lands.
-      expect(harness.overlay.getOpenTarget(), "load never settled").toEqual({
-        kind: "file",
-        relPath: "sample.png",
-      });
-      // The re-armed reflow lands once the load has settled.
-      expect(loads).toHaveLength(2);
-      expect(loads[1]?.opts?.image).toBeDefined();
+      await Promise.resolve();
+      await Promise.resolve();
+      // The settle signal is the displayed open target: null while the first
+      // load is pending, the file once it lands.
+      expect(harness.overlay.getOpenTarget()).toEqual({ kind: "file", relPath: "sample.png" });
+      expect(loads).toHaveLength(1);
       harness.overlay.dispose();
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("re-renders at a new pane geometry after the debounce and cancels the reflow on dispose", async () => {
-    vi.useFakeTimers();
-    try {
-      const loads: Array<{ relPath: string; opts?: LoadFileOptions }> = [];
-      const support = activeSupport({
-        config: { ...DEFAULT_PI_CHAFA_SUBSET, cellWidth: 100, maxRows: 50 },
-      });
-      const harness = makeHarness(
-        36,
-        async (relPath, opts): Promise<ViewerFile> => {
-          loads.push({ relPath, opts });
-          return chafaImage(relPath, opts?.image?.cols ?? 40, opts?.image?.rows ?? 24);
-        },
-        undefined,
-        undefined,
-        support,
-      );
-      withTree(harness, ["sample.png"]);
-      harness.overlay.render(120);
-      harness.overlay.handleInput(KEYS.enter);
-      await Promise.resolve();
-      // Width 120 → rightW 82; preferred 100 → geometry {82, 24}.
-      expect(loads[0]?.opts?.image).toEqual({ cols: 82, rows: 24 });
+  it("reports geometry drift once per fresh pass and settles after the session's reflow command", async () => {
+    const support = activeSupport({
+      config: { ...DEFAULT_PI_CHAFA_SUBSET, cellWidth: 100, maxRows: 50 },
+    });
+    const harness = makeHarness(
+      36,
+      async (relPath, opts): Promise<ViewerFile> =>
+        chafaImage(relPath, opts?.image?.cols ?? 40, opts?.image?.rows ?? 24),
+      undefined,
+      undefined,
+      support,
+    );
+    withTree(harness, ["sample.png"]);
+    harness.overlay.render(120);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+    // Width 120 → rightW 82; preferred 100 → geometry {82, 24}.
+    expect(harness.loads[0]?.opts?.image).toEqual({ cols: 82, rows: 24 });
+    expect(harness.state.imageViewChanged).toBe(0);
 
-      // "Resize": a render at another width is a fresh pass (cache miss).
-      harness.overlay.render(100);
-      expect(loads).toHaveLength(1); // debounce: nothing yet
-      vi.advanceTimersByTime(IMAGE_RESIZE_DEBOUNCE_MS);
-      await Promise.resolve();
-      expect(loads).toHaveLength(2);
-      expect(loads[1]?.opts?.image).toEqual({ cols: 68, rows: 24 });
+    // "Resize": a fresh pass at another width sees the recorded geometry
+    // ({82, 24}) drift from the pane ({68, 24}) and reports it exactly once.
+    // The overlay schedules nothing itself (Issue #144).
+    harness.overlay.render(100);
+    expect(harness.state.imageViewChanged).toBe(1);
+    expect(harness.loads).toHaveLength(1);
 
-      // Stable at the new geometry: no further re-request.
-      harness.overlay.render(100);
-      vi.advanceTimersByTime(IMAGE_RESIZE_DEBOUNCE_MS);
-      await Promise.resolve();
-      expect(loads).toHaveLength(2);
+    // A cached frame is not a fresh pass: no repeat report.
+    harness.overlay.render(100);
+    expect(harness.state.imageViewChanged).toBe(1);
 
-      // A pending reflow is cancelled by dispose().
-      harness.overlay.render(80); // rightW 53 → schedules a reflow
-      expect(loads).toHaveLength(2);
-      harness.overlay.dispose();
-      vi.advanceTimersByTime(IMAGE_RESIZE_DEBOUNCE_MS * 2);
-      await Promise.resolve();
-      expect(loads).toHaveLength(2);
-    } finally {
-      vi.useRealTimers();
-    }
+    // The session's command re-opens the displayed file; the new verdict
+    // matches the pane, so a fresh pass reports nothing (no reflow loop).
+    harness.overlay.reflowOpenImage();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(harness.loads).toHaveLength(2);
+    expect(harness.loads[1]?.opts?.image).toEqual({ cols: 68, rows: 24 });
+    harness.overlay.render(100);
+    expect(harness.state.imageViewChanged).toBe(1);
+    harness.overlay.dispose();
+  });
+
+  it("getImageView reports the displayed image view; reflowOpenImage re-opens file targets only", async () => {
+    const harness = makeHarness(36, async (relPath, opts): Promise<ViewerFile> =>
+      relPath.endsWith(".png")
+        ? chafaImage(relPath, opts?.image?.cols ?? 40, 24)
+        : { kind: "text", relPath, sizeBytes: 5, lineCount: 1, lines: ["x"] },
+      undefined,
+      undefined,
+      activeSupport(),
+    );
+    withTree(harness, ["sample.png", "notes.txt"]);
+    harness.overlay.render(120);
+    // Focus the viewer so the `i` toggle reaches it.
+    harness.overlay.handleInput(KEYS.tab);
+    harness.overlay.handleInput(KEYS.tab);
+
+    expect(harness.overlay.getImageView()).toBeNull(); // nothing displayed
+    await harness.overlay.openRelPath("notes.txt");
+    expect(harness.overlay.getImageView()).toBeNull(); // kind !== "image"
+    expect(harness.loads).toHaveLength(1);
+
+    await harness.overlay.openRelPath("sample.png");
+    expect(harness.overlay.getImageView()).toEqual({ rendered: true, asCard: false });
+
+    // The session-only `i` toggle is part of the view's shape.
+    harness.overlay.handleInput("i");
+    expect(harness.overlay.getImageView()).toEqual({ rendered: true, asCard: true });
+
+    // reflowOpenImage re-opens the DISPLAYED file target, keeping scroll.
+    harness.overlay.reflowOpenImage();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(harness.loads).toHaveLength(3);
+    expect(harness.loads[2]?.relPath).toBe("sample.png");
+    harness.overlay.dispose();
   });
 
   it("shows the header badge only when support is active", async () => {
@@ -2642,73 +2599,33 @@ describe("native image rendering", () => {
     expect(after).toContain(KITTY_ROW);
   });
 
-  it("upgrades a deferred snapshot: card first, then native after the debounce", async () => {
-    vi.useFakeTimers();
-    try {
-      const loads: Array<{ relPath: string; opts?: LoadFileOptions }> = [];
-      let support = makeDeferredImageSupport("off");
-      const harness = makeHarness(36, async (relPath, opts): Promise<ViewerFile> => {
-        loads.push({ relPath, opts });
-        const image = opts?.image;
-        if (image === undefined || planImageLoad(support, image).length === 0) {
-          return metadataImage(relPath);
-        }
-        return nativeImage(relPath, image.cols, image.rows);
-      });
-      withTree(harness, ["sample.png"]);
-      harness.overlay.render(120);
-      harness.overlay.handleInput(KEYS.enter); // deferred support → metadata card
-      await Promise.resolve();
-      // Deferred support resolves the chafa-branch geometry; the empty plan
-      // keeps the card. The native upgrade below then uses {82, 24}.
-      expect(loads[0]?.opts?.image).toEqual({ cols: 60, rows: 24 });
-      expect(harness.overlay.render(120).join("\n")).toContain("Image");
+  it("reports native geometry drift once per fresh pass and settles after the session's reflow command", async () => {
+    const harness = makeHarness(36, async (relPath, opts): Promise<ViewerFile> => {
+      return opts?.image ? nativeImage(relPath, opts.image.cols, opts.image.rows) : metadataImage(relPath);
+    }, undefined, undefined, nativeSupport());
+    withTree(harness, ["sample.png"]);
+    harness.overlay.render(120); // rightW 82
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+    expect(harness.loads[0]?.opts?.image).toEqual({ cols: 82, rows: 24 });
+    expect(harness.state.imageViewChanged).toBe(0);
 
-      support = nativeSupport();
-      harness.overlay.setImageSupport(support);
-      expect(loads).toHaveLength(1); // debounced
-      vi.advanceTimersByTime(IMAGE_RESIZE_DEBOUNCE_MS);
-      await Promise.resolve();
-      expect(loads).toHaveLength(2);
-      expect(loads[1]?.opts?.image).toEqual({ cols: 82, rows: 24 });
-      expect(harness.overlay.render(120).join("\n")).toContain(KITTY_ROW);
-      harness.overlay.dispose();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    // "Resize" to 100 wide: a fresh pass reports the drift once; the overlay
+    // itself re-renders nothing (Issue #144).
+    harness.overlay.render(100); // rightW 68
+    expect(harness.state.imageViewChanged).toBe(1);
+    expect(harness.loads).toHaveLength(1);
 
-  it("re-renders once at a new pane geometry and then stays stable (no reflow loop)", async () => {
-    vi.useFakeTimers();
-    try {
-      const loads: Array<{ relPath: string; opts?: LoadFileOptions }> = [];
-      const harness = makeHarness(36, async (relPath, opts): Promise<ViewerFile> => {
-        loads.push({ relPath, opts });
-        return opts?.image ? nativeImage(relPath, opts.image.cols, opts.image.rows) : metadataImage(relPath);
-      }, undefined, undefined, nativeSupport());
-      withTree(harness, ["sample.png"]);
-      harness.overlay.render(120); // rightW 82
-      harness.overlay.handleInput(KEYS.enter);
-      await Promise.resolve();
-      expect(loads[0]?.opts?.image).toEqual({ cols: 82, rows: 24 });
-
-      // "Resize" to 100 wide: one debounced re-render at the new geometry.
-      harness.overlay.render(100); // rightW 68
-      expect(loads).toHaveLength(1);
-      vi.advanceTimersByTime(IMAGE_RESIZE_DEBOUNCE_MS);
-      await Promise.resolve();
-      expect(loads).toHaveLength(2);
-      expect(loads[1]?.opts?.image).toEqual({ cols: 68, rows: 24 });
-
-      // Stable at the new geometry: the recorded request matches, so no loop.
-      harness.overlay.render(100);
-      vi.advanceTimersByTime(IMAGE_RESIZE_DEBOUNCE_MS * 3);
-      await Promise.resolve();
-      expect(loads).toHaveLength(2);
-      harness.overlay.dispose();
-    } finally {
-      vi.useRealTimers();
-    }
+    // The session's command re-opens at the new geometry; the verdict matches
+    // afterwards, so a fresh pass stays quiet (no reflow loop).
+    harness.overlay.reflowOpenImage();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(harness.loads).toHaveLength(2);
+    expect(harness.loads[1]?.opts?.image).toEqual({ cols: 68, rows: 24 });
+    harness.overlay.render(100);
+    expect(harness.state.imageViewChanged).toBe(1);
+    harness.overlay.dispose();
   });
 });
 

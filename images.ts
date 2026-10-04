@@ -11,7 +11,13 @@
  * pi-tui: runNativeRender reads the file through a bounded readBytes seam
  * (default node fs), base64-encodes it, and asks pi-tui's renderImage for
  * the sequence, then mirrors Image.render's row layout verbatim. No protocol
- * bytes are generated here.
+ * bytes are generated here. The protocol table NATIVE_PROTOCOL_RULES drives
+ * the probe/transcode/image-id/layout clauses and the cache policy.
+ *
+ * One pipeline (makeImagePipeline) owns the attempt order, the per-renderer
+ * fallback and typed supersession (Issue #144): the session binds it to the
+ * owning load's abort signal, and viewer.ts consumes one typed RenderOutcome
+ * — never an abort string.
  *
  * Seams: everything except probeChafa / runChafaRender /
  * resolveImageSupport's probe call is pure or injectable (readText / exec /
@@ -90,20 +96,30 @@ function bounded(text: string): string {
 }
 
 /**
- * Shared abort reason for both render seams. `viewer.ts` treats it as a
- * supersession signal: an aborted native render must NOT fall through to the
- * chafa seam (Issue #117), and with per-load abort ownership (Issue #117
- * follow-up) a superseded load's renders abort without touching any newer
- * load's controller.
- */
-export const IMAGE_ABORT_REASON = "render aborted";
-
-/**
  * One renderer the plan may run for an image load (Issue #143). Declared here
- * so the session can bind names to its seams while `viewer.ts` stays free of
- * tier vocabulary.
+ * so the pipeline can name the renderer that spoke while `viewer.ts` stays
+ * free of tier vocabulary.
  */
 export type ImageAttemptRenderer = "native" | "chafa";
+
+/**
+ * The failure half of a renderer's raw result (Issue #144): a clean failure
+ * with a bounded, renderer-agnostic reason, or a typed supersession.
+ */
+export type RendererFailure = { kind: "failed"; reason: string } | { kind: "aborted" };
+
+/**
+ * The pipeline's per-attempt outcome (Issue #144). `ok` carries the renderer
+ * that spoke plus the rows and the captured geometry; `failed` a bounded
+ * reason; `aborted` a supersession — the owning load's signal fired, so the
+ * remaining attempts must not run (Issue #117) and `viewer.ts` stamps no
+ * failure. Consuming the kind structurally is what lets the loader drop the
+ * abort string entirely.
+ */
+export type RenderOutcome =
+  | { kind: "ok"; renderer: ImageAttemptRenderer; lines: string[]; cols: number; rows: number }
+  | { kind: "failed"; renderer: ImageAttemptRenderer; reason: string }
+  | { kind: "aborted" };
 
 // ── pi-chafa presence ──
 
@@ -675,8 +691,8 @@ export function sanitizeChafaPayload(
 /**
  * Run one chafa render: timeout clamped to [IMAGE_RENDER_TIMEOUT_MIN_MS,
  * IMAGE_RENDER_TIMEOUT_MAX_MS], stdout capped at IMAGE_MAX_BUFFER_BYTES, tied
- * to ctx.signal. Aborts, timeouts, stderr, and nonzero exits all become
- * { ok: false, reason } (never a throw); success is the sanitized payload.
+ * to ctx.signal. Aborts, timeouts, stderr, and nonzero exits all become a
+ * typed RendererFailure (never a throw); success is the sanitized payload.
  */
 export async function runChafaRender(
   absPath: string,
@@ -687,7 +703,7 @@ export async function runChafaRender(
     signal?: AbortSignal;
     exec?: ExecFn;
   },
-): Promise<{ ok: true; lines: string[] } | { ok: false; reason: string }> {
+): Promise<{ kind: "ok"; lines: string[] } | RendererFailure> {
   const timeoutMs = clamp(
     ctx.config.timeoutMs,
     IMAGE_RENDER_TIMEOUT_MIN_MS,
@@ -697,7 +713,7 @@ export async function runChafaRender(
   // Pre-spawn abort check, mirroring runNativeRender's entry check (Issue #117
   // follow-up): a superseded load must not fork a chafa child at all.
   if (ctx.signal?.aborted) {
-    return { ok: false, reason: IMAGE_ABORT_REASON };
+    return { kind: "aborted" };
   }
   let stdout: string;
   try {
@@ -719,11 +735,11 @@ export async function runChafaRender(
       err.code === "ABORT_ERR" ||
       ctx.signal?.aborted
     ) {
-      return { ok: false, reason: IMAGE_ABORT_REASON };
+      return { kind: "aborted" };
     }
     if (err.killed || err.signal === "SIGTERM") {
       return {
-        ok: false,
+        kind: "failed",
         reason: bounded(
           `chafa timed out after ${timeoutMs}ms. Reduce the image size, lower cellWidth/maxRows, or raise timeoutMs in pi-chafa config.`,
         ),
@@ -731,14 +747,17 @@ export async function runChafaRender(
     }
     const stderr = (err.stderr ?? "").trim();
     if (stderr) {
-      return { ok: false, reason: bounded(`chafa exited with an error: ${stderr}`) };
+      return { kind: "failed", reason: bounded(`chafa exited with an error: ${stderr}`) };
     }
     return {
-      ok: false,
+      kind: "failed",
       reason: bounded(`chafa failed (code ${String(err.code ?? "unknown")})`),
     };
   }
-  return sanitizeChafaPayload(stdout, geometry);
+  const sanitized = sanitizeChafaPayload(stdout, geometry);
+  return sanitized.ok
+    ? { kind: "ok", lines: sanitized.lines }
+    : { kind: "failed", reason: sanitized.reason };
 }
 
 // ── host + geometry ──
@@ -999,6 +1018,12 @@ export interface NativeRenderCtx {
     base64Data: string,
     mimeType: string,
   ) => Promise<{ data: string; mimeType: string } | null>;
+  /**
+   * pi-tui encoder override (Issue #144): defaults to the real `renderImage`
+   * import. The pipeline threads it through so protocol-level tests can drive
+   * the row/layout contract without mutating pi-tui's capability cache.
+   */
+  renderImage?: typeof renderImage;
 }
 
 /**
@@ -1041,23 +1066,72 @@ export function isNativelyRenderable(relPath: string): boolean {
 }
 
 /**
+ * Per-protocol behavior (Issue #144): the four clauses runNativeRender used
+ * to branch inline plus the cache policy `isCacheableRender` reads. A new
+ * protocol is a table entry, not five conditions kept in sync by hand.
+ *
+ * kitty: query the terminal before rendering (Issue #101); transcode
+ * non-PNG payloads to PNG (`f=100` means PNG, and the terminal auto-detects
+ * only at `a=T` time, Issue #116); allocate a fresh image id per render (a
+ * re-sent id is re-placed without re-transmission, Issue #112); lay the
+ * sequence out first with empty filler rows after it; never cache.
+ *
+ * iterm2: no query; every format renders inline (no transcode); no id
+ * state; the sequence sits in the LAST row, preceded by a cursor-up and the
+ * filler rows; cacheable (the rows carry their whole payload).
+ */
+export const NATIVE_PROTOCOL_RULES: Record<
+  NativeProtocol,
+  {
+    /** Run the kitty `a=q` decode probe before rendering. */
+    decodeProbe: boolean;
+    /** Transcode non-PNG payloads to PNG (the wire format is PNG). */
+    requiresPng: boolean;
+    /** Allocate a fresh image id per render. */
+    freshImageId: boolean;
+    /** Where the platform sequence lands relative to the filler rows. */
+    layout: "sequence-first" | "cursor-up-tail";
+    /** Whether the rendered rows may be retained in the viewer cache. */
+    cacheable: boolean;
+  }
+> = {
+  kitty: {
+    decodeProbe: true,
+    requiresPng: true,
+    freshImageId: true,
+    layout: "sequence-first",
+    cacheable: false,
+  },
+  iterm2: {
+    decodeProbe: false,
+    requiresPng: false,
+    freshImageId: false,
+    layout: "cursor-up-tail",
+    cacheable: true,
+  },
+};
+
+/**
  * One native render (spec §5.3): abort check → mime gate → bounded read →
  * base64 → pi-tui getImageDimensions → renderImage → Image.render row
- * layout. Every failure is a bounded { ok: false, reason } — never throws.
- * No protocol bytes are generated by this module (D3): the sequence and the
- * row layout come entirely from pi-tui.
+ * layout. Every failure is a typed RendererFailure — never throws. No
+ * protocol bytes are generated by this module (D3): the sequence and the row
+ * layout come entirely from pi-tui, with NATIVE_PROTOCOL_RULES choosing the
+ * probe, the transcode, the image id and the layout (Issue #144).
  */
 export async function runNativeRender(
   absPath: string,
   geometry: { cols: number; rows: number },
   ctx: NativeRenderCtx,
 ): Promise<
-  | { ok: true; lines: string[]; cols: number; rows: number }
-  | { ok: false; reason: string }
+  | { kind: "ok"; lines: string[]; cols: number; rows: number }
+  | RendererFailure
 > {
+  const rules = NATIVE_PROTOCOL_RULES[ctx.protocol];
+
   // a) Abort before any read.
   if (ctx.signal?.aborted) {
-    return { ok: false, reason: bounded(IMAGE_ABORT_REASON) };
+    return { kind: "aborted" };
   }
 
   // Defensive guard for direct callers (tests pass `env`; production always
@@ -1067,21 +1141,21 @@ export async function runNativeRender(
     const term = (ctx.env["TERM"] ?? "").toLowerCase();
     if (ctx.env["TMUX"] || term.startsWith("tmux") || term.startsWith("screen")) {
       return {
-        ok: false,
+        kind: "failed",
         reason: bounded("image protocols disabled under tmux/screen"),
       };
     }
     if (knownNoImageSupport(ctx.env)) {
-      return { ok: false, reason: bounded("terminal does not support image protocols") };
+      return { kind: "failed", reason: bounded("terminal does not support image protocols") };
     }
   }
 
-  // b) Mime gate (D5): unknown extension — no read. Under kitty every
-  //    NATIVE_IMAGE_MIME format is accepted; non-PNG is transcoded in (e).
+  // b) Mime gate (D5): unknown extension — no read. Every NATIVE_IMAGE_MIME
+  //    format is accepted; non-PNG is transcoded where the table says so (e).
   const mime = mimeOfPath(absPath);
   if (mime === undefined) {
     return {
-      ok: false,
+      kind: "failed",
       reason: bounded("native rendering does not support this image format"),
     };
   }
@@ -1092,7 +1166,7 @@ export async function runNativeRender(
   // proceed (no-reply is conservative: terminals that do not answer queries
   // keep declared behavior). The probe is per-protocol (always PNG under
   // f=100), not per-MIME — kitty graphics support is verified using a 1x1 PNG.
-  if (ctx.protocol === "kitty" && ctx.probeDecode !== undefined) {
+  if (rules.decodeProbe && ctx.probeDecode !== undefined) {
     let verdict: KittyProbeVerdict;
     try {
       verdict = await ctx.probeDecode();
@@ -1100,7 +1174,7 @@ export async function runNativeRender(
       verdict = "no-reply";
     }
     if (verdict === "error") {
-      return { ok: false, reason: bounded("terminal does not support kitty graphics") };
+      return { kind: "failed", reason: bounded("terminal does not support kitty graphics") };
     }
   }
 
@@ -1109,23 +1183,24 @@ export async function runNativeRender(
   try {
     bytes = await (ctx.readBytes ?? nodeReadBytes)(absPath);
   } catch {
-    return { ok: false, reason: bounded("could not read the image file") };
+    return { kind: "failed", reason: bounded("could not read the image file") };
   }
   if (bytes.byteLength > IMAGE_NATIVE_MAX_BYTES) {
-    return { ok: false, reason: bounded("image exceeds the 4 MiB native rendering cap") };
+    return { kind: "failed", reason: bounded("image exceeds the 4 MiB native rendering cap") };
   }
 
   // d) base64 → dimensions; validity is sniffed from the bytes.
   let base64 = Buffer.from(bytes).toString("base64");
   const dims = getImageDimensions(base64, mime);
   if (dims === null) {
-    return { ok: false, reason: bounded("could not read image dimensions") };
+    return { kind: "failed", reason: bounded("could not read image dimensions") };
   }
 
-  // e) For Kitty: protocol transmits f=100 (PNG). Non-PNG formats (JPEG, WebP, GIF)
-  // are converted to PNG for Kitty rendering (mirroring pi host Image component /
-  // tool-execution), avoiding Kitty PNG decode rejections while enabling native display.
-  if (ctx.protocol === "kitty" && mime !== "image/png") {
+  // e) Where the table requires PNG (Kitty `f=100`), non-PNG formats (JPEG,
+  // WebP, GIF) are converted before transmission (mirroring the pi host Image
+  // component / tool-execution), avoiding Kitty PNG decode rejections while
+  // enabling native display. iTerm2 carries every format inline.
+  if (rules.requiresPng && mime !== "image/png") {
     const convert = ctx.convertToPng ?? convertToPng;
     let converted: { data: string; mimeType: string } | null;
     try {
@@ -1134,29 +1209,30 @@ export async function runNativeRender(
       converted = null;
     }
     if (!converted) {
-      return { ok: false, reason: bounded("could not convert image to PNG for Kitty rendering") };
+      return { kind: "failed", reason: bounded("could not convert image to PNG for Kitty rendering") };
     }
     base64 = converted.data;
   }
 
   if (ctx.signal?.aborted) {
-    return { ok: false, reason: bounded(IMAGE_ABORT_REASON) };
+    return { kind: "aborted" };
   }
 
   // f) Encode through pi-tui (D3); null means the capability vanished.
-  const result = renderImage(base64, dims, {
+  const encode = ctx.renderImage ?? renderImage;
+  const result = encode(base64, dims, {
     maxWidthCells: geometry.cols,
     maxHeightCells: geometry.rows,
-    imageId: ctx.protocol === "kitty" ? allocateImageId() : undefined,
+    imageId: rules.freshImageId ? allocateImageId() : undefined,
     moveCursor: false,
   });
   if (result === null) {
-    return { ok: false, reason: bounded("native rendering is not available") };
+    return { kind: "failed", reason: bounded("native rendering is not available") };
   }
 
-  // f) Row layout, mirroring pi-tui Image.render (0.85.1) exactly.
+  // g) Row layout from the table, mirroring pi-tui Image.render (0.85.1).
   const lines =
-    ctx.protocol === "kitty"
+    rules.layout === "sequence-first"
       ? [result.sequence, ...Array(result.rows - 1).fill("")]
       : [
           ...Array(result.rows - 1).fill(""),
@@ -1164,8 +1240,8 @@ export async function runNativeRender(
             result.sequence,
         ];
 
-  // g) pi-tui's own geometry is authoritative (aspect-fitted), not the request.
-  return { ok: true, lines, cols: result.columns, rows: result.rows };
+  // h) pi-tui's own geometry is authoritative (aspect-fitted), not the request.
+  return { kind: "ok", lines, cols: result.columns, rows: result.rows };
 }
 
 /**
@@ -1250,6 +1326,111 @@ export function planImageLoad(
     attempts.push("chafa");
   }
   return attempts;
+}
+
+/**
+ * Everything one image load's pipeline needs from its owner (Issue #144):
+ * the owning load's signal, the one-shot kitty probe, and the renderer test
+ * seams (chafa child, native transcode/read/encoder).
+ */
+export interface ImagePipelineContext {
+  /** One-shot kitty protocol probe (Issue #101, #116). */
+  probeDecode: () => Promise<KittyProbeVerdict>;
+  /** The OWNING load's abort signal (Issue #117 follow-up). */
+  signal: AbortSignal;
+  /** Chafa child seam (tests); default node execFile. */
+  exec?: ExecFn;
+  /** Native transcode seam; default pi-coding-agent's convertToPng. */
+  convertToPng?: NativeRenderCtx["convertToPng"];
+  /** Native bounded-read seam (tests); default node fs read. */
+  readBytes?: NativeRenderCtx["readBytes"];
+  /** pi-tui encoder override (tests); default = the real import. */
+  renderImage?: NativeRenderCtx["renderImage"];
+}
+
+/**
+ * One pipeline per image load (Issue #144): the planned attempt order plus a
+ * single `render(absPath)` that owns the whole executor contract — the
+ * per-renderer fallback, per-attempt throw handling and typed supersession.
+ *
+ * `render` never throws and never leaks an abort string:
+ * - `ok` stops the list and carries the renderer's rows with the CAPTURED
+ *   geometry (both renderers record the requested geometry today: native
+ *   deliberately reports the request, not pi-tui's aspect-fitted result, so
+ *   resize detection compares like for like);
+ * - `aborted` returns immediately — a superseded load must not run its
+ *   remaining attempts (Issue #117);
+ * - a clean `failed` is remembered and the next renderer runs;
+ * - a throw is a hard failure from THAT renderer and stops the list.
+ * After the list, the last clean failure is returned.
+ *
+ * The availability guards that used to live in the session's seams live here,
+ * so the pipeline can never disagree with the plan it was built from (#116
+ * fix 1): a `chafa.state !== "ok"` snapshot fails the chafa attempt with
+ * "chafa is not available", a null protocol fails the native attempt with
+ * "native rendering is not available". The factory exposes `attempts` so the
+ * session can derive its cache variant and cacheability without recomputing
+ * the plan.
+ */
+export function makeImagePipeline(
+  support: ImageSupport,
+  geometry: { cols: number; rows: number },
+  ctx: ImagePipelineContext,
+): { attempts: ImageAttemptRenderer[]; render: (absPath: string) => Promise<RenderOutcome> } {
+  const attempts = planImageLoad(support, geometry);
+  const render = async (absPath: string): Promise<RenderOutcome> => {
+    let failed: { renderer: ImageAttemptRenderer; reason: string } | null = null;
+    for (const renderer of attempts) {
+      try {
+        if (renderer === "native") {
+          if (support.nativeProtocol === null) {
+            failed = { renderer, reason: "native rendering is not available" };
+            continue;
+          }
+          const out = await runNativeRender(absPath, geometry, {
+            protocol: support.nativeProtocol,
+            signal: ctx.signal,
+            probeDecode: ctx.probeDecode,
+            convertToPng: ctx.convertToPng,
+            readBytes: ctx.readBytes,
+            renderImage: ctx.renderImage,
+          });
+          if (out.kind === "aborted") return { kind: "aborted" };
+          if (out.kind === "ok") {
+            return { kind: "ok", renderer, lines: out.lines, cols: geometry.cols, rows: geometry.rows };
+          }
+          failed = { renderer, reason: out.reason };
+        } else {
+          if (support.chafa.state !== "ok") {
+            failed = { renderer, reason: "chafa is not available" };
+            continue;
+          }
+          const out = await runChafaRender(absPath, geometry, {
+            binary: support.chafa.binary,
+            config: support.config,
+            signal: ctx.signal,
+            exec: ctx.exec,
+          });
+          if (out.kind === "aborted") return { kind: "aborted" };
+          if (out.kind === "ok") {
+            return { kind: "ok", renderer, lines: out.lines, cols: geometry.cols, rows: geometry.rows };
+          }
+          failed = { renderer, reason: out.reason };
+        }
+      } catch (error) {
+        return {
+          kind: "failed",
+          renderer,
+          reason: error instanceof Error ? error.message : "unexpected renderer failure",
+        };
+      }
+    }
+    if (failed !== null) return { kind: "failed", renderer: failed.renderer, reason: failed.reason };
+    // Unreachable through the session (an empty plan never installs a
+    // renderer); kept total and honest for direct callers.
+    return { kind: "failed", renderer: "chafa", reason: "no image renderer is available" };
+  };
+  return { attempts, render };
 }
 
 /** Deferred snapshot for overlay construction (D9): never blocks, never probes. */

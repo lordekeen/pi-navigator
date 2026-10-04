@@ -1,10 +1,14 @@
 /**
  * pi-navigator file viewing pipeline.
  *
- * loadFile(): stat, binary sniff, image verdict (optionally rendered through
- * an injected attempt list, degrading to the metadata card on failure), size
- * caps, tab expansion and pi-native syntax highlighting (highlightCode +
+ * loadFile(): stat, binary sniff, image verdict (one typed RenderOutcome from
+ * the injected image pipeline, degrading to the metadata card on failure),
+ * size caps, tab expansion and pi-native syntax highlighting (highlightCode +
  * getLanguageFromPath; no external binaries, no npm dependencies).
+ *
+ * This module also owns the typed open-target vocabulary (`targetOf` /
+ * `targetPath` / `sameTarget`, Issue #142) so the overlay and the session can
+ * compare displayed targets without importing each other (Issue #144).
  *
  * Search note: matches are located inside the already highlighted line using
  * the technique proven by pi-skill-gate (visible search over a styled string;
@@ -27,8 +31,44 @@ import {
   MAX_LINE_COUNT_BYTES,
   TAB_WIDTH,
 } from "./constants";
-import { IMAGE_ABORT_REASON, type ImageAttemptRenderer } from "./images";
-import type { SearchMatch, ViewerFile } from "./types";
+import { type ImageAttemptRenderer, type RenderOutcome } from "./images";
+import type { OpenTarget, SearchMatch, ViewerFile } from "./types";
+
+// ── Open targets ──
+
+/**
+ * The typed open target of a displayed ViewerFile (Issue #142): the diff kind
+ * or a stamped commitHash makes it a commit target; everything else is a file
+ * target keyed by its display relPath. Null while nothing is displayed, and
+ * defensive null for a commit-kind file that carries no hash (it cannot be
+ * addressed). Shared here so the overlay and the session compare targets
+ * without importing each other (Issue #144).
+ */
+export function targetOf(file: ViewerFile | null): OpenTarget | null {
+  if (file === null) return null;
+  if (file.kind === "diff" || file.commitHash !== undefined) {
+    return file.commitHash === undefined ? null : { kind: "commit", hash: file.commitHash };
+  }
+  return { kind: "file", relPath: file.relPath };
+}
+
+/**
+ * The string projection of a target for the consumers that still speak
+ * paths: `commit:<hash>` stays the commit display/cache identity (Issue #142
+ * decision 6), and a file target is its relPath.
+ */
+export function targetPath(target: OpenTarget | null): string | null {
+  if (target === null) return null;
+  return target.kind === "commit" ? `commit:${target.hash}` : target.relPath;
+}
+
+/** Structural identity of two targets (Issue #142); null matches nothing. */
+export function sameTarget(a: OpenTarget | null, b: OpenTarget | null): boolean {
+  if (a === null || b === null) return false;
+  if (a.kind === "file" && b.kind === "file") return a.relPath === b.relPath;
+  if (a.kind === "commit" && b.kind === "commit") return a.hash === b.hash;
+  return false;
+}
 
 // ── Text helpers ──
 
@@ -328,37 +368,27 @@ function retainedStyle(
 }
 
 /**
- * Optional image-load parameters for the render seams: the geometry hint plus
- * the ordered attempts the loader executes. At least one attempt makes an
- * image file render; with none, the metadata card stands (today's default).
- * `styleKey` is the current theme style key, retained with the pre-highlight
- * source on text results (Issue #136).
+ * Optional image-load parameters for the loader: the geometry hint plus the
+ * one render seam (the session's image pipeline). At least one attempt makes
+ * an image file render; with no renderer the metadata card stands (today's
+ * default). `stat` is the session's already-performed stat record (Issue
+ * #144): one stat per image load. `styleKey` is the current theme style key,
+ * retained with the pre-highlight source on text results (Issue #136).
  */
 export interface LoadFileOptions {
   image?: { cols: number; rows: number };
-  attempts?: ImageAttempt[];
+  imageRenderer?: ImageRenderer;
+  stat?: { isFile: boolean; sizeBytes: number; mtimeMs: number };
   styleKey?: string;
 }
 
 /**
- * One planned renderer attempt (Issue #143): the renderer's name bound to the
- * seam that runs it. The session builds the list from `planImageLoad`; the
- * loader executes it in order and records which renderer spoke in the verdict.
+ * The one image render seam `loadFile` consumes (Issue #144): a single call
+ * per image load returning the pipeline's typed outcome. The pipeline owns
+ * the attempt order, the fallback and the supersession signal, so the loader
+ * never sees a renderer list, an abort string, or a per-attempt policy.
  */
-export interface ImageAttempt {
-  renderer: ImageAttemptRenderer;
-  render: ImageRenderer;
-}
-
-/**
- * Injected image renderer seam: renders an image file into display rows at
- * the requested geometry (chafa ANSI rows, or native kitty/iTerm2 sequences).
- * loadFile treats any throw as a failed render.
- */
-export type ImageRenderer = (
-  absPath: string,
-  req: { cols: number; rows: number },
-) => Promise<{ ok: true; lines: string[]; cols: number; rows: number } | { ok: false; reason: string }>;
+export type ImageRenderer = (absPath: string) => Promise<RenderOutcome>;
 
 /** Bound a renderer failure reason so the card hint stays within the cap. */
 function boundImageError(reason: string): string {
@@ -378,13 +408,22 @@ export async function loadFile(
 ): Promise<ViewerFile> {
   let sizeBytes: number;
   let mtimeMs: number;
-  try {
-    const info = await stat(absPath);
-    if (!info.isFile()) return errorCard(relPath, "not a regular file");
-    sizeBytes = info.size;
-    mtimeMs = info.mtimeMs;
-  } catch {
-    return errorCard(relPath, "cannot read file (deleted or permission denied)");
+  const providedStat = opts?.stat;
+  if (providedStat !== undefined) {
+    // The session already statted this path for its cache key (Issue #144):
+    // trust that record instead of paying a second stat per image load.
+    if (!providedStat.isFile) return errorCard(relPath, "not a regular file");
+    sizeBytes = providedStat.sizeBytes;
+    mtimeMs = providedStat.mtimeMs;
+  } else {
+    try {
+      const info = await stat(absPath);
+      if (!info.isFile()) return errorCard(relPath, "not a regular file");
+      sizeBytes = info.size;
+      mtimeMs = info.mtimeMs;
+    } catch {
+      return errorCard(relPath, "cannot read file (deleted or permission denied)");
+    }
   }
 
   const ext = extOf(relPath);
@@ -404,59 +443,50 @@ export async function loadFile(
       dims = undefined;
     }
     const message = [formatSize(sizeBytes), dims].filter(Boolean).join(" \u00b7 ");
-    // Executor contract (Issue #143): the attempt list IS the fallback order —
-    // the session planned it from the support snapshot under this load. A
-    // clean failure remembers the renderer + bounded reason and continues; a
-    // throw or an abort STOPS the list: a thrown renderer is a hard failure
-    // with no fallback (spec §7.3), and an aborted render is a supersession
-    // signal (Issue #117) whose stale result navigator's loadSeq guard
-    // discards anyway. After the list, the card carries the last failure, or
-    // no failure when nothing was attempted.
-    let failed: { renderer: ImageAttemptRenderer; detail: string } | undefined;
+    // One call, one typed outcome (Issue #144): the pipeline owns the attempt
+    // order, the per-renderer fallback and the supersession stop; the loader
+    // only maps the result — `ok` to the rendered verdict (with the pipeline's
+    // CAPTURED geometry: native reports the request, not pi-tui's
+    // aspect-fitted result, so resize detection compares like for like),
+    // `failed` to the bounded metadata card, `aborted` to a failure-free card
+    // (a superseded load's result is discarded by the overlay's sequence guard
+    // anyway). The pipeline never throws by contract; an override that does
+    // leaves a failure-free card rather than rejecting loadFile.
     const image = opts?.image;
-    if (image !== undefined) {
-      for (const attempt of opts?.attempts ?? []) {
-        try {
-          const out = await attempt.render(absPath, image);
-          if (out.ok) {
-            return {
-              kind: "image",
-              relPath,
-              sizeBytes,
-              mtimeMs,
-              lines: [],
-              message,
-              imageVerdict: {
-                kind: "rendered",
-                renderer: attempt.renderer,
-                lines: out.lines,
-                // The native REQUESTED cap, not pi-tui's aspect-fitted
-                // result: resize detection compares pane-derived requests,
-                // so a fitted height shorter than the pane would otherwise
-                // read as a permanent geometry mismatch and reflow every
-                // frame. Chafa reports its own returned geometry.
-                cols: attempt.renderer === "native" ? image.cols : out.cols,
-                rows: attempt.renderer === "native" ? image.rows : out.rows,
-              },
-            };
-          }
-          failed = { renderer: attempt.renderer, detail: boundImageError(out.reason) };
-          // Supersession: the load has been replaced, so neither the
-          // remaining attempts nor a fallback is worth running.
-          if (out.reason === IMAGE_ABORT_REASON) break;
-        } catch (err) {
-          failed = {
-            renderer: attempt.renderer,
-            detail: boundImageError(
-              err instanceof Error ? err.message : "unexpected renderer failure",
-            ),
+    const renderer = opts?.imageRenderer;
+    let failed: { renderer: ImageAttemptRenderer; detail: string } | undefined;
+    if (image !== undefined && renderer !== undefined) {
+      let outcome: RenderOutcome | null = null;
+      try {
+        outcome = await renderer(absPath);
+      } catch {
+        outcome = null;
+      }
+      if (outcome !== null) {
+        if (outcome.kind === "ok") {
+          return {
+            kind: "image",
+            relPath,
+            sizeBytes,
+            mtimeMs,
+            lines: [],
+            message,
+            imageVerdict: {
+              kind: "rendered",
+              renderer: outcome.renderer,
+              lines: outcome.lines,
+              cols: outcome.cols,
+              rows: outcome.rows,
+            },
           };
-          break;
+        }
+        if (outcome.kind === "failed") {
+          failed = { renderer: outcome.renderer, detail: boundImageError(outcome.reason) };
         }
       }
     }
-    // No attempt, or every attempt failed cleanly: the metadata card carries
-    // the last failure as its hint row when there was one.
+    // No renderer, a failure-free abort, or a throwing override: the metadata
+    // card carries the last failure as its hint row when there was one.
     return {
       kind: "image",
       relPath,

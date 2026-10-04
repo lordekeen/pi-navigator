@@ -27,7 +27,6 @@ import {
   HALF_PAGE_DIVISOR,
   IMAGE_CELLS_MIN,
   IMAGE_EXTENSIONS,
-  IMAGE_RESIZE_DEBOUNCE_MS,
   IMAGE_ROWS_MIN,
   MIN_OVERLAY_HEIGHT,
   MIN_OVERLAY_WIDTH,
@@ -81,7 +80,10 @@ import {
   markMatches,
   maxLineWidth,
   restyleViewerFile,
+  sameTarget,
   searchLines,
+  targetOf,
+  targetPath,
   type DisplayRow,
   type LoadFileOptions,
 } from "./viewer";
@@ -93,28 +95,6 @@ import {
   renderViewerPane,
   type ViewerPaneView,
 } from "./viewer_view";
-
-/**
- * Support fingerprint for setImageSupport upgrade detection (D9): the knobs
- * that change what a render looks like (effective tier, native protocol,
- * host width preference, chafa knobs). A fingerprint change on an
- * already-rendered image triggers a debounced reflow; loading uses the
- * variant key in index.ts for the cache.
- */
-function supportFingerprint(s: ImageSupport): string {
-  return [
-    s.tier,
-    s.nativeProtocol ?? "",
-    String(s.hostImageWidthCells),
-    s.config.binaryPath ?? "",
-    s.config.colors,
-    s.config.symbolsSet,
-    s.config.dither,
-    String(s.config.timeoutMs),
-    String(s.config.cellWidth),
-    String(s.config.maxRows),
-  ].join(":");
-}
 
 export interface NavigatorOptions {
   cwd: string;
@@ -135,6 +115,13 @@ export interface NavigatorOptions {
    *  it keep their exact behavior. */
   keybindings?: KeybindingsManager;
   refresh: () => void;
+  /**
+   * Pane-geometry drift reporter (Issue #144): when a displayed rendered
+   * image's recorded geometry no longer matches the pane, the overlay calls
+   * this once per fresh render pass. The session owns the debounce, the
+   * re-arm-while-loading rule and the re-open; harnesses that omit it simply
+   * observe the drift detection as a no-op. */
+  onImageViewChanged?: () => void;
   /** Opt into the Nerd Font icon column (Issue #028). Defaults to false. */
   enableIcons?: boolean;
   /** Home directory for tilde shortening (Issue #039). Defaults to empty string. */
@@ -198,39 +185,6 @@ function deleteLastCodePoint(text: string): string {
   return text.slice(0, end);
 }
 
-/**
- * The typed open target of a displayed ViewerFile (Issue #142): the diff kind
- * or a stamped commitHash makes it a commit target; everything else is a file
- * target keyed by its display relPath. Null while nothing is displayed, and
- * defensive null for a commit-kind file that carries no hash (it cannot be
- * addressed).
- */
-function targetOf(file: ViewerFile | null): OpenTarget | null {
-  if (file === null) return null;
-  if (file.kind === "diff" || file.commitHash !== undefined) {
-    return file.commitHash === undefined ? null : { kind: "commit", hash: file.commitHash };
-  }
-  return { kind: "file", relPath: file.relPath };
-}
-
-/**
- * The string projection of a target for the consumers that still speak
- * paths: `commit:<hash>` stays the commit display/cache identity (Issue #142
- * decision 6), and a file target is its relPath.
- */
-function targetPath(target: OpenTarget | null): string | null {
-  if (target === null) return null;
-  return target.kind === "commit" ? `commit:${target.hash}` : target.relPath;
-}
-
-/** Structural identity of two targets (Issue #142); null matches nothing. */
-function sameTarget(a: OpenTarget | null, b: OpenTarget | null): boolean {
-  if (a === null || b === null) return false;
-  if (a.kind === "file" && b.kind === "file") return a.relPath === b.relPath;
-  if (a.kind === "commit" && b.kind === "commit") return a.hash === b.hash;
-  return false;
-}
-
 export class NavigatorOverlay implements Focusable {
   /** Set by TUI when focus changes; gates the CURSOR_MARKER emission. */
   focused = false;
@@ -240,6 +194,7 @@ export class NavigatorOverlay implements Focusable {
   private getTerminalRows: () => number;
   private requestRender: () => void;
   private onClose: () => void;
+  private onImageViewChanged: () => void;
   private loadFile: (relPath: string, opts?: LoadFileOptions) => Promise<ViewerFile>;
   /** Style-key source for the viewer restyle on invalidate (Issue #136). */
   private styleKey: () => string;
@@ -359,10 +314,6 @@ export class NavigatorOverlay implements Focusable {
     /** Total content rows (rendered-markdown lines or wrapped display rows). */
     total: number;
   } | null = null;
-  /** Debounced re-render timer (D10); cleared by dispose(). */
-  private reflowTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Fingerprint of the last installed support (setImageSupport upgrade detection). */
-  private lastSupportFingerprint: string;
 
   constructor(options: NavigatorOptions) {
     this.cwd = options.cwd;
@@ -370,6 +321,7 @@ export class NavigatorOverlay implements Focusable {
     this.getTerminalRows = options.getTerminalRows;
     this.requestRender = options.requestRender;
     this.onClose = options.onClose;
+    this.onImageViewChanged = options.onImageViewChanged ?? (() => undefined);
     this.loadFile = options.loadFile;
     this.styleKey = options.styleKey ?? (() => "");
     this.loadCommit = options.loadCommit;
@@ -378,7 +330,6 @@ export class NavigatorOverlay implements Focusable {
     this.enableIcons = options.enableIcons ?? false;
     this.home = options.home ?? "";
     this.imageSupport = options.imageSupport ?? makeDeferredImageSupport("off");
-    this.lastSupportFingerprint = supportFingerprint(this.imageSupport);
     // Settings-landed initial state (Issue #061): defaults preserve the
     // session-toggle behavior of prior versions exactly.
     this.showHidden = options.initialShowHidden ?? false;
@@ -440,43 +391,43 @@ export class NavigatorOverlay implements Focusable {
   }
 
   /**
-   * Install a resolved image-support snapshot (D9). Matches the setter
-   * contract: assign, then reflow a displayed image when the change can
-   * upgrade its rendering (deferred → ok, or a knob fingerprint change on an
-   * already-rendered image); always touch so the header badge and card hints
-   * refresh. The reflow is debounced and no-ops if the file changed.
+   * Install a resolved image-support snapshot (D9). A plain install (Issue
+   * #144): the session owns the reflow clock, so the overlay only assigns
+   * and touches — the header badge and card hints refresh, and the session
+   * arms any upgrade reflow from `resolveSupport`.
    */
   setImageSupport(support: ImageSupport): void {
-    const previousFingerprint = this.lastSupportFingerprint;
     this.imageSupport = support;
-    const fingerprint = supportFingerprint(support);
-    this.lastSupportFingerprint = fingerprint;
-    // Reflow triggers (Issue #116 fix 3): a rendered image (chafa or native)
-    // reflows on a knob fingerprint change; an unrendered image — a metadata
-    // card, or the in-flight target of a load that has not landed yet
-    // (viewFile still null) — re-requests the render whenever an effective
-    // tier exists (upgrade path, D9). The target is the in-flight target's
-    // string projection first (then viewFile), so support landing while the
-    // first image load of a session is still pending arms the upgrade too.
-    // A commit's pseudo-path deliberately does NOT fall back to viewFile
-    // (Issue #142): that would arm a reflow against the previous image
-    // during a commit load.
-    const target = targetPath(this.viewTarget) ?? this.viewFile?.relPath ?? null;
-    const viewIsRenderedImage =
-      target !== null &&
-      this.viewFile !== null &&
-      this.viewFile.relPath === target &&
-      this.viewFile.imageVerdict?.kind === "rendered";
-    if (
-      support.tier !== "none" &&
-      target !== null &&
-      IMAGE_EXTENSIONS.has(extOf(target)) &&
-      !this.imageAsCard &&
-      (!viewIsRenderedImage || fingerprint !== previousFingerprint)
-    ) {
-      this.scheduleReflow(target);
-    }
     this.touch();
+  }
+
+  /**
+   * The DISPLAYED image view's shape (Issue #144): null when nothing is
+   * displayed or the file is not `kind: "image"`. `rendered` requires a
+   * rendered verdict with rows (an empty render is card-like); `asCard` is
+   * the session-only `i` toggle. The session's reflow clock reads this to
+   * decide whether a support landing can upgrade the view.
+   */
+  getImageView(): { rendered: boolean; asCard: boolean } | null {
+    const file = this.viewFile;
+    if (file === null || file.kind !== "image") return null;
+    const verdict = file.imageVerdict;
+    return {
+      rendered: verdict !== undefined && verdict.kind === "rendered" && verdict.lines.length > 0,
+      asCard: this.imageAsCard,
+    };
+  }
+
+  /**
+   * Re-open the DISPLAYED file target through the normal load primitive,
+   * keeping scroll (Issue #144). The session's reflow clock calls this after
+   * re-validating the displayed target; a commit or absent target is a no-op
+   * so a targetless request can never become a load.
+   */
+  reflowOpenImage(): void {
+    const target = targetOf(this.viewFile);
+    if (target === null || target.kind !== "file") return;
+    void this.openTarget(target, true);
   }
 
   private setDiskChanged(changed: boolean): void {
@@ -643,10 +594,6 @@ export class NavigatorOverlay implements Focusable {
     if (this.noticeTimer) {
       clearTimeout(this.noticeTimer);
       this.noticeTimer = null;
-    }
-    if (this.reflowTimer) {
-      clearTimeout(this.reflowTimer);
-      this.reflowTimer = null;
     }
   }
 
@@ -1392,41 +1339,12 @@ export class NavigatorOverlay implements Focusable {
   }
 
   /**
-   * Debounced re-open of a rendered image at the current pane geometry (D10).
-   * One timer at a time; the callback re-checks everything that could have
-   * changed since scheduling (dispose, support, file), so a stale reflow is
-   * a no-op. dispose() clears the timer outright.
-   */
-  private scheduleReflow(relPath: string): void {
-    if (this.disposed || this.reflowTimer !== null) return;
-    this.reflowTimer = setTimeout(() => {
-      this.reflowTimer = null;
-      if (this.disposed) return;
-      // Issue #116 fix 4: never fire a reflow while a load is in flight —
-      // re-arm the debounce instead. Firing would bump loadSeq and discard the
-      // pending load's work (its finally is a no-op, so the newer load owns
-      // clearing viewLoading); IMAGE_RESIZE_DEBOUNCE_MS (250 ms) equals the
-      // chafa probe timeout, so the overlap was reachable in practice.
-      if (this.viewLoading) {
-        this.scheduleReflow(relPath);
-        return;
-      }
-      if (
-        this.imageSupport.tier !== "none" &&
-        this.viewFile?.relPath === relPath &&
-        this.viewFile.kind === "image"
-      ) {
-        void this.openRelPath(relPath, true);
-      }
-    }, IMAGE_RESIZE_DEBOUNCE_MS);
-  }
-
-  /**
    * Resize detection (D10): when the open file is a rendered image (chafa or
-   * native) whose recorded geometry no longer matches the pane, schedule a
-   * debounced re-render. Runs at the end of a fresh render pass; schedules
-   * only — no user-visible state is mutated during render (Issue #053). Stale
-   * rows stay clipped by the render clamp until the reflow lands.
+   * native) whose recorded geometry no longer matches the pane, report the
+   * drift to the session, which owns the debounce and the re-open (Issue
+   * #144). Runs at the end of a fresh render pass; only reports — no
+   * user-visible state is mutated during render (Issue #053). Stale rows stay
+   * clipped by the render clamp until the reflow lands.
    */
   private maybeScheduleResizeReflow(): void {
     const file = this.viewFile;
@@ -1438,7 +1356,7 @@ export class NavigatorOverlay implements Focusable {
     const geometry = this.currentImageGeometry();
     if (!geometry) return;
     if (geometry.cols === verdict.cols && geometry.rows === verdict.rows) return;
-    this.scheduleReflow(file.relPath);
+    this.onImageViewChanged();
   }
 
   // ── Render ──
