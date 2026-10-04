@@ -45,7 +45,7 @@ import { applyFieldEdit, loadNavigatorSettings, writeNavigatorSettings } from ".
 import { countChangedFields, navigatorFieldNotes, openSettingsMenu } from "./settings_menu";
 import { NavigatorOverlay } from "./navigator";
 import { createSession, type OverlaySink } from "./session";
-import { makeNavigatorTheme } from "./theme";
+import { makeNavigatorTheme, makeStyleKey } from "./theme";
 import { loadFile } from "./viewer";
 
 // Issue #140: the session policy helpers below moved to session.ts; they stay
@@ -388,6 +388,12 @@ async function runNavigator(
       // stay literal: they have no host binding ids and are this extension's
       // own key language (standards report section 2.5).
       const theme = makeNavigatorTheme(piTheme);
+      // Issue #136: the viewer's retained highlight source is keyed on the
+      // syntax-token ANSI sequences behind this closure. `piTheme` is the
+      // live global theme Proxy, so the closure observes switches; the same
+      // closure feeds the session (cache hits) and the overlay (invalidate),
+      // keeping both restyle triggers in lockstep.
+      const styleKey = makeStyleKey(piTheme);
 
       // Kitty protocol probe (Issue #101, #116): one a=q query per overlay
       // invocation, gating native renders on the terminal's own reply. Cache
@@ -439,6 +445,7 @@ async function runNavigator(
       const session = createSession({
         cwd,
         theme,
+        styleKey,
         settings: loaded.settings,
         imagePaths,
         loadFile,
@@ -495,6 +502,7 @@ async function runNavigator(
         // session; bare /navigator resolves the layout.default setting (env
         // already applied inside loadNavigatorSettings).
         initialLayout: layoutOverride ?? loaded.settings.layout.default,
+        styleKey,
       });
 
       session.start();

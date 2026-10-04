@@ -5,7 +5,7 @@
  * color follows the user's active theme (docs/themes.md). No hardcoded colors.
  */
 
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 
 export interface NavigatorTheme {
   accent(t: string): string;
@@ -68,4 +68,42 @@ export function makeNavigatorTheme(theme: Theme): NavigatorTheme {
     diffRemoved: (t) => theme.fg("toolDiffRemoved", t),
     diffContext: (t) => theme.fg("toolDiffContext", t),
   };
+}
+
+/**
+ * The syntax tokens `highlightCode` resolves through the active pi Theme: its
+ * cli-highlight theme closure plus the `mdCodeBlock` fallback for a language
+ * it cannot highlight. Kept next to `makeStyleKey` so the fingerprint and the
+ * highlighter's own token set cannot drift silently.
+ */
+const HIGHLIGHT_STYLE_TOKENS: readonly ThemeColor[] = [
+  "syntaxComment",
+  "syntaxKeyword",
+  "syntaxFunction",
+  "syntaxVariable",
+  "syntaxString",
+  "syntaxNumber",
+  "syntaxType",
+  "syntaxOperator",
+  "syntaxPunctuation",
+  "muted",
+  "mdCodeBlock",
+];
+
+/**
+ * Fingerprint of the syntax-token ANSI sequences `highlightCode`'s output
+ * depends on: `getFgAnsi` for every token in {@link HIGHLIGHT_STYLE_TOKENS},
+ * plus the color mode. This is the style cache key for the viewer's retained
+ * pre-highlight source (Issue #136). The key is defined here because the
+ * cache cost is about exactly this: a theme switch changes it and pays one
+ * re-highlight per file actually reopened (the open file on invalidate, each
+ * cached file on its next open), while resize/cell-size invalidates leave it
+ * unchanged and pay nothing. The closure is lazy so it observes switches on
+ * the live theme proxy, not the theme at construction time.
+ */
+export function makeStyleKey(theme: Theme): () => string {
+  return () =>
+    [...HIGHLIGHT_STYLE_TOKENS.map((token) => theme.getFgAnsi(token)), theme.getColorMode()].join(
+      "|",
+    );
 }

@@ -63,7 +63,7 @@ import {
   type TreeEntry,
 } from "./tree";
 import type { FileNode, GitState, ViewerFile } from "./types";
-import { extOf, type ImageRenderer, type LoadFileOptions } from "./viewer";
+import { extOf, restyleViewerFile, type ImageRenderer, type LoadFileOptions } from "./viewer";
 
 /**
  * One-shot file-tree truncation warning (Issue #108): the three tree walks —
@@ -270,6 +270,12 @@ export interface SessionDeps {
   theme: NavigatorTheme;
   /** The env/flag-resolved settings read once per overlay invocation. */
   settings: NavigatorSettings;
+  /** Current syntax style key (Issue #136), from `makeStyleKey`. Threaded into
+   *  each load (so the result retains it with the pre-highlight source) and
+   *  applied to cache hits, which restyle stale lines without a re-read.
+   *  Optional: when absent the loader gets no key and hits are served as
+   *  stored. */
+  styleKey?: () => string;
   /** Host settings paths for the image-support resolution. */
   imagePaths: ImageSupportPaths;
   /** The viewer primitive: stat → sniff → read → normalize → highlight. */
@@ -375,6 +381,8 @@ export function createSession(deps: SessionDeps): NavigatorSession {
     // outlives the view that requested it.
     const loadAbort = beginImageLoad();
     const absPath = join(cwd, relPath);
+    // Issue #136: the style key this load runs under, captured once per load.
+    const styleKey = deps.styleKey?.();
     let mtimeMs: number;
     try {
       mtimeMs = (await stat(absPath)).mtimeMs;
@@ -408,7 +416,21 @@ export function createSession(deps: SessionDeps): NavigatorSession {
           : "";
     const cacheable = isCacheableRender(useNative, s.nativeProtocol);
     const cached = viewerCache.lookup(relPath, { cacheable, mtimeMs, variant });
-    if (cached) return cached;
+    if (cached) {
+      // Issue #136 self-heal on a hit: stale syntax lines are re-highlighted
+      // from the retained source under the current key. A theme switch thus
+      // costs one re-highlight per file actually reopened — never a re-read.
+      // The entry is not dropped or re-read; a restyled object is stored back
+      // (which also refreshes LRU recency) and returned. Without a key source
+      // (harness-only) there is no staleness notion: serve as stored.
+      if (deps.styleKey === undefined) return cached;
+      const restyled = restyleViewerFile(cached, styleKey ?? "");
+      if (restyled !== cached) {
+        viewerCache.store(relPath, { cacheable, variant, file: restyled });
+        return restyled;
+      }
+      return cached;
+    }
     let file: ViewerFile;
     if ((useNative || chafaSeam) && image) {
       // The seams render under the ONE snapshot captured at load start
@@ -423,7 +445,10 @@ export function createSession(deps: SessionDeps): NavigatorSession {
         image,
         ...(useNative ? { renderNativeImage: seams.renderNativeImage } : {}),
         ...(chafaSeam ? { renderImage: seams.renderImage } : {}),
+        ...(styleKey !== undefined ? { styleKey } : {}),
       });
+    } else if (styleKey !== undefined) {
+      file = await deps.loadFile(absPath, relPath, { styleKey });
     } else {
       file = await deps.loadFile(absPath, relPath);
     }

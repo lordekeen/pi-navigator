@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { makeNavigatorTheme, type NavigatorTheme } from "../theme";
+import { makeNavigatorTheme, makeStyleKey, type NavigatorTheme } from "../theme";
 
 interface FakeTheme {
   fg(color: string, text: string): string;
@@ -130,5 +130,68 @@ describe("makeNavigatorTheme composition discipline", () => {
       if (token === "searchMatch" || token === "searchCurrent") continue;
       expect(nav[token]("")).toBe(TOKEN_MAP[token].replace("<x>", ""));
     }
+  });
+});
+
+// ── makeStyleKey (Issue #136) ──
+
+/** Stub pi Theme exposing only the surfaces makeStyleKey reads. */
+function makeStyleTheme(overrides: { getFgAnsi?: (token: string) => string; getColorMode?: () => string } = {}) {
+  return {
+    getFgAnsi: (token: string) => `fg:${token}`,
+    getColorMode: () => "truecolor",
+    ...overrides,
+  };
+}
+
+/** The syntax tokens highlightCode's output depends on (spec #136). */
+const HIGHLIGHT_TOKENS = [
+  "syntaxComment",
+  "syntaxKeyword",
+  "syntaxFunction",
+  "syntaxVariable",
+  "syntaxString",
+  "syntaxNumber",
+  "syntaxType",
+  "syntaxOperator",
+  "syntaxPunctuation",
+  "muted",
+  "mdCodeBlock",
+];
+
+describe("makeStyleKey (Issue #136)", () => {
+  it("is stable when the theme's token sequences do not change", () => {
+    const key = makeStyleKey(makeStyleTheme() as never);
+    expect(key()).toBe(makeStyleKey(makeStyleTheme() as never)());
+    expect(key()).toBe(key());
+  });
+
+  it("changes when a syntax-token ANSI sequence changes", () => {
+    const before = makeStyleKey(makeStyleTheme() as never)();
+    const after = makeStyleKey(
+      makeStyleTheme({ getFgAnsi: (token) => (token === "syntaxKeyword" ? "fg2:keyword" : `fg:${token}`) }) as never,
+    )();
+    expect(after).not.toBe(before);
+  });
+
+  it("changes when the color mode changes", () => {
+    const before = makeStyleKey(makeStyleTheme() as never)();
+    const after = makeStyleKey(makeStyleTheme({ getColorMode: () => "256" }) as never)();
+    expect(after).not.toBe(before);
+  });
+
+  it("fingerprints every syntax token the highlighter depends on", () => {
+    const seen: string[] = [];
+    const key = makeStyleKey(
+      makeStyleTheme({
+        getFgAnsi: (token) => {
+          seen.push(token);
+          return `fg:${token}`;
+        },
+      }) as never,
+    )();
+    expect(seen).toEqual(HIGHLIGHT_TOKENS);
+    for (const token of HIGHLIGHT_TOKENS) expect(key).toContain(`fg:${token}`);
+    expect(key).toContain("truecolor");
   });
 });

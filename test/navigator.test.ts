@@ -132,6 +132,7 @@ function makeHarness(
   imageSupport?: ImageSupport,
   initialLayout?: NavigatorLayout,
   keybindings?: KeybindingsManager,
+  styleKey?: () => string,
 ): Harness {
   const opened: string[] = [];
   const loads: Array<{ relPath: string; opts?: LoadFileOptions }> = [];
@@ -175,6 +176,7 @@ function makeHarness(
     ...(imageSupport !== undefined ? { imageSupport } : {}),
     ...(initialLayout !== undefined ? { initialLayout } : {}),
     ...(keybindings !== undefined ? { keybindings } : {}),
+    ...(styleKey !== undefined ? { styleKey } : {}),
   };
 
   const overlay = new NavigatorOverlay(options);
@@ -2665,6 +2667,76 @@ describe("Issue #123: invalidate() clears theme-styled caches, keeps the data ca
     expect(rendered).toContain("Heading");
     expect(harness.loads).toHaveLength(1); // the file data was NOT re-read
     expect(harness.overlay.getOpenRelPath()).toBe("README.md");
+  });
+});
+
+// ── Issue #136: invalidate() restyles the open file against the new style key ──
+
+describe("Issue #136: invalidate() restyles the open file from its retained source", () => {
+  /**
+   * Loader stub standing in for the session+viewer chain: it hands back a
+   * ViewerFile that retained its pre-highlight source (`styleText`) and the
+   * style key it was highlighted under, exactly like viewer.ts loadFile when
+   * it was given a styleKey. `.txt` keeps the real restyle path a plain line
+   * split, so no pi theme needs initializing in this suite.
+   */
+  const styledLoader = (key: () => string) => async (p: string): Promise<ViewerFile> => ({
+    kind: "text",
+    relPath: p,
+    sizeBytes: 10,
+    lineCount: 1,
+    lines: [`highlighted-under-${key()}`],
+    styleText: "alpha",
+    styleKey: key(),
+  });
+
+  it("re-highlights the open file when the style key changes, without re-reading", async () => {
+    let key = "key-A";
+    const harness = makeHarness(
+      24,
+      styledLoader(() => key),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => key,
+    );
+    withTree(harness, ["a.txt"]);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+    expect(harness.overlay.render(120).join("\n")).toContain("highlighted-under-key-A");
+
+    // The host switched the theme, then called invalidate().
+    key = "key-B";
+    harness.overlay.invalidate();
+    const rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).toContain("alpha"); // fresh lines from the retained source
+    expect(rendered).not.toContain("highlighted-under-key-A");
+    expect(harness.loads).toHaveLength(1); // invalidate never re-read the file
+  });
+
+  it("leaves the open file untouched when the style key is unchanged (resize invalidate)", async () => {
+    const key = () => "key-A";
+    const harness = makeHarness(
+      24,
+      styledLoader(key),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      key,
+    );
+    withTree(harness, ["a.txt"]);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+
+    harness.overlay.invalidate();
+    const rendered = harness.overlay.render(120).join("\n");
+    expect(rendered).toContain("highlighted-under-key-A");
+    expect(rendered).not.toContain("alpha");
+    expect(harness.loads).toHaveLength(1);
   });
 });
 

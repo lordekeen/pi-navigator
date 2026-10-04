@@ -292,7 +292,12 @@ function errorCard(relPath: string, message: string): ViewerFile {
   return { kind: "error", relPath, lines: [], message };
 }
 
-async function highlightText(text: string, relPath: string): Promise<string[]> {
+/**
+ * Synchronous highlight core. `highlightText` is the loader's async wrapper
+ * (it awaits nothing), while `restyleViewerFile` re-runs this directly on the
+ * retained pre-highlight source (Issue #136).
+ */
+function highlightLines(text: string, relPath: string): string[] {
   const lang = getLanguageFromPath(relPath);
   if (!lang) return text.split("\n");
   try {
@@ -302,16 +307,38 @@ async function highlightText(text: string, relPath: string): Promise<string[]> {
   }
 }
 
+async function highlightText(text: string, relPath: string): Promise<string[]> {
+  return highlightLines(text, relPath);
+}
+
+/**
+ * The retained highlight source + style key for a load result (Issue #136),
+ * attached only when highlighting actually ran (`getLanguageFromPath` found a
+ * language). The unknown-language path is `text.split("\n")` — theme-
+ * independent and never stale, so there is nothing to retain. `styleText` is
+ * exactly the string handed to the highlighter, so a restyle is a pure re-run.
+ */
+function retainedStyle(
+  styleText: string,
+  relPath: string,
+  styleKey: string | undefined,
+): Pick<ViewerFile, "styleText" | "styleKey"> {
+  if (!getLanguageFromPath(relPath)) return {};
+  return { styleText, styleKey };
+}
+
 /**
  * Optional image-load parameters for the render seams: geometry hint plus
  * the chafa and/or native renderer injections. At least one seam makes an
  * image file render; with neither, the metadata card stands (today's
- * default).
+ * default). `styleKey` is the current theme style key, retained with the
+ * pre-highlight source on text results (Issue #136).
  */
 export interface LoadFileOptions {
   image?: { cols: number; rows: number };
   renderImage?: ImageRenderer;
   renderNativeImage?: ImageRenderer;
+  styleKey?: string;
 }
 
 /**
@@ -516,7 +543,8 @@ export async function loadFile(
 
   if (overBytes || overLines) {
     const head = allLines.slice(0, MAX_HIGHLIGHT_LINES);
-    const lines = await highlightText(head.join("\n"), relPath);
+    const styleText = head.join("\n");
+    const lines = await highlightText(styleText, relPath);
     const reason = overBytes
       ? `${formatSize(sizeBytes)} exceeds the ${formatSize(MAX_HIGHLIGHT_BYTES)} highlight cap`
       : `${allLines.length} lines exceed the ${MAX_HIGHLIGHT_LINES} line cap`;
@@ -532,6 +560,7 @@ export async function loadFile(
       lineCount,
       lines,
       notice: `Truncated view: ${reason}. Showing the first ${head.length} lines.`,
+      ...retainedStyle(styleText, relPath, opts?.styleKey),
       ...(rawText !== undefined ? { rawText } : {}),
     };
   }
@@ -546,8 +575,22 @@ export async function loadFile(
     mtimeMs,
     lineCount,
     lines,
+    ...retainedStyle(expanded, relPath, opts?.styleKey),
     ...(rawText !== undefined ? { rawText } : {}),
   };
+}
+
+/**
+ * Re-highlight a viewer file from its retained pre-highlight source under a
+ * new style key (Issue #136). Synchronous and I/O-free: the highlight core is
+ * a pure function of `styleText` + `relPath`, so a theme switch pays one
+ * re-highlight per file actually restyled, never a re-read. Returns the same
+ * reference when there is nothing to do (no retained source, or the key
+ * already matches), so callers can detect the no-op cheaply.
+ */
+export function restyleViewerFile(file: ViewerFile, styleKey: string): ViewerFile {
+  if (file.styleText === undefined || file.styleKey === styleKey) return file;
+  return { ...file, lines: highlightLines(file.styleText, file.relPath), styleKey };
 }
 
 // ── Search ──

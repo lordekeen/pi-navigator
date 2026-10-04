@@ -10,10 +10,11 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { IMAGE_ERROR_MAX_CHARS, IMAGE_NATIVE_MAX_BYTES, MAX_HIGHLIGHT_LINES } from "../constants";
 import { runNativeRender } from "../images";
+import type { ViewerFile } from "../types";
 import {
   computeRows,
   decodeUtf8Head,
@@ -26,12 +27,29 @@ import {
   loadFile,
   markMatches,
   maxLineWidth,
+  restyleViewerFile,
   searchLines,
   sliceStyled,
   stripAnsi,
   visibleTextWidth,
 } from "../viewer";
 import type { ImageRenderer } from "../viewer";
+
+// The highlighter input log (Issue #136): `restyleViewerFile` must re-run the
+// highlighter on exactly the retained `styleText`. The real highlighter stays
+// in place — its output is what the pipeline tests exercise — and the wrapper
+// only records the code it was asked to highlight.
+const highlightLog = vi.hoisted(() => ({ inputs: [] as string[] }));
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
+  return {
+    ...actual,
+    highlightCode: (code: string, lang?: string) => {
+      highlightLog.inputs.push(code);
+      return actual.highlightCode(code, lang);
+    },
+  };
+});
 
 // ── Text helpers ──
 
@@ -784,5 +802,122 @@ describe("isMarkdownPath", () => {
     expect(isMarkdownPath(".md")).toBe(false);
     expect(isMarkdownPath("noext")).toBe(false);
     expect(isMarkdownPath("archive.md5")).toBe(false);
+  });
+});
+
+// ── Issue #136: retained highlight source + restyle ──
+
+describe("style retention and restyleViewerFile (Issue #136)", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "pi-nav-restyle-"));
+    highlightLog.inputs.length = 0;
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("retains styleText and styleKey on a highlighted text file", async () => {
+    const path = join(dir, "code.ts");
+    await writeFile(path, "const x = 1;\n// note");
+    const file = await loadFile(path, "code.ts", { styleKey: "key-A" });
+    expect(file.kind).toBe("text");
+    expect(file.styleKey).toBe("key-A");
+    // styleText is exactly the string the highlighter was handed (CR-
+    // normalized and tab-expanded), proven independently by the input log.
+    expect(file.styleText).toBe(highlightLog.inputs.at(-1));
+    expect(file.styleText).toBe("const x = 1;\n// note");
+    // rawText semantics are untouched: this is not a markdown file.
+    expect(file.rawText).toBeUndefined();
+  });
+
+  it("retains the tab-expanded text, not the raw source", async () => {
+    const path = join(dir, "tabs.ts");
+    await writeFile(path, "const x = 1;\t// tab");
+    const file = await loadFile(path, "tabs.ts");
+    expect(file.styleText).toBe("const x = 1;    // tab"); // tab stop 4 from column 12
+    expect(file.styleText).toBe(highlightLog.inputs.at(-1));
+  });
+
+  it("leaves styleText/styleKey absent for an unknown-language file", async () => {
+    const path = join(dir, "notes.txt");
+    await writeFile(path, "plain\ntext");
+    const file = await loadFile(path, "notes.txt", { styleKey: "key-A" });
+    expect(file.kind).toBe("text");
+    expect(file.styleText).toBeUndefined();
+    expect(file.styleKey).toBeUndefined();
+    expect(file.lines).toEqual(["plain", "text"]);
+  });
+
+  it("retains the capped head as styleText for a truncated file", async () => {
+    const path = join(dir, "huge.ts");
+    const lines = Array.from({ length: MAX_HIGHLIGHT_LINES + 10 }, (_, i) => `const v${i} = ${i};`);
+    await writeFile(path, lines.join("\n"));
+    const file = await loadFile(path, "huge.ts", { styleKey: "key-A" });
+    expect(file.kind).toBe("truncated");
+    expect(file.styleKey).toBe("key-A");
+    expect(file.styleText?.split("\n")).toHaveLength(MAX_HIGHLIGHT_LINES);
+    expect(file.styleText?.split("\n")[0]).toBe("const v0 = 0;");
+    expect(file.styleText).toBe(highlightLog.inputs.at(-1));
+  });
+
+  it("returns a new object re-highlighted from styleText under the new key", () => {
+    const file: ViewerFile = {
+      kind: "text",
+      relPath: "code.ts",
+      lines: ["<stale>"],
+      styleText: "const x = 1;",
+      styleKey: "key-A",
+    };
+    const out = restyleViewerFile(file, "key-B");
+    expect(out).not.toBe(file);
+    expect(out.styleKey).toBe("key-B");
+    expect(out.styleText).toBe("const x = 1;");
+    expect(out.lines).not.toEqual(["<stale>"]);
+    expect(stripAnsi(out.lines[0] ?? "")).toBe("const x = 1;");
+    // The re-highlight runs on exactly the retained text. No other input.
+    expect(highlightLog.inputs).toEqual(["const x = 1;"]);
+  });
+
+  it("returns the same reference when the key already matches", () => {
+    const file: ViewerFile = {
+      kind: "text",
+      relPath: "code.ts",
+      lines: ["x"],
+      styleText: "x",
+      styleKey: "key-A",
+    };
+    expect(restyleViewerFile(file, "key-A")).toBe(file);
+    expect(highlightLog.inputs).toEqual([]);
+  });
+
+  it("returns the same reference when styleText is absent", () => {
+    const file: ViewerFile = { kind: "text", relPath: "notes.txt", lines: ["plain"], styleKey: "key-A" };
+    expect(restyleViewerFile(file, "key-B")).toBe(file);
+    expect(highlightLog.inputs).toEqual([]);
+  });
+
+  it("restyles truncated files too, keeping every other field", () => {
+    const file: ViewerFile = {
+      kind: "truncated",
+      relPath: "huge.ts",
+      lines: ["<stale>"],
+      styleText: "const x = 1;",
+      styleKey: "key-A",
+      notice: "Truncated view: too many lines.",
+      lineCount: 99,
+      sizeBytes: 1234,
+      mtimeMs: 42,
+    };
+    const out = restyleViewerFile(file, "key-B");
+    expect(out.kind).toBe("truncated");
+    expect(out.notice).toBe("Truncated view: too many lines.");
+    expect(out.lineCount).toBe(99);
+    expect(out.sizeBytes).toBe(1234);
+    expect(out.mtimeMs).toBe(42);
+    expect(out.styleKey).toBe("key-B");
+    expect(out.lines).not.toEqual(["<stale>"]);
   });
 });

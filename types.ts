@@ -149,6 +149,18 @@ export interface ViewerFile {
    * non-markdown source files.
    */
   rawText?: string;
+
+  /**
+   * The exact pre-highlight text that produced `lines` (post CR-normalization
+   * and tab expansion; the capped head for truncated views). Retained only for
+   * text/truncated results that were actually highlighted (a known language);
+   * the unknown-language fallback is a theme-independent plain split, so there
+   * is nothing to restyle. Lets `restyleViewerFile` re-highlight under a new
+   * theme without re-reading the file (Issue #136).
+   */
+  styleText?: string;
+  /** The `makeStyleKey` value `lines` were highlighted under (Issue #136). */
+  styleKey?: string;
 }
 
 export interface SearchMatch {

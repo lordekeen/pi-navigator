@@ -77,6 +77,7 @@ import {
   extOf,
   markMatches,
   maxLineWidth,
+  restyleViewerFile,
   searchLines,
   type DisplayRow,
   type LoadFileOptions,
@@ -146,6 +147,10 @@ export interface NavigatorOptions {
   /** The layout the overlay opens with (Issue #119; settings or subcommand).
    *  Defaults to "files-git-viewer". Fixed for the overlay's lifetime. */
   initialLayout?: NavigatorLayout;
+  /** Current syntax style key (Issue #136). `invalidate()` restyles the open
+   *  file from its retained pre-highlight source when this changed; defaults
+   *  to `() => ""`, which is a no-op back-reference for every file. */
+  styleKey?: () => string;
 }
 
 /**
@@ -199,6 +204,8 @@ export class NavigatorOverlay implements Focusable {
   private requestRender: () => void;
   private onClose: () => void;
   private loadFile: (relPath: string, opts?: LoadFileOptions) => Promise<ViewerFile>;
+  /** Style-key source for the viewer restyle on invalidate (Issue #136). */
+  private styleKey: () => string;
   private loadCommit: ((shortHash: string) => Promise<ViewerFile>) | undefined;
   /** Injected host KeybindingsManager (Issues #125/#126); null in harnesses. */
   private keybindings: KeybindingsManager | null;
@@ -326,6 +333,7 @@ export class NavigatorOverlay implements Focusable {
     this.requestRender = options.requestRender;
     this.onClose = options.onClose;
     this.loadFile = options.loadFile;
+    this.styleKey = options.styleKey ?? (() => "");
     this.loadCommit = options.loadCommit;
     this.keybindings = options.keybindings ?? null;
     this.refresh = options.refresh;
@@ -614,6 +622,14 @@ export class NavigatorOverlay implements Focusable {
     // row models, and the file-content cache lives in index.ts (viewerCache)
     // — re-reading and re-hashing files is the expensive part, and the
     // derivation above is all that must be redone to repaint.
+    //
+    // Issue #136: a theme switch also changes the syntax tokens baked into
+    // the open file's lines. Restyle it from the retained pre-highlight
+    // source BEFORE clearing the derived caches — synchronous and I/O-free,
+    // so the invalidate path never re-reads a file. A resize/cell-size
+    // invalidate leaves the style key unchanged, so the restyle returns the
+    // same object and costs nothing.
+    if (this.viewFile) this.viewFile = restyleViewerFile(this.viewFile, this.styleKey());
     this.cachedWidth = undefined;
     this.cachedLines = undefined;
     this.rowsCache = null;

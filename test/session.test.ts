@@ -28,7 +28,7 @@ import type { ImageSupport, KittyProbeVerdict, PiChafaApi } from "../images";
 import { DEFAULT_NAVIGATOR_SETTINGS, type NavigatorSettings } from "../settings";
 import { makeNavigatorTheme } from "../theme";
 import type { CommitDiff, RepoInfo } from "../git";
-import { createSession, type NavigatorSession } from "../session";
+import { createSession, type NavigatorSession, type SessionDeps } from "../session";
 import type { FileNode, GitState, ViewerFile } from "../types";
 import type { LoadFileOptions } from "../viewer";
 
@@ -221,7 +221,7 @@ interface Harness {
 /** The image geometry hint the (fake) overlay would pass when opening one. */
 const IMAGE_REQ = { cols: 40, rows: 12 };
 
-function makeSession(): Harness {
+function makeSession(overrides: Partial<SessionDeps> = {}): Harness {
   const sink: Sink = {
     setTree: vi.fn(),
     setGitState: vi.fn(),
@@ -280,6 +280,7 @@ function makeSession(): Harness {
     capabilities: () => ({ images: null }),
     pi: fakePi,
     sink,
+    ...overrides,
   });
 
   return { session, sink, notify, notifyWarning, loadFile };
@@ -555,6 +556,45 @@ describe("createSession: viewer cache (Issue #020)", () => {
     // keeps no entry: the loader ran again on the second open.
     expect(loadFile).toHaveBeenCalledTimes(2);
     expect(loadFile.mock.calls[1]?.[2]).toBeUndefined();
+  });
+
+  it("restyles a hit under a new style key without re-reading; a matching key is a no-op", async () => {
+    const path = join(dir, "w.txt");
+    await writeFile(path, "x\ny");
+    await utimes(path, 1000000, 1000000); // pin mtime
+    let key = "key-A";
+    const loadFile = vi.fn<LoadFn>(async (absPath, relPath, opts) => ({
+      kind: "text",
+      relPath,
+      sizeBytes: 3,
+      lineCount: 2,
+      lines: ["stale"],
+      styleText: "x\ny",
+      styleKey: opts?.styleKey,
+      mtimeMs: (await stat(absPath)).mtimeMs,
+    }));
+    const { session } = makeSession({ loadFile, styleKey: () => key });
+
+    const first = await session.loadFile("w.txt");
+    expect(loadFile).toHaveBeenCalledTimes(1);
+    expect(loadFile.mock.calls[0]?.[2]).toEqual({ styleKey: "key-A" });
+    expect(first.styleKey).toBe("key-A");
+    expect(first.lines).toEqual(["stale"]);
+
+    // A theme switch changes the key: the hit self-heals from the retained
+    // source. `.txt` has no language, so the real restyle resolves to a plain
+    // line split — no initialized pi theme needed.
+    key = "key-B";
+    const second = await session.loadFile("w.txt");
+    expect(loadFile).toHaveBeenCalledTimes(1); // still a hit: no re-read
+    expect(second).not.toBe(first);
+    expect(second.styleKey).toBe("key-B");
+    expect(second.lines).toEqual(["x", "y"]);
+
+    // The restyled object was stored back: the same key now hits it as-is.
+    const third = await session.loadFile("w.txt");
+    expect(loadFile).toHaveBeenCalledTimes(1);
+    expect(third).toBe(second);
   });
 });
 
