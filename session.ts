@@ -38,6 +38,7 @@ import {
 } from "./git";
 import {
   makeDeferredImageSupport,
+  planImageLoad,
   resolveImageSupport,
   runChafaRender,
   runNativeRender,
@@ -63,7 +64,7 @@ import {
   type TreeEntry,
 } from "./tree";
 import type { FileNode, GitState, OpenTarget, ViewerFile } from "./types";
-import { extOf, restyleViewerFile, type ImageRenderer, type LoadFileOptions } from "./viewer";
+import { extOf, restyleViewerFile, type ImageAttempt, type ImageRenderer, type LoadFileOptions } from "./viewer";
 
 /**
  * One-shot file-tree truncation warning (Issue #108): the three tree walks —
@@ -162,9 +163,11 @@ export function createViewerCache(maxEntries: number): ViewerCache {
       // Native over-cap renders (D7) display but are not retained: the
       // entry-count cache is not a byte bound, so the base64 rows are dropped
       // on the next open.
+      const verdict = file.imageVerdict;
       if (
-        file.imageTier === "native" &&
-        (file.imageLines ?? []).join("").length > IMAGE_NATIVE_CACHE_MAX_CHARS
+        verdict?.kind === "rendered" &&
+        verdict.renderer === "native" &&
+        verdict.lines.join("").length > IMAGE_NATIVE_CACHE_MAX_CHARS
       ) {
         return;
       }
@@ -190,9 +193,9 @@ export function createViewerCache(maxEntries: number): ViewerCache {
 /**
  * One immutable-snapshot-bound pair of image render seams (Issue #116 fix 1).
  *
- * The loader captures `const s = imageSupport` at load start and decides
- * useNative / chafaSeam / variant from it; the seams must gate and render
- * from THAT same snapshot. Re-reading the live `imageSupport` mid-load let a
+ * The loader captures `const s = imageSupport` at load start and derives the
+ * attempt list and variant from it; the seams must gate and render from THAT
+ * same snapshot. Re-reading the live `imageSupport` mid-load let a
  * `setImageSupport` that lands between the capture and the seam call make the
  * seam disagree with the loader that chose it (e.g. a native-bound load
  * answering "native rendering is not available" and silently degrading to
@@ -212,7 +215,7 @@ export function makeImageSeams(opts: {
   /** Injected render seam (viewer.ts ImageRenderer contract): the chafa
    * availability check plus the owning load's signal, so a superseded load's
    * child never outlives the view. The result carries the requested geometry
-   * back so the viewer stores imageCols/imageRows. */
+   * back so the viewer records it on the chafa verdict. */
   const renderImage: ImageRenderer = async (absPath, req) => {
     const support = opts.support;
     if (support.chafa.state !== "ok") return { ok: false, reason: "chafa is not available" };
@@ -225,13 +228,14 @@ export function makeImageSeams(opts: {
   };
 
   /** Injected native render seam (same ImageRenderer contract and load-bound
-   * signal as renderImage): gates on the snapshot's effective tier — a
-   * strict-native session with no capability rejects cleanly so the loader
-   * can degrade per file under auto. runNativeRender never throws; every
+   * signal as renderImage): keeps only the structural protocol guard — a load
+   * whose plan excluded native cannot reach here (Issue #143 dropped the
+   * redundant tier re-gate), but a snapshot without a protocol still rejects
+   * cleanly instead of rendering. runNativeRender never throws; every
    * failure is a bounded {ok:false}. */
   const renderNativeImage: ImageRenderer = async (absPath, req) => {
     const support = opts.support;
-    if (support.tier !== "native" || support.nativeProtocol === null) {
+    if (support.nativeProtocol === null) {
       return { ok: false, reason: "native rendering is not available" };
     }
     return runNativeRender(absPath, req, {
@@ -406,26 +410,18 @@ export function createSession(deps: SessionDeps): NavigatorSession {
     const image = opts?.image;
     const isImage = IMAGE_EXTENSIONS.has(extOf(relPath));
     const s = imageSupport;
-    // Tier/mode-aware gating (spec §7.1, §7.3): native when the tier says
-    // so; chafa when the tier says so or under auto as the per-file
-    // fallback for a non-PNG/oversized file (mime gate, D5).
-    const useNative =
-      isImage && image !== undefined && s.tier === "native" && s.nativeProtocol !== null;
-    const useChafa = isImage && image !== undefined && s.tier === "chafa";
-    const chafaFallback =
-      isImage &&
-      image !== undefined &&
-      s.mode === "auto" &&
-      s.piChafa.present &&
-      s.chafa.state === "ok";
-    const chafaSeam = useChafa || chafaFallback;
+    // One decision per load (Issue #143): the snapshot + pane geometry plan
+    // the renderer attempts ONCE; the variant, cacheability and seams below
+    // all derive from that same list. Native first; chafa when the tier says
+    // so or as auto's per-file fallback (spec §7.1, §7.3, D5).
+    const attempts = isImage && image !== undefined ? planImageLoad(s, image) : [];
     const variant =
-      useNative && image
+      attempts.includes("native") && image !== undefined
         ? `native:${s.nativeProtocol}:${image.cols}x${image.rows}`
-        : chafaSeam && image
+        : attempts.length > 0 && image !== undefined
           ? imageVariant(image, s)
           : "";
-    const cacheable = isCacheableRender(useNative, s.nativeProtocol);
+    const cacheable = isCacheableRender(attempts.includes("native"), s.nativeProtocol);
     const cached = viewerCache.lookup(relPath, { cacheable, mtimeMs, variant });
     if (cached) {
       // Issue #136 self-heal on a hit: stale syntax lines are re-highlighted
@@ -443,19 +439,23 @@ export function createSession(deps: SessionDeps): NavigatorSession {
       return cached;
     }
     let file: ViewerFile;
-    if ((useNative || chafaSeam) && image) {
+    if (attempts.length > 0 && image !== undefined) {
       // The seams render under the ONE snapshot captured at load start
       // (Issue #116 fix 1): a mid-load setImageSupport cannot make them
-      // disagree with the tier decision made above.
+      // disagree with the plan made above. The plan already ordered the
+      // renderers, so binding is a pure name→seam map (Issue #143).
       const seams = makeImageSeams({
         support: s,
         probeDecode: deps.kittyProbe,
         signal: loadAbort.signal,
       });
+      const boundAttempts: ImageAttempt[] = attempts.map((renderer) => ({
+        renderer,
+        render: renderer === "native" ? seams.renderNativeImage : seams.renderImage,
+      }));
       file = await deps.loadFile(absPath, relPath, {
         image,
-        ...(useNative ? { renderNativeImage: seams.renderNativeImage } : {}),
-        ...(chafaSeam ? { renderImage: seams.renderImage } : {}),
+        attempts: boundAttempts,
         ...(styleKey !== undefined ? { styleKey } : {}),
       });
     } else if (styleKey !== undefined) {

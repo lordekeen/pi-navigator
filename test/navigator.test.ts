@@ -15,7 +15,7 @@ import {
 } from "@earendil-works/pi-tui";
 
 import { IMAGE_RESIZE_DEBOUNCE_MS } from "../constants";
-import { DEFAULT_PI_CHAFA_SUBSET, resolveChafaGeometry, type ImageSupport } from "../images";
+import { DEFAULT_PI_CHAFA_SUBSET, makeDeferredImageSupport, planImageLoad, resolveChafaGeometry, type ImageSupport } from "../images";
 import { makeNavigatorTheme } from "../theme";
 import { buildTree, entriesFromPaths, findNode } from "../tree";
 import { NAVIGATOR_LAYOUTS, type GitState, type NavigatorLayout, type ViewerFile } from "../types";
@@ -86,15 +86,18 @@ function activeSupport(overrides: Partial<ImageSupport> = {}): ImageSupport {
   };
 }
 
-/** Fake chafa render: imageTier "chafa" with imageRows plain rows. */
+/** Fake chafa render: a rendered chafa verdict with plain row lines. */
 function chafaImage(relPath: string, imageCols = 40, imageRows = 12): ViewerFile {
   return {
     kind: "image",
     relPath,
-    imageTier: "chafa",
-    imageCols,
-    imageRows,
-    imageLines: Array.from({ length: imageRows }, (_, i) => `chafa-row-${i}`),
+    imageVerdict: {
+      kind: "rendered",
+      renderer: "chafa",
+      cols: imageCols,
+      rows: imageRows,
+      lines: Array.from({ length: imageRows }, (_, i) => `chafa-row-${i}`),
+    },
     lines: [],
     sizeBytes: 1024,
     message: "1.0 KB \u00b7 32x32",
@@ -106,7 +109,7 @@ function metadataImage(relPath: string): ViewerFile {
   return {
     kind: "image",
     relPath,
-    imageTier: "metadata",
+    imageVerdict: { kind: "card" },
     lines: [],
     sizeBytes: 1024,
     message: "1.0 KB \u00b7 32x32",
@@ -2156,21 +2159,32 @@ describe("chafa image rendering", () => {
     vi.useFakeTimers();
     try {
       const loads: Array<{ relPath: string; opts?: LoadFileOptions }> = [];
+      // The harness stands in for the session (Issue #143): the navigator hands
+      // over only the pane geometry, and the plan under the CURRENT support
+      // snapshot decides whether any attempt runs.
+      let support = makeDeferredImageSupport("off");
       const harness = makeHarness(
         36,
         async (relPath, opts): Promise<ViewerFile> => {
           loads.push({ relPath, opts });
-          return opts?.image ? chafaImage(relPath, opts.image.cols, opts.image.rows) : metadataImage(relPath);
+          const image = opts?.image;
+          if (image === undefined || planImageLoad(support, image).length === 0) {
+            return metadataImage(relPath);
+          }
+          return chafaImage(relPath, image.cols, image.rows);
         },
       );
       withTree(harness, ["sample.png"]);
       harness.overlay.render(120); // layout recorded before the open
       harness.overlay.handleInput(KEYS.enter); // support is deferred → metadata card
       await Promise.resolve();
-      expect(loads[0]?.opts).toBeUndefined();
+      // Deferred support: the navigator still hands over the geometry hint,
+      // and the empty plan keeps the card.
+      expect(loads[0]?.opts?.image).toEqual({ cols: 60, rows: 24 });
       expect(harness.overlay.render(120).join("\n")).toContain("Image");
 
-      harness.overlay.setImageSupport(activeSupport());
+      support = activeSupport();
+      harness.overlay.setImageSupport(support);
       expect(loads).toHaveLength(1); // debounced: no immediate re-request
       vi.advanceTimersByTime(IMAGE_RESIZE_DEBOUNCE_MS);
       await Promise.resolve();
@@ -2191,12 +2205,20 @@ describe("chafa image rendering", () => {
       const gate = new Promise<void>((resolve) => {
         release = resolve;
       });
+      let support = makeDeferredImageSupport("off");
       const harness = makeHarness(
         36,
         async (relPath, opts): Promise<ViewerFile> => {
           loads.push({ relPath, opts });
+          // Capture the snapshot at load start, like the session (Issue #116
+          // fix 1): a support landing mid-load must not change this result.
+          const snapshot = support;
           await gate; // hold the first load pending
-          return opts?.image ? chafaImage(relPath, opts.image.cols, opts.image.rows) : metadataImage(relPath);
+          const image = opts?.image;
+          if (image === undefined || planImageLoad(snapshot, image).length === 0) {
+            return metadataImage(relPath);
+          }
+          return chafaImage(relPath, image.cols, image.rows);
         },
       );
       withTree(harness, ["sample.png"]);
@@ -2204,12 +2226,12 @@ describe("chafa image rendering", () => {
       harness.overlay.handleInput(KEYS.enter); // deferred support → card requested
       await Promise.resolve();
       expect(loads).toHaveLength(1);
-      expect(loads[0]?.opts).toBeUndefined();
 
       // Support resolves while that load is STILL in flight (viewFile is null),
       // which is the case the old gate missed: it required viewFile to be an
       // image, so no reflow was ever armed and the card stuck.
-      harness.overlay.setImageSupport(activeSupport());
+      support = activeSupport();
+      harness.overlay.setImageSupport(support);
       expect(loads).toHaveLength(1); // debounced, not immediate
 
       release?.();
@@ -2414,7 +2436,10 @@ describe("chafa image rendering", () => {
   it("shows the chafa failure reason on the fallback card", async () => {
     const harness = makeHarness(
       36,
-      async (relPath): Promise<ViewerFile> => ({ ...metadataImage(relPath), imageError: "render aborted" }),
+      async (relPath): Promise<ViewerFile> => ({
+        ...metadataImage(relPath),
+        imageVerdict: { kind: "card", failed: { renderer: "chafa", detail: "render aborted" } },
+      }),
       undefined,
       undefined,
       activeSupport(),
@@ -2455,7 +2480,15 @@ describe("chafa image rendering", () => {
   it("renders the metadata card, never the text gutter, for a chafa image with no rendered lines (#103)", async () => {
     const harness = makeHarness(
       36,
-      async (relPath): Promise<ViewerFile> => ({ ...chafaImage(relPath), imageLines: [] }),
+      async (relPath): Promise<ViewerFile> => {
+        const image = chafaImage(relPath);
+        const verdict = image.imageVerdict;
+        return {
+          ...image,
+          imageVerdict:
+            verdict?.kind === "rendered" ? { ...verdict, lines: [] } : verdict,
+        };
+      },
       undefined,
       undefined,
       activeSupport(),
@@ -2487,10 +2520,13 @@ describe("native image rendering", () => {
     return {
       kind: "image",
       relPath,
-      imageTier: "native",
-      imageCols: cols,
-      imageRows: rows,
-      imageLines: [KITTY_ROW, "", ""],
+      imageVerdict: {
+        kind: "rendered",
+        renderer: "native",
+        cols,
+        rows,
+        lines: [KITTY_ROW, "", ""],
+      },
       lines: [],
       sizeBytes: 1024,
       message: "1.0 KB \u00b7 32x32",
@@ -2533,9 +2569,16 @@ describe("native image rendering", () => {
     const freshIdLoader = (relPath: string, opts?: LoadFileOptions): Promise<ViewerFile> => {
       renders += 1;
       if (!opts?.image) return Promise.resolve(metadataImage(relPath));
+      const image = nativeImage(relPath, opts.image.cols, opts.image.rows);
       return Promise.resolve({
-        ...nativeImage(relPath, opts.image.cols, opts.image.rows),
-        imageLines: [`\x1b_Ga=T,f=100,q=2,C=1,c=20,r=3,i=${100 + renders};AAAA\x1b\\`, "", ""],
+        ...image,
+        imageVerdict: {
+          kind: "rendered",
+          renderer: "native",
+          cols: opts.image.cols,
+          rows: opts.image.rows,
+          lines: [`\x1b_Ga=T,f=100,q=2,C=1,c=20,r=3,i=${100 + renders};AAAA\x1b\\`, "", ""],
+        },
       });
     };
     const harness = makeHarness(36, freshIdLoader, undefined, undefined, nativeSupport());
@@ -2603,18 +2646,26 @@ describe("native image rendering", () => {
     vi.useFakeTimers();
     try {
       const loads: Array<{ relPath: string; opts?: LoadFileOptions }> = [];
+      let support = makeDeferredImageSupport("off");
       const harness = makeHarness(36, async (relPath, opts): Promise<ViewerFile> => {
         loads.push({ relPath, opts });
-        return opts?.image ? nativeImage(relPath, opts.image.cols, opts.image.rows) : metadataImage(relPath);
+        const image = opts?.image;
+        if (image === undefined || planImageLoad(support, image).length === 0) {
+          return metadataImage(relPath);
+        }
+        return nativeImage(relPath, image.cols, image.rows);
       });
       withTree(harness, ["sample.png"]);
       harness.overlay.render(120);
       harness.overlay.handleInput(KEYS.enter); // deferred support → metadata card
       await Promise.resolve();
-      expect(loads[0]?.opts).toBeUndefined();
+      // Deferred support resolves the chafa-branch geometry; the empty plan
+      // keeps the card. The native upgrade below then uses {82, 24}.
+      expect(loads[0]?.opts?.image).toEqual({ cols: 60, rows: 24 });
       expect(harness.overlay.render(120).join("\n")).toContain("Image");
 
-      harness.overlay.setImageSupport(nativeSupport());
+      support = nativeSupport();
+      harness.overlay.setImageSupport(support);
       expect(loads).toHaveLength(1); // debounced
       vi.advanceTimersByTime(IMAGE_RESIZE_DEBOUNCE_MS);
       await Promise.resolve();

@@ -23,9 +23,11 @@ import {
   consumeKittyProbeReply,
   createKittyProbeState,
   detectPiChafa,
+  isNativelyRenderable,
   KITTY_PROBE_SAMPLE,
   loadPiChafaConfig,
   makeDeferredImageSupport,
+  planImageLoad,
   probeChafa,
   readHostImageSettings,
   resolveChafaGeometry,
@@ -35,7 +37,7 @@ import {
   runNativeRender,
   sanitizeChafaPayload,
 } from "../images";
-import type { ExecFn, KittyProbeVerdict, PiChafaApi, ReadText } from "../images";
+import type { ExecFn, ImageSupport, KittyProbeVerdict, PiChafaApi, ReadText } from "../images";
 
 /** Fixture readText: returns the mapped file contents, undefined otherwise. */
 const readTextOf = (entries: Record<string, string>): ReadText => (path) =>
@@ -1245,6 +1247,118 @@ describe("makeDeferredImageSupport", () => {
         hostImageWidthCells: 60,
       });
     }
+  });
+});
+
+describe("planImageLoad (Issue #143)", () => {
+  const geometry = { cols: 80, rows: 24 };
+
+  /** A resolved auto-mode snapshot; overrides narrow it per case. */
+  function support(overrides: Partial<ImageSupport> = {}): ImageSupport {
+    return {
+      mode: "auto",
+      nativeProtocol: "kitty",
+      tier: "native",
+      piChafa: { present: true, via: "settings" },
+      chafa: { state: "ok", binary: "chafa", version: { major: 1, minor: 18 } },
+      config: { ...DEFAULT_PI_CHAFA_SUBSET },
+      hostShowImages: true,
+      hostImageWidthCells: 60,
+      ...overrides,
+    };
+  }
+
+  it("plans nothing without a geometry (nothing laid out / pane too small)", () => {
+    expect(planImageLoad(support(), null)).toEqual([]);
+    expect(planImageLoad(support({ tier: "chafa" }), null)).toEqual([]);
+    expect(planImageLoad(makeDeferredImageSupport("auto"), null)).toEqual([]);
+  });
+
+  it("plans nothing when the snapshot resolved no renderer (tier none)", () => {
+    expect(planImageLoad(support({ tier: "none" }), geometry)).toEqual([]);
+    expect(planImageLoad(support({ tier: "none", nativeProtocol: null }), geometry)).toEqual([]);
+    // The host gate stays whole: terminal.showImages=false resolves tier none
+    // even though the chafa probe may still have succeeded for the hint copy.
+    expect(planImageLoad(support({ hostShowImages: false, tier: "none" }), geometry)).toEqual([]);
+    expect(planImageLoad(support({ mode: "off", tier: "none" }), geometry)).toEqual([]);
+    expect(planImageLoad(makeDeferredImageSupport("off"), geometry)).toEqual([]);
+  });
+
+  it("plans nothing when strict chafa has no usable probe", () => {
+    const notOk: ImageSupport["chafa"] = { state: "missing", detail: "not found" };
+    expect(
+      planImageLoad(support({ mode: "chafa", nativeProtocol: null, tier: "none", chafa: notOk }), geometry),
+    ).toEqual([]);
+    expect(planImageLoad(support({ mode: "chafa", nativeProtocol: null, tier: "none" }), geometry)).toEqual([]);
+  });
+
+  it("plans native only under strict native with a protocol", () => {
+    expect(
+      planImageLoad(support({ mode: "native", chafa: { state: "deferred" } }), geometry),
+    ).toEqual(["native"]);
+    // Strict native without a capability resolves tier none: nothing renders.
+    expect(
+      planImageLoad(support({ mode: "native", nativeProtocol: null, tier: "none" }), geometry),
+    ).toEqual([]);
+  });
+
+  it("orders auto native → chafa when preferNative (the resolved tier) says native", () => {
+    expect(planImageLoad(support(), geometry)).toEqual(["native", "chafa"]);
+    expect(
+      planImageLoad(
+        support({ config: { ...DEFAULT_PI_CHAFA_SUBSET, preferNative: true } }),
+        geometry,
+      ),
+    ).toEqual(["native", "chafa"]);
+  });
+
+  it("plans chafa only under auto when preferNative is false (the tier already resolved to chafa)", () => {
+    expect(
+      planImageLoad(
+        support({ tier: "chafa", config: { ...DEFAULT_PI_CHAFA_SUBSET, preferNative: false } }),
+        geometry,
+      ),
+    ).toEqual(["chafa"]);
+  });
+
+  it("plans chafa only under auto without a native protocol", () => {
+    expect(planImageLoad(support({ nativeProtocol: null, tier: "chafa" }), geometry)).toEqual(["chafa"]);
+  });
+
+  it("defers chafa under strict native (no per-file fallback attempt)", () => {
+    expect(
+      planImageLoad(support({ mode: "native", chafa: { state: "deferred" } }), geometry),
+    ).toEqual(["native"]);
+  });
+
+  it("never probes: a resolved chafa tier plans chafa even without pi-chafa metadata", () => {
+    // The snapshot is the source of truth; the planner reads, never re-derives.
+    expect(
+      planImageLoad(
+        support({
+          piChafa: { present: false, via: "none" },
+          chafa: { state: "ok", binary: "chafa", version: { major: 1, minor: 18 } },
+          tier: "chafa",
+        }),
+        geometry,
+      ),
+    ).toEqual(["chafa"]);
+  });
+});
+
+describe("isNativelyRenderable (Issue #143)", () => {
+  it("accepts exactly the NATIVE_IMAGE_MIME extensions, case-insensitively", () => {
+    expect(isNativelyRenderable("pics/photo.png")).toBe(true);
+    expect(isNativelyRenderable("photo.JPG")).toBe(true);
+    expect(isNativelyRenderable("a/b/c.webp")).toBe(true);
+    expect(isNativelyRenderable("anim.gif")).toBe(true);
+  });
+
+  it("rejects unknown extensions, dot files and extension-less names", () => {
+    expect(isNativelyRenderable("photo.bmp")).toBe(false);
+    expect(isNativelyRenderable(".png")).toBe(false);
+    expect(isNativelyRenderable("noext")).toBe(false);
+    expect(isNativelyRenderable("trailing.")).toBe(false);
   });
 });
 

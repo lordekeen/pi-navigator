@@ -12,7 +12,7 @@ import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import { DEFAULT_PI_CHAFA_SUBSET, type ImageSupport } from "../images";
 import { makeNavigatorTheme } from "../theme";
 import type { DisplayRow } from "../viewer";
-import type { ViewerFile } from "../types";
+import type { ImageVerdict, ViewerFile } from "../types";
 import {
   buildInputBar,
   buildSearchBar,
@@ -43,6 +43,23 @@ const toneTheme = makeNavigatorTheme({
 
 function viewerFile(partial: Partial<ViewerFile> = {}): ViewerFile {
   return { kind: "text", relPath: "src/main.ts", lines: [], ...partial };
+}
+
+/** A rendered image verdict fixture (Issue #143). */
+function renderedVerdict(
+  renderer: "native" | "chafa",
+  lines: string[],
+  cols = 40,
+  rows = 12,
+): ImageVerdict {
+  return { kind: "rendered", renderer, lines, cols, rows };
+}
+
+/** A metadata-card image verdict, optionally carrying a renderer failure. */
+function cardVerdict(
+  failed?: { renderer: "native" | "chafa"; detail: string },
+): ImageVerdict {
+  return { kind: "card", ...(failed !== undefined ? { failed } : {}) };
 }
 
 function activeSupport(overrides: Partial<ImageSupport> = {}): ImageSupport {
@@ -153,7 +170,12 @@ describe("renderViewerPane", () => {
   });
 
   it("renders pre-styled chafa rows, padded/truncated to the pane width", () => {
-    const image = viewerFile({ kind: "image", relPath: "pic.png", imageTier: "chafa", lines: [] });
+    const image = viewerFile({
+      kind: "image",
+      relPath: "pic.png",
+      imageVerdict: renderedVerdict("chafa", ["chafa-row-0", "chafa-row-1"]),
+      lines: [],
+    });
     const rows = renderViewerPane(paneView({ file: image, imageLines: ["chafa-row-0", "chafa-row-1"] }), width, 4);
     expect(rows).toHaveLength(5); // header + area rows
     expect(rows[1]).toContain("chafa-row-0");
@@ -162,7 +184,12 @@ describe("renderViewerPane", () => {
   });
 
   it("emits native rows verbatim with right-side space fill only", () => {
-    const image = viewerFile({ kind: "image", relPath: "pic.png", imageTier: "native", lines: [] });
+    const image = viewerFile({
+      kind: "image",
+      relPath: "pic.png",
+      imageVerdict: renderedVerdict("native", [KITTY_SEQ, "", ""]),
+      lines: [],
+    });
     const rows = renderViewerPane(
       paneView({ file: image, imageLines: [KITTY_SEQ, "", ""], imageSupport: nativeSupport() }),
       width,
@@ -214,23 +241,38 @@ describe("renderViewerPane", () => {
 
   // Issue #103: an image with no rendered lines must route to the metadata
   // card, never fall through to the text-like gutter and line numbering.
-  it("routes a chafa image with imageLines: null to the metadata card", () => {
-    const image = viewerFile({ kind: "image", relPath: "pic.png", imageTier: "chafa", lines: [] });
+  it("routes an image whose view-model rows are null to the metadata card", () => {
+    const image = viewerFile({
+      kind: "image",
+      relPath: "pic.png",
+      imageVerdict: renderedVerdict("chafa", ["chafa-row-0"]),
+      lines: [],
+    });
     const rows = renderViewerPane(paneView({ file: image, imageLines: null }), width, 10);
     expect(rows.some((row) => row.includes("\u256d"))).toBe(true); // card top border
     expect(rows.join("\n")).toContain("Image"); // card title
   });
 
-  it("routes a chafa image with an empty imageLines array to the metadata card", () => {
-    const image = viewerFile({ kind: "image", relPath: "pic.png", imageTier: "chafa", lines: [] });
+  it("routes a rendered image with an empty row list to the metadata card", () => {
+    const image = viewerFile({
+      kind: "image",
+      relPath: "pic.png",
+      imageVerdict: renderedVerdict("chafa", [], 40, 0),
+      lines: [],
+    });
     const rows = renderViewerPane(paneView({ file: image, imageLines: [] }), width, 10);
     expect(rows.some((row) => row.includes("\u256d"))).toBe(true);
     expect(rows.join("\n")).toContain("Image");
     expect(rows.join("\n")).not.toContain("chafa-row-");
   });
 
-  it("routes a native-tier image without lines to the metadata card", () => {
-    const image = viewerFile({ kind: "image", relPath: "pic.png", imageTier: "native", lines: [] });
+  it("routes a native-rendered image without view-model rows to the metadata card", () => {
+    const image = viewerFile({
+      kind: "image",
+      relPath: "pic.png",
+      imageVerdict: renderedVerdict("native", [KITTY_SEQ]),
+      lines: [],
+    });
     const rows = renderViewerPane(
       paneView({ file: image, imageLines: null, imageSupport: nativeSupport() }),
       width,
@@ -239,8 +281,13 @@ describe("renderViewerPane", () => {
     expect(rows.some((row) => row.includes("\u256d"))).toBe(true);
   });
 
-  it("still renders image rows, not a card, for a chafa image with non-empty lines", () => {
-    const image = viewerFile({ kind: "image", relPath: "pic.png", imageTier: "chafa", lines: [] });
+  it("still renders image rows, not a card, for a rendered image with non-empty lines", () => {
+    const image = viewerFile({
+      kind: "image",
+      relPath: "pic.png",
+      imageVerdict: renderedVerdict("chafa", ["chafa-row-0", "chafa-row-1"]),
+      lines: [],
+    });
     const rows = renderViewerPane(paneView({ file: image, imageLines: ["chafa-row-0", "chafa-row-1"] }), width, 4);
     expect(rows.some((row) => row.includes("\u256d"))).toBe(false);
     expect(rows[1]).toContain("chafa-row-0");
@@ -257,8 +304,7 @@ describe("buildViewerHeader", () => {
     const image = viewerFile({
       kind: "image",
       relPath: "pic.png",
-      imageTier: "native",
-      imageLines: [KITTY_SEQ],
+      imageVerdict: renderedVerdict("native", [KITTY_SEQ]),
       lines: [],
     });
     const kitty = buildViewerHeader(
@@ -302,11 +348,17 @@ describe("buildViewerHeader", () => {
 
 
 describe("imageCardHints", () => {
-  const image = viewerFile({ kind: "image", relPath: "pic.png", imageTier: "metadata", lines: [] });
+  const image = viewerFile({ kind: "image", relPath: "pic.png", imageVerdict: cardVerdict(), lines: [] });
   const geometry = { cols: 40, rows: 12 };
 
   it("walks the priority ladder and returns nothing when chafa is fully ok", () => {
-    expect(imageCardHints({ ...image, imageError: "boom" }, activeSupport(), geometry)).toEqual(["chafa failed: boom"]);
+    expect(
+      imageCardHints(
+        { ...image, imageVerdict: cardVerdict({ renderer: "chafa", detail: "boom" }) },
+        activeSupport(),
+        geometry,
+      ),
+    ).toEqual(["chafa failed: boom"]);
     expect(imageCardHints(image, activeSupport(), null)).toEqual(["pane too small for a rendered image"]);
     expect(
       imageCardHints(image, activeSupport({ piChafa: { present: false, via: "none" } }), geometry),
@@ -330,20 +382,32 @@ describe("imageCardHints", () => {
     expect(imageCardHints(image, activeSupport(), geometry)).toEqual([]);
   });
 
-  it("follows the strict-native ladder and labels failures with the renderer", () => {
-    const png = viewerFile({ kind: "image", relPath: "pic.png", imageTier: "metadata", lines: [] });
-    const failed = { ...png, imageError: "boom" };
+  it("follows the strict-native ladder and labels failures with the verdict's renderer", () => {
+    const png = viewerFile({ kind: "image", relPath: "pic.png", imageVerdict: cardVerdict(), lines: [] });
+    const chafaFailed = {
+      ...png,
+      imageVerdict: cardVerdict({ renderer: "chafa", detail: "boom" }),
+    };
+    const nativeFailed = {
+      ...png,
+      imageVerdict: cardVerdict({ renderer: "native", detail: "boom" }),
+    };
     const native = nativeSupport();
 
-    // Failure label: strict native names the protocol; auto names chafa when
-    // the chafa seam was available, else the protocol.
-    expect(imageCardHints(failed, native, geometry)).toEqual(["kitty failed: boom"]);
+    // The verdict records who failed, so the label needs no mode/probe state:
+    // native failures name the protocol (when known), chafa failures name chafa.
+    expect(imageCardHints(nativeFailed, native, geometry)).toEqual(["kitty failed: boom"]);
     expect(
-      imageCardHints(failed, activeSupport({ mode: "auto", nativeProtocol: "kitty", tier: "native" }), geometry),
+      imageCardHints(nativeFailed, activeSupport({ mode: "auto", nativeProtocol: "kitty", tier: "native" }), geometry),
+    ).toEqual(["kitty failed: boom"]);
+    expect(
+      imageCardHints(chafaFailed, activeSupport({ mode: "auto", nativeProtocol: "kitty", tier: "native" }), geometry),
     ).toEqual(["chafa failed: boom"]);
+    expect(imageCardHints(chafaFailed, activeSupport(), geometry)).toEqual(["chafa failed: boom"]);
+    // Auto without an available chafa probe: a native failure is still native.
     expect(
       imageCardHints(
-        failed,
+        nativeFailed,
         activeSupport({
           mode: "auto",
           nativeProtocol: "kitty",

@@ -1,8 +1,8 @@
 /**
  * pi-navigator file viewing pipeline.
  *
- * loadFile(): stat, binary sniff, image tier (optionally rendered through an
- * injected renderImage seam, degrading to the metadata card on failure), size
+ * loadFile(): stat, binary sniff, image verdict (optionally rendered through
+ * an injected attempt list, degrading to the metadata card on failure), size
  * caps, tab expansion and pi-native syntax highlighting (highlightCode +
  * getLanguageFromPath; no external binaries, no npm dependencies).
  *
@@ -27,7 +27,7 @@ import {
   MAX_LINE_COUNT_BYTES,
   TAB_WIDTH,
 } from "./constants";
-import { IMAGE_ABORT_REASON } from "./images";
+import { IMAGE_ABORT_REASON, type ImageAttemptRenderer } from "./images";
 import type { SearchMatch, ViewerFile } from "./types";
 
 // ── Text helpers ──
@@ -328,17 +328,26 @@ function retainedStyle(
 }
 
 /**
- * Optional image-load parameters for the render seams: geometry hint plus
- * the chafa and/or native renderer injections. At least one seam makes an
- * image file render; with neither, the metadata card stands (today's
- * default). `styleKey` is the current theme style key, retained with the
- * pre-highlight source on text results (Issue #136).
+ * Optional image-load parameters for the render seams: the geometry hint plus
+ * the ordered attempts the loader executes. At least one attempt makes an
+ * image file render; with none, the metadata card stands (today's default).
+ * `styleKey` is the current theme style key, retained with the pre-highlight
+ * source on text results (Issue #136).
  */
 export interface LoadFileOptions {
   image?: { cols: number; rows: number };
-  renderImage?: ImageRenderer;
-  renderNativeImage?: ImageRenderer;
+  attempts?: ImageAttempt[];
   styleKey?: string;
+}
+
+/**
+ * One planned renderer attempt (Issue #143): the renderer's name bound to the
+ * seam that runs it. The session builds the list from `planImageLoad`; the
+ * loader executes it in order and records which renderer spoke in the verdict.
+ */
+export interface ImageAttempt {
+  renderer: ImageAttemptRenderer;
+  render: ImageRenderer;
 }
 
 /**
@@ -395,100 +404,59 @@ export async function loadFile(
       dims = undefined;
     }
     const message = [formatSize(sizeBytes), dims].filter(Boolean).join(" \u00b7 ");
-    // Renderer seams (spec §13): the native seam runs FIRST (§7.1), then chafa
-    // (today's behavior, byte-identical for chafa-only callers). A thrown
-    // renderer is a hard failure — card with the bounded reason, no fallback
-    // (spec §7.3). A clean {ok:false} native failure falls through to chafa
-    // when present; with no chafa seam it becomes the card hint.
-    let nativeReason: string | undefined;
-    if (opts?.image !== undefined && opts.renderNativeImage !== undefined) {
-      try {
-        const out = await opts.renderNativeImage(absPath, opts.image);
-        if (out.ok) {
-          return {
-            kind: "image",
-            relPath,
-            sizeBytes,
-            mtimeMs,
-            lines: [],
-            message,
-            imageTier: "native",
-            imageLines: out.lines,
-            // The REQUESTED cap, not pi-tui's aspect-fitted result: resize
-            // detection compares pane-derived requests, so a fitted height
-            // shorter than the pane would otherwise read as a permanent
-            // geometry mismatch and reflow every frame.
-            imageCols: opts.image.cols,
-            imageRows: opts.image.rows,
+    // Executor contract (Issue #143): the attempt list IS the fallback order —
+    // the session planned it from the support snapshot under this load. A
+    // clean failure remembers the renderer + bounded reason and continues; a
+    // throw or an abort STOPS the list: a thrown renderer is a hard failure
+    // with no fallback (spec §7.3), and an aborted render is a supersession
+    // signal (Issue #117) whose stale result navigator's loadSeq guard
+    // discards anyway. After the list, the card carries the last failure, or
+    // no failure when nothing was attempted.
+    let failed: { renderer: ImageAttemptRenderer; detail: string } | undefined;
+    const image = opts?.image;
+    if (image !== undefined) {
+      for (const attempt of opts?.attempts ?? []) {
+        try {
+          const out = await attempt.render(absPath, image);
+          if (out.ok) {
+            return {
+              kind: "image",
+              relPath,
+              sizeBytes,
+              mtimeMs,
+              lines: [],
+              message,
+              imageVerdict: {
+                kind: "rendered",
+                renderer: attempt.renderer,
+                lines: out.lines,
+                // The native REQUESTED cap, not pi-tui's aspect-fitted
+                // result: resize detection compares pane-derived requests,
+                // so a fitted height shorter than the pane would otherwise
+                // read as a permanent geometry mismatch and reflow every
+                // frame. Chafa reports its own returned geometry.
+                cols: attempt.renderer === "native" ? image.cols : out.cols,
+                rows: attempt.renderer === "native" ? image.rows : out.rows,
+              },
+            };
+          }
+          failed = { renderer: attempt.renderer, detail: boundImageError(out.reason) };
+          // Supersession: the load has been replaced, so neither the
+          // remaining attempts nor a fallback is worth running.
+          if (out.reason === IMAGE_ABORT_REASON) break;
+        } catch (err) {
+          failed = {
+            renderer: attempt.renderer,
+            detail: boundImageError(
+              err instanceof Error ? err.message : "unexpected renderer failure",
+            ),
           };
+          break;
         }
-        nativeReason = out.reason;
-      } catch (err) {
-        return {
-          kind: "image",
-          relPath,
-          sizeBytes,
-          mtimeMs,
-          lines: [],
-          message,
-          imageTier: "metadata",
-          imageError: boundImageError(
-            err instanceof Error ? err.message : "unexpected renderer failure",
-          ),
-        };
       }
     }
-    // Issue #117: an aborted native render is a supersession signal, not a
-    // render failure — the load has been superseded and its stale result is
-    // discarded by navigator's loadSeq guard. Do not fall through to the chafa
-    // seam: with per-load abort ownership (Issue #117 follow-up) the attempt
-    // could only abort its own already-aborted signal, so refusing here just
-    // avoids the pointless work.
-    const nativeAborted = nativeReason === IMAGE_ABORT_REASON;
-    if (!nativeAborted && opts?.image !== undefined && opts.renderImage !== undefined) {
-      try {
-        const out = await opts.renderImage(absPath, opts.image);
-        if (out.ok) {
-          return {
-            kind: "image",
-            relPath,
-            sizeBytes,
-            mtimeMs,
-            lines: [],
-            message,
-            imageTier: "chafa",
-            imageLines: out.lines,
-            imageCols: out.cols,
-            imageRows: out.rows,
-          };
-        }
-        return {
-          kind: "image",
-          relPath,
-          sizeBytes,
-          mtimeMs,
-          lines: [],
-          message,
-          imageTier: "metadata",
-          imageError: boundImageError(out.reason),
-        };
-      } catch (err) {
-        return {
-          kind: "image",
-          relPath,
-          sizeBytes,
-          mtimeMs,
-          lines: [],
-          message,
-          imageTier: "metadata",
-          imageError: boundImageError(
-            err instanceof Error ? err.message : "unexpected renderer failure",
-          ),
-        };
-      }
-    }
-    // No seam (or only a clean native failure): the existing metadata card;
-    // the native reason is the card hint when it was the last failure.
+    // No attempt, or every attempt failed cleanly: the metadata card carries
+    // the last failure as its hint row when there was one.
     return {
       kind: "image",
       relPath,
@@ -496,8 +464,7 @@ export async function loadFile(
       mtimeMs,
       lines: [],
       message,
-      imageTier: "metadata",
-      ...(nativeReason !== undefined ? { imageError: boundImageError(nativeReason) } : {}),
+      imageVerdict: { kind: "card", ...(failed !== undefined ? { failed } : {}) },
     };
   }
 

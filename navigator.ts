@@ -68,6 +68,7 @@ import type {
   Focus,
   GitRow,
   GitState,
+  ImageVerdict,
   InputMode,
   NavigatorLayout,
   OpenTarget,
@@ -465,7 +466,7 @@ export class NavigatorOverlay implements Focusable {
       target !== null &&
       this.viewFile !== null &&
       this.viewFile.relPath === target &&
-      (this.viewFile.imageTier === "chafa" || this.viewFile.imageTier === "native");
+      this.viewFile.imageVerdict?.kind === "rendered";
     if (
       support.tier !== "none" &&
       target !== null &&
@@ -568,8 +569,12 @@ export class NavigatorOverlay implements Focusable {
         file = await commitLoader(target.hash);
       } else {
         const geometry = this.currentImageGeometry();
+        // The extension + pane geometry are the navigator's half of the load
+        // decision (Issue #143): a geometry hint is passed for any image path
+        // the pane can host, and the session's plan answers whether an
+        // attempt actually runs under the live support snapshot.
         const loadOpts =
-          this.imageSupport.tier !== "none" && IMAGE_EXTENSIONS.has(extOf(target.relPath)) && geometry !== null
+          IMAGE_EXTENSIONS.has(extOf(target.relPath)) && geometry !== null
             ? { image: geometry }
             : undefined;
         file = await this.loadFile(target.relPath, loadOpts);
@@ -1066,6 +1071,27 @@ export class NavigatorOverlay implements Focusable {
     this.touch();
   }
 
+  /**
+   * The displayed file's rendered-image verdict, or null when there is none
+   * to act on (no image, a card verdict, an empty row list, or the `i`
+   * toggle hiding it). `nativeOnly` keeps the native-pinned scroll gate
+   * structural. Issue #143: one verdict read replaces the per-site tier +
+   * imageLines re-derivations.
+   */
+  private renderedImageVerdict(
+    nativeOnly = false,
+  ): Extract<ImageVerdict, { kind: "rendered" }> | null {
+    if (this.imageAsCard) return null;
+    const file = this.viewFile;
+    if (file === null || file.kind !== "image") return null;
+    const verdict = file.imageVerdict;
+    if (verdict === undefined || verdict.kind !== "rendered" || verdict.lines.length === 0) {
+      return null;
+    }
+    if (nativeOnly && verdict.renderer !== "native") return null;
+    return verdict;
+  }
+
   private handleViewerInput(data: string): void {
     const file = this.viewFile;
     const area = viewerArea(this.getTerminalRows());
@@ -1075,18 +1101,9 @@ export class NavigatorOverlay implements Focusable {
     // (rendered-markdown precedent, Issue #053); only the scrolling keys and
     // `i` act (§7.5). A native image additionally pins scroll (D9): its
     // placement is terminal-anchored, so j/k/ctrl+d/ctrl+u/g/G are inert too.
-    const renderedImage =
-      file !== null &&
-      file.kind === "image" &&
-      (file.imageTier === "chafa" || file.imageTier === "native") &&
-      !this.imageAsCard &&
-      (file.imageLines?.length ?? 0) > 0;
-    const nativeImage =
-      file !== null &&
-      file.kind === "image" &&
-      file.imageTier === "native" &&
-      !this.imageAsCard &&
-      (file.imageLines?.length ?? 0) > 0;
+    const renderedVerdict = this.renderedImageVerdict();
+    const renderedImage = renderedVerdict !== null;
+    const nativeImage = renderedVerdict !== null && renderedVerdict.renderer === "native";
     if (matchesKey(data, Key.up) || data === "k") {
       if (nativeImage) return;
       this.viewScroll = Math.max(0, this.viewScroll - 1);
@@ -1154,15 +1171,14 @@ export class NavigatorOverlay implements Focusable {
       // render instead of toggling, so `i` is always the "image rendering"
       // verb.
       if (!file || file.kind !== "image") return;
-      const rendered =
-        (file.imageTier === "chafa" || file.imageTier === "native") &&
-        (file.imageLines?.length ?? 0) > 0;
+      const verdict = file.imageVerdict;
+      const rendered = verdict !== undefined && verdict.kind === "rendered" && verdict.lines.length > 0;
       // Nothing to show and no tier to render with: `i` is inert.
       if (!rendered && this.imageSupport.tier === "none") return;
       if (rendered && !this.imageAsCard) {
         // Hide: a pure state flip, the stored rows stay on the file.
         this.imageAsCard = true;
-      } else if (rendered && file.imageTier === "chafa") {
+      } else if (rendered && verdict.kind === "rendered" && verdict.renderer === "chafa") {
         // Chafa rows are plain text, so re-emitting them is always safe.
         this.imageAsCard = false;
       } else {
@@ -1351,9 +1367,9 @@ export class NavigatorOverlay implements Focusable {
    * floor-clamp above 1. Same refuse thresholds as chafa. Chafa branch:
    * paneCols is the full right panel width (rev. 2 amendment 3). Null when
    * no frame has been laid out yet or when the pane rejects the render —
-   * the card wins in both cases. Pane-only: support capability is judged
-   * by the callers (openRelPath gates on tier; imageCardHints ladders from
-   * the pane before the capability states).
+   * the card wins in both cases. Pane-only: support capability is judged by
+   * the plan (`planImageLoad` gates the attempt list; imageCardHints ladders
+   * from the pane before the capability states).
    */
   private currentImageGeometry(): { cols: number; rows: number } | null {
     if (!this.lastViewerLayout) return null;
@@ -1416,12 +1432,12 @@ export class NavigatorOverlay implements Focusable {
     const file = this.viewFile;
     if (!file || this.viewLoading || this.imageAsCard) return;
     if (file.kind !== "image") return;
-    if (file.imageTier !== "chafa" && file.imageTier !== "native") return;
-    if ((file.imageLines?.length ?? 0) === 0) return;
+    const verdict = file.imageVerdict;
+    if (verdict === undefined || verdict.kind !== "rendered" || verdict.lines.length === 0) return;
     if (this.imageSupport.tier === "none") return;
     const geometry = this.currentImageGeometry();
     if (!geometry) return;
-    if (geometry.cols === file.imageCols && geometry.rows === file.imageRows) return;
+    if (geometry.cols === verdict.cols && geometry.rows === verdict.rows) return;
     this.scheduleReflow(file.relPath);
   }
 
@@ -1695,29 +1711,27 @@ export class NavigatorOverlay implements Focusable {
     this.viewerScrollWindow = null;
 
     if (file) {
+      const verdict =
+        file.kind === "image" && file.imageVerdict?.kind === "rendered" ? file.imageVerdict : null;
       const renderedImage =
-        file.kind === "image" &&
-        (file.imageTier === "chafa" || file.imageTier === "native") &&
-        (file.imageLines?.length ?? 0) > 0 &&
-        !this.imageAsCard;
+        verdict !== null && verdict.lines.length > 0 && !this.imageAsCard;
       const isCard =
         file.kind === "binary" ||
         file.kind === "error" ||
         (file.kind === "image" && !renderedImage);
 
-      if (renderedImage) {
+      if (verdict !== null && renderedImage) {
         // Render branch: no gutter, no wrap, no hscroll, no search (§7.5).
         // Chafa clamps exactly like the text path (render-time clamp keeps
         // the frame valid between a resize and its debounced reflow, D10);
         // a native image is a terminal-anchored placement, so scroll is
         // pinned to 0 (D9).
-        const imageRows = file.imageLines ?? [];
-        if (file.imageTier === "native") {
+        if (verdict.renderer === "native") {
           this.viewScroll = 0;
         } else {
-          this.viewScroll = Math.max(0, Math.min(this.viewScroll, Math.max(0, imageRows.length - area)));
+          this.viewScroll = Math.max(0, Math.min(this.viewScroll, Math.max(0, verdict.lines.length - area)));
         }
-        imageLines = imageRows;
+        imageLines = verdict.lines;
       } else if (!isCard) {
         const { noticeRows, contentArea } = paneContentArea(area, file, this.diskChanged);
 

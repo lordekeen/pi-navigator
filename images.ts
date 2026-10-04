@@ -98,6 +98,13 @@ function bounded(text: string): string {
  */
 export const IMAGE_ABORT_REASON = "render aborted";
 
+/**
+ * One renderer the plan may run for an image load (Issue #143). Declared here
+ * so the session can bind names to its seams while `viewer.ts` stays free of
+ * tier vocabulary.
+ */
+export type ImageAttemptRenderer = "native" | "chafa";
+
 // ── pi-chafa presence ──
 
 /** Structural provenance subset of pi's SourceInfo (spec §3.2). */
@@ -1025,6 +1032,15 @@ function mimeOfPath(absPath: string): string | undefined {
 }
 
 /**
+ * True when runNativeRender's mime gate (D5) would accept this path. The one
+ * home for the native format gate (Issue #143): the renderer and the viewer
+ * pane's format hint both read it, so they cannot disagree.
+ */
+export function isNativelyRenderable(relPath: string): boolean {
+  return mimeOfPath(relPath) !== undefined;
+}
+
+/**
  * One native render (spec §5.3): abort check → mime gate → bounded read →
  * base64 → pi-tui getImageDimensions → renderImage → Image.render row
  * layout. Every failure is a bounded { ok: false, reason } — never throws.
@@ -1198,6 +1214,42 @@ export interface ImageSupport {
    * min(paneCols, hostImageWidthCells).
    */
   hostImageWidthCells: number;
+}
+
+/**
+ * One decision per load (Issue #143): the ordered renderers eligible under
+ * this support snapshot — native first, chafa as auto's per-file fallback.
+ * The session binds the names to its seams; `viewer.ts` executes the list.
+ * This composes the gates the navigator and the session used to re-derive per
+ * load:
+ * - a null geometry (nothing laid out / pane too small) plans nothing;
+ * - an unresolved tier ("none") plans nothing. That covers every inactive
+ *   state in one check: `mode: "off"`, `terminal.showImages: false`, a failed
+ *   or missing chafa probe, and strict native without a protocol. It also
+ *   keeps the host gate whole: a host-disabled auto snapshot resolves tier
+ *   "none" but still carries a probed-ok chafa (the probe runs for the card's
+ *   hint copy), and without this the plan would render despite
+ *   `terminal.showImages: false`;
+ * - native requires the resolved tier AND a protocol (D2/D3);
+ * - chafa requires the resolved chafa tier, or auto's per-file fallback:
+ *   pi-chafa present and the probe ok (the D5 mime-gate fallback);
+ * - strict `mode: "native"` keeps chafa deferred and strict `mode: "chafa"`
+ *   leaves the native tier unset, so both resolve to a single attempt.
+ */
+export function planImageLoad(
+  support: ImageSupport,
+  geometry: { cols: number; rows: number } | null,
+): ImageAttemptRenderer[] {
+  if (geometry === null || support.tier === "none") return [];
+  const attempts: ImageAttemptRenderer[] = [];
+  if (support.tier === "native" && support.nativeProtocol !== null) attempts.push("native");
+  if (
+    support.tier === "chafa" ||
+    (support.mode === "auto" && support.piChafa.present && support.chafa.state === "ok")
+  ) {
+    attempts.push("chafa");
+  }
+  return attempts;
 }
 
 /** Deferred snapshot for overlay construction (D9): never blocks, never probes. */

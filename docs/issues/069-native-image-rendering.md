@@ -1,6 +1,6 @@
 # Issue #069: Native Terminal Image Rendering (kitty / iTerm2 via pi-tui)
 
-- **Status**: Open — implementation landed (v0.8.0, commits `84a4917`…); live-terminal QA pending (checklist in [`docs/plans/qa-evidence.md`](../plans/qa-evidence.md), spec §14 step 7)
+- **Status**: Resolved — implementation landed in v0.8.0; the live-terminal QA gate passed (maintainer-confirmed 2026-10-04, performed prior to the #143 image-verdict refactor; terminal and per-item notes not itemized)
 - **Type**: Feature
 - **Severity**: Medium
 - **Component**: [`images.ts`](file:///home/jhonny/Sources/pi-navigator/images.ts) / [`viewer.ts`](file:///home/jhonny/Sources/pi-navigator/viewer.ts) / [`viewer_view.ts`](file:///home/jhonny/Sources/pi-navigator/viewer_view.ts) / [`index.ts`](file:///home/jhonny/Sources/pi-navigator/index.ts) / [`settings.ts`](file:///home/jhonny/Sources/pi-navigator/settings.ts)
@@ -40,7 +40,7 @@ This issue delivers the **native tier** per [`docs/specs/native-image-rendering.
 - [x] `viewer_view.ts`: verbatim native rows, `kitty`/`iTerm2` badge, native card hints (`1b5ff00`).
 - [x] Tests per spec §12 (ladder, encoders via `setCapabilities`, loader seam, view-model, width safety, settings): 558 cases across 19 suites.
 - [x] Docs: README images section, chafa spec §16 item 1 marked resolved, AGENTS.md `images.ts` row, version `0.8.0`, `pi install .`.
-- [ ] **Live QA gate** (spec §14 step 7): kitty terminal outside tmux + `tuiMode: fullscreen`; open/switch/toggle/close/resize with `PI_HARDWARE_CURSOR` on and off; tmux run documents expected behavior.
+- [x] **Live QA gate** (spec §14 step 7): kitty terminal outside tmux + `tuiMode: fullscreen`; open/switch/toggle/close/resize with `PI_HARDWARE_CURSOR` on and off; tmux run documents expected behavior. *(maintainer-confirmed pass, 2026-10-04)*
 
 ## Implementation notes (v0.8.0)
 
@@ -60,11 +60,11 @@ This issue delivers the **native tier** per [`docs/specs/native-image-rendering.
 
 ## Acceptance Criteria
 
-- [ ] `images.mode: "native"` + kitty terminal: PNG renders natively in the viewer pane; badge `kitty`; `i` toggles to card and the placement is deleted; switch/close/resize leave no ghost pixels. *(live QA)*
-- [ ] `images.mode: "auto"`: native → chafa → card per terminal and per file (mime); `preferNative: false` makes auto choose chafa. *(per-file fallback and the preferNative truth table are unit-tested; terminal placement is live QA)*
+- [x] `images.mode: "native"` + kitty terminal: PNG renders natively in the viewer pane; badge `kitty`; `i` toggles to card and the placement is deleted; switch/close/resize leave no ghost pixels. *(live QA — maintainer-confirmed 2026-10-04)*
+- [x] `images.mode: "auto"`: native → chafa → card per terminal and per file (mime); `preferNative: false` makes auto choose chafa. *(per-file fallback and the preferNative truth table are unit-tested; terminal placement is live QA — maintainer-confirmed 2026-10-04)*
 - [x] `images.mode` `off`/`chafa` byte-identical to v0.7.4; default `off` (settings/loader/tier tests; the chafa path is unchanged apart from the `active` → `tier` rename).
-- [ ] Unsupported terminal + `native`: card with the unsupported hint; no escape emitted. *(the card copy is unit-tested; terminal-level silence is live QA)*
-- [ ] Non-PNG on kitty: card (strict) or chafa (auto) with the PNG hint; never a corrupt sequence. *(the loader fallback and hints are unit-tested; live delivery is QA)*
+- [x] Unsupported terminal + `native`: card with the unsupported hint; no escape emitted. *(the card copy is unit-tested; terminal-level silence is live QA — maintainer-confirmed 2026-10-04)*
+- [x] Non-PNG on kitty: card (strict) or chafa (auto) with the PNG hint; never a corrupt sequence. *(the loader fallback and hints are unit-tested; live delivery is QA — maintainer-confirmed 2026-10-04)*
 - [x] `npm run typecheck` + `npm test` green; render suite width-safe at 120×36 / 100×28 / 80×24 / 60 / 50 with sequence bytes intact (`test/render.test.ts` native suite).
 - [x] No test requires a real terminal, chafa, pi-chafa, or the real `$HOME`; no new runtime dependency.
 - [x] README, chafa spec pointer, AGENTS.md, issue index updated; version `0.8.0`.
@@ -72,7 +72,7 @@ This issue delivers the **native tier** per [`docs/specs/native-image-rendering.
 ## Verification
 
 - Automated: spec §12 suites; the existing 19-suite/501-case baseline stays green (chafa path byte-identical).
-- Manual (required before closing): spec §14 step 7 checklist, evidence recorded in the issue or `docs/plans/qa-evidence.md`.
+- Manual: spec §14 step 7 checklist — passed per maintainer confirmation (2026-10-04, prior to #143); terminal and per-item notes were not itemized. Recorded here in lieu of `qa-evidence.md` entries.
 
 ## References
 

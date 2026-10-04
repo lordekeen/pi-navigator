@@ -8,9 +8,9 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
-| **Pending / Open** | 1 | 1 | 1 | **3** |
-| **Resolved** | 21 | 55 | 63 | **139** |
-| **Total** | **22** | **56** | **64** | **142** |
+| **Pending / Open** | 1 | 0 | 1 | **2** |
+| **Resolved** | 21 | 57 | 63 | **141** |
+| **Total** | **22** | **57** | **64** | **143** |
 
 ---
 
@@ -20,7 +20,6 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | [#020](020-no-viewer-cache-blocking-highlight.md) | No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread | Bug / Performance | High | `viewer.ts` | Open (partial — cache done; event-loop yielding deferred: blocked by pi's bundled-runtime virtual-module boundary, needs a pi-side API) |
 | [#067](067-typed-config-registry-paths.md) | Typed Config Registry Paths (`path` is `readonly string[]`) | Technical Debt / Type Safety | Low | `settings.ts` | **Deferred** — tracked, not scheduled: the compile-time path/default check is not worth the rework at five fields. Revisit when the schema grows (~15+ fields or a third level), `live: true` lands, the byte-pinned serialize test is relaxed, or a defect escapes that a type check would have caught |
-| [#069](069-native-image-rendering.md) | Native Terminal Image Rendering (kitty / iTerm2 via pi-tui) | Feature | Medium | `images.ts` / `viewer_view.ts` / `index.ts` | Open — implemented in v0.8.0 (spec [`native-image-rendering.md`](../specs/native-image-rendering.md)); awaiting the live-terminal QA checklist ([`qa-evidence.md`](../plans/qa-evidence.md)) before close |
 
 ---
 
@@ -29,6 +28,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | ID | Title | Type | Severity | Resolution Summary | Status |
 | [#140](140-session-module-extraction.md) | Extract the Session Module from `runNavigator`'s Mount Closure | Technical Debt / Refactor | Medium | The `ctx.ui.custom` closure became `session.ts`: `createSession(deps)` → `{ loadFile, loadCommit, start, refresh, onActivity, dispose }` over an `OverlaySink` port, with `loadFile`/`notify`/`notifyWarning`/`theme`/`kittyProbe`/`capabilities`/`pi`/settings/imagePaths injected and git/tree/diff/images imported directly; `refreshData` decomposed into private helpers; `dispose()` additionally sets the session's closed flag so a framework-driven dispose stops in-flight ticks. Pure move — `navigator.ts` and existing tests byte-identical (802/802 still green); +13 `session.test.ts` cases drive cadence/backoff (cap and resets revert-checked), stamping skips, cache identity, abort ownership, error dedupe, dispose and `loadCommit`; 815/815 across 21 suites. Policy helpers moved to `session.ts` and re-exported from `index.ts` for the frozen test imports; `tsconfig.json` include gained `session.ts`. version 0.14.3. | **Resolved** |
 | :--- | :--- | :--- | :--- | :--- | :---: |
+| [#143](143-image-verdict.md) | One Image Verdict (One Per-Load Decision, One Outcome Vocabulary, No Re-Derived Labels) | Technical Debt / Refactor | Medium | The per-load tier re-derivation collapsed into one plan and one outcome vocabulary. `images.ts` `planImageLoad(support, geometry)` orders the eligible renderers (native → chafa; `tier === "none"` and null geometry plan nothing); `session.ts` binds the names to its seams and derives the cache variant/`isCacheableRender`/over-cap carve-out from the plan; `viewer.ts` executes the attempt list (clean failure continues, throw or abort stops, the last failure lands on the card) and stamps the single `ImageVerdict` — rendered rows with the renderer that produced them, or a card carrying the failure. `navigator.ts`'s eight predicate sites read the verdict through one private helper and the load gate drops its `tier` read; `viewer_view.ts` labels from the verdict (`imageErrorLabel` and the local mime gate deleted — the native mime gate now lives in `images.ts` `isNativelyRenderable`). `ImageSupport.tier` survives as the snapshot summary; abort typing stays candidate #4's. Two recorded deltas: the tier-none plan guard (restores today's host-disabled behavior inside the plan) and one intentional native-throw relabel. +14 cases; 865/865 across 21 suites. version 0.14.7. | **Resolved** |
+| [#069](069-native-image-rendering.md) | Native Terminal Image Rendering (kitty / iTerm2 via pi-tui) | Feature | Medium | Maintainer-confirmed live-terminal QA pass (2026-10-04, prior to the #143 refactor) closes the spec §14 step 7 gate: the implementation landed in v0.8.0 with the native kitty/iTerm2 tier via pi-tui (no protocol bytes of our own), width `min(paneCols, terminal.imageWidthCells)`, the 4 MiB cap, and chafa/meta fallbacks. Terminal and per-item notes were not itemized. The tier vocabulary it introduced was later deepened by #143. | **Resolved** |
 | [#142](142-open-target-protocol.md) | Deepen the Overlay's Open-Target Protocol (Typed Target, One mtime Protocol, One Load Primitive) | Technical Debt / Refactor | Medium | The typed `OpenTarget` union replaces the `commit:` string protocol: `OverlaySink` trades `getOpenRelPath`/`getOpenMtime`/`setDiskChanged` for `getOpenTarget` (displayed content only) and `checkOpenTarget(target, mtimeMs \| null)`, which owns the #040 TOCTOU recheck, the ±1 ms comparison, the `diskChanged` write and the verdict the session feeds to its backoff. `openTarget(target, keepScroll)` is the one load state machine — race guard, in-flight target, scroll/search reset, disposal, per-kind error cards (commit errors now stamp `commitHash`) — with `openRelPath`/`openCommit` as delegates; the session probe does get → skip commit by kind → stat → check with no string parsing. String projections survive only for the display consumers, and the image-reflow arming stays target-first. +7 cases (TOCTOU guard, drift notice, displayed-vs-in-flight, commit skip, stat failure, no target); 851/851 across 21 suites. `docs/GLOSSARY.md` created with the protocol vocabulary. version 0.14.6. | **Resolved** |
 | [#139](139-completion-labels-show-token.md) | Subcommand Completions Are Labelled With a Sentence Instead of the Token | Bug / UX | Low | `navigatorCompletions` mapped the table's descriptive `completionLabel` into the host's `label` field, so the popup row name displaced the token the user was typing (`set` and `help` did not contain it at all). Items now label with the token and carry the sentence as `description`; the column was renamed `completionDescription` to match. Selection was always correct (`value` is inserted). +rewritten projection/prefix assertions, including a `label === value` sweep. version 0.14.2. | **Resolved** |
 | [#138](138-git-header-label-truncated.md) | Git Header Truncates the `GIT` Label to `GI` at 120 Columns | Bug / UI Consistency | Low | The counter guard in `buildGitHeader` omitted the one gap cell `joinLeftRight` reserves, so at `leftW = 31` it passed (4 + 22 + 5 = 31) while `maxLeft` was 3 and `hardTruncate` shaved `" GIT"` to `GI`. The guard now includes the gap: the counter is dropped and the label stays whole (verified live at 120 columns; intact from `leftW = 32`). +1 case pinning the 31/32 boundary. version 0.14.1. | **Resolved** |
@@ -190,7 +191,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#116: First Image of a Session Renders as Chafa, Later Ones Render Natively](116-first-image-chafa-tier-flip.md) *(resolved)*
 - [#113: Git Group Rows Ignore `leftW`, Clipping the Status-Error Hint](113-git-group-row-ignores-leftw.md) *(resolved)*
 - [#110: Keybinding Help Description and Documentation Drift Following Native Image Rendering](110-help-keybinding-description-native-image-drift.md) *(resolved)*
-- [#069: Native Terminal Image Rendering (kitty / iTerm2 via pi-tui)](069-native-image-rendering.md) *(open — live QA pending)*
+- [#069: Native Terminal Image Rendering (kitty / iTerm2 via pi-tui)](069-native-image-rendering.md) *(resolved)*
 - [#068: Settings Menu Standards Parity (host theme roles, mouse forwarding, host framing)](068-settings-menu-standards-parity.md) *(resolved)*
 - [#062: Settings Menu Opened as a Centered Overlay Instead of Docking Above the Message Input](062-settings-menu-overlay-placement.md) *(resolved)*
 - [#061: Slash-Command Settings Menu and Help (`/navigator settings` / `/navigator help`)](061-navigator-settings-command.md) *(resolved)*
@@ -284,6 +285,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#055: `isMarkdownPath` Excludes Common Markdown Extensions (`.mdx`, `.mkd`, `.mdown`)](055-markdown-extensions-whitelist.md) *(resolved)*
 
 ### Technical Debt & Code Robustness
+- [#143: One Image Verdict (One Per-Load Decision, One Outcome Vocabulary, No Re-Derived Labels)](143-image-verdict.md) *(resolved)*
 - [#142: Deepen the Overlay's Open-Target Protocol (Typed Target, One mtime Protocol, One Load Primitive)](142-open-target-protocol.md) *(resolved)*
 - [#140: Extract the Session Module from `runNavigator`'s Mount Closure](140-session-module-extraction.md) *(resolved)*
 - [#130: Overlay Height Computed Twice (Host `maxHeight` vs `frame.overlayHeight`)](130-overlay-height-computed-twice.md) *(resolved)*

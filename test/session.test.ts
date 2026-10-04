@@ -233,24 +233,38 @@ function makeSession(overrides: Partial<SessionDeps> = {}): Harness {
   const notifyWarning = vi.fn<(message: string) => void>();
 
   // Stand-in for viewer.ts's loadFile: records calls and mirrors its mtime
-  // reporting so the session's cache keys match a real run.
+  // reporting so the session's cache keys match a real run. The image branch
+  // mirrors the executor contract (Issue #143): run the first planned attempt
+  // and report its verdict.
   const loadFile = vi.fn<LoadFn>(async (absPath, relPath, opts) => {
-    if (opts?.image && opts?.renderImage) {
-      const out = await opts.renderImage(absPath, {
-        cols: opts.image.cols,
-        rows: opts.image.rows,
-      });
-      if (!out.ok) return { kind: "image", relPath, imageError: out.reason, lines: [] };
+    const image = opts?.image;
+    const attempt = opts?.attempts?.[0];
+    if (image !== undefined && attempt !== undefined) {
+      const out = await attempt.render(absPath, image);
+      const mtimeMs = (await stat(absPath)).mtimeMs;
+      if (!out.ok) {
+        return {
+          kind: "image",
+          relPath,
+          lines: [],
+          sizeBytes: 16,
+          mtimeMs,
+          imageVerdict: { kind: "card", failed: { renderer: attempt.renderer, detail: out.reason } },
+        };
+      }
       return {
         kind: "image",
         relPath,
-        imageTier: "chafa",
-        imageCols: opts.image.cols,
-        imageRows: opts.image.rows,
-        imageLines: out.lines,
         lines: [],
         sizeBytes: 16,
-        mtimeMs: (await stat(absPath)).mtimeMs,
+        mtimeMs,
+        imageVerdict: {
+          kind: "rendered",
+          renderer: attempt.renderer,
+          lines: out.lines,
+          cols: out.cols,
+          rows: out.rows,
+        },
       };
     }
     let mtimeMs: number | undefined;

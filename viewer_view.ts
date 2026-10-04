@@ -11,11 +11,10 @@
 
 import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 
-import type { ImageSupport } from "./images";
+import { isNativelyRenderable, type ImageSupport } from "./images";
 import type { NavigatorTheme } from "./theme";
 import type { Focus, SearchMatch, ViewerFile } from "./types";
-import { NATIVE_IMAGE_MIME } from "./constants";
-import { formatSize, hardTruncate, isMarkdownPath, extOf, sliceStyled, type DisplayRow } from "./viewer";
+import { formatSize, hardTruncate, isMarkdownPath, sliceStyled, type DisplayRow } from "./viewer";
 import { FRAME_CORNERS, isImageLine, joinLeftRight, MODE_HINTS, padTo, plainHint, shortPath, truncateAndWidth } from "./frame";
 
 /** Markdown files get an alternative rendered view (Issue #053). */
@@ -154,7 +153,8 @@ export function renderViewerPane(view: ViewerPaneView, width: number, area: numb
     // the sequence appears, so no width function may cut or re-anchor it.
     // Filler rows are `""` at this boundary and become blank pane rows. Chafa
     // rows keep their hard-cut + pad contract.
-    const native = file.imageTier === "native";
+    const verdict = file.imageVerdict;
+    const native = verdict?.kind === "rendered" && verdict.renderer === "native";
     for (let i = 0; i < area; i++) {
       const line = view.imageLines[view.viewScroll + i];
       if (line === undefined || line === "") {
@@ -237,11 +237,9 @@ export function buildViewerHeader(view: ViewerPaneView, rightW: number): string 
     if (file.kind === "image" && view.imageSupport.tier !== "none") {
       // Header badge (spec §7.5, §10): a rendered image shows its renderer and
       // the toggle affordance; a capable card shows how to get back to it.
-      if (file.imageTier === "chafa" && !view.imageAsCard) {
-        meta.push("chafa");
-        meta.push("i card");
-      } else if (file.imageTier === "native" && !view.imageAsCard) {
-        meta.push(view.imageSupport.nativeProtocol ?? "native");
+      const verdict = file.imageVerdict;
+      if (verdict?.kind === "rendered" && !view.imageAsCard) {
+        meta.push(verdict.renderer === "chafa" ? "chafa" : (view.imageSupport.nativeProtocol ?? "native"));
         meta.push("i card");
       } else {
         meta.push("i render");
@@ -350,21 +348,15 @@ export function buildCard(file: ViewerFile, rightW: number, area: number, view: 
 }
 
 /**
- * Which renderer's failure an `imageError` belongs to (spec §10): the strict
- * mode names it, and under auto the chafa seam ran exactly when pi-chafa is
- * present and the probe succeeded — otherwise the native reason is the one
- * that reached the card.
+ * Which renderer's name a failed verdict gets on the card (Issue #143): the
+ * verdict records who spoke, so no mode/probe state is re-read here — native
+ * failures name the protocol, chafa failures name chafa.
  */
-function imageErrorLabel(support: ImageSupport): string {
-  if (support.mode === "chafa") return "chafa";
-  if (support.mode === "native") return support.nativeProtocol ?? "native";
-  const chafaAttempted = support.piChafa.present && support.chafa.state === "ok";
-  return chafaAttempted ? "chafa" : (support.nativeProtocol ?? "native");
-}
-
-/** True when runNativeRender's mime gate (D5) would accept this path. */
-function nativelyRenderable(relPath: string): boolean {
-  return NATIVE_IMAGE_MIME[extOf(relPath)] !== undefined;
+function failedRendererLabel(
+  failed: { renderer: "native" | "chafa" },
+  support: ImageSupport,
+): string {
+  return failed.renderer === "native" ? (support.nativeProtocol ?? "native") : "chafa";
 }
 
 /**
@@ -380,14 +372,15 @@ export function imageCardHints(
   support: ImageSupport,
   geometry: { cols: number; rows: number } | null,
 ): string[] {
-  if (file.imageError) return [`${imageErrorLabel(support)} failed: ${file.imageError}`];
+  const failed = file.imageVerdict?.kind === "card" ? file.imageVerdict.failed : undefined;
+  if (failed) return [`${failedRendererLabel(failed, support)} failed: ${failed.detail}`];
   if (geometry === null) return ["pane too small for a rendered image"];
   if (!support.hostShowImages) return ["terminal.showImages is false - image rendering disabled"];
   if (support.mode === "native") {
     if (support.nativeProtocol === null) {
       return ["this terminal does not support kitty/iTerm2 - use auto or chafa"];
     }
-    if (!nativelyRenderable(file.relPath)) {
+    if (!isNativelyRenderable(file.relPath)) {
       return ["this image format cannot be rendered natively - use chafa or auto"];
     }
     return [];

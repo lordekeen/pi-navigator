@@ -36,7 +36,7 @@ import { leftColumnWidth } from "../frame";
 import type { NavigatorLayout } from "../types";
 import type { NavigatorSettings } from "../settings";
 import { openSettingsMenu, type SettingsMenuDeps, type SettingsMenuTheme, type SettingsMenuUi } from "../settings_menu";
-import { DEFAULT_PI_CHAFA_SUBSET, type ImageSupport } from "../images";
+import { DEFAULT_PI_CHAFA_SUBSET, planImageLoad, type ImageSupport } from "../images";
 import { makeNavigatorTheme, type NavigatorTheme } from "../theme";
 import { buildTree, entriesFromPaths } from "../tree";
 import type { GitState, ViewerFile } from "../types";
@@ -965,7 +965,7 @@ describe("chafa image render width safety (§12.5)", () => {
     "\u754c".repeat(26), // wide CJK glyphs: 52 cells, truncation must be column-aware
   ];
 
-  function makeChafaHarness(rows: number, support: ImageSupport, imageError?: string): NavigatorOverlay {
+  function makeChafaHarness(rows: number, support: ImageSupport): NavigatorOverlay {
     const theme = makeNavigatorTheme({
       fg: (_color: string, text: string) => text,
       bg: (_color: string, text: string) => text,
@@ -981,20 +981,19 @@ describe("chafa image render width safety (§12.5)", () => {
       requestRender: () => undefined,
       onClose: () => undefined,
       loadFile: async (relPath: string, opts?: LoadFileOptions): Promise<ViewerFile> => {
-        if (!opts?.image) {
-          return { kind: "image", relPath, imageTier: "metadata", lines: [], sizeBytes: 1024, message: "1.0 KB \u00b7 40x40", mtimeMs: 0 };
+        const image = opts?.image;
+        // Session stand-in (Issue #143): plan under the fixed snapshot — a
+        // mode-off/no-tier support leaves the card, never the payload.
+        if (image === undefined || planImageLoad(support, image).length === 0) {
+          return { kind: "image", relPath, imageVerdict: { kind: "card" }, lines: [], sizeBytes: 1024, message: "1.0 KB \u00b7 40x40", mtimeMs: 0 };
         }
         return {
           kind: "image",
           relPath,
-          imageTier: "chafa",
-          imageLines: CHAFA_PAYLOAD,
-          imageCols: opts.image.cols,
-          imageRows: opts.image.rows,
+          imageVerdict: { kind: "rendered", renderer: "chafa", lines: CHAFA_PAYLOAD, cols: image.cols, rows: image.rows },
           lines: [],
           sizeBytes: 1024,
           message: "1.0 KB \u00b7 40x40",
-          ...(imageError !== undefined ? { imageError } : {}),
           mtimeMs: 0,
         };
       },
@@ -1082,16 +1081,14 @@ describe("native image render width safety (§12.4)", () => {
       requestRender: () => undefined,
       onClose: () => undefined,
       loadFile: async (relPath: string, opts?: LoadFileOptions): Promise<ViewerFile> => {
-        if (!opts?.image) {
-          return { kind: "image", relPath, imageTier: "metadata", lines: [], sizeBytes: 1024, message: "1.0 KB \u00b7 40x40", mtimeMs: 0 };
+        const image = opts?.image;
+        if (image === undefined || planImageLoad(nativeSupport(), image).length === 0) {
+          return { kind: "image", relPath, imageVerdict: { kind: "card" }, lines: [], sizeBytes: 1024, message: "1.0 KB \u00b7 40x40", mtimeMs: 0 };
         }
         return {
           kind: "image",
           relPath,
-          imageTier: "native",
-          imageLines: [NATIVE_SEQ, "", ""],
-          imageCols: opts.image.cols,
-          imageRows: opts.image.rows,
+          imageVerdict: { kind: "rendered", renderer: "native", lines: [NATIVE_SEQ, "", ""], cols: image.cols, rows: image.rows },
           lines: [],
           sizeBytes: 1024,
           message: "1.0 KB \u00b7 40x40",

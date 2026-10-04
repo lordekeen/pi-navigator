@@ -684,7 +684,11 @@ describe("createViewerCache (Issues #020, #109, #112, D7)", () => {
     // even though a cacheable entry for the same path exists.
     expect(cache.lookup("img.png", { cacheable: false, mtimeMs: 1000, variant: "" })).toBeUndefined();
     // Storing the kitty render is a no-op: the previous entry survives.
-    const kitty = file({ relPath: "img.png", kind: "image", imageTier: "native", imageLines: ["\x1b_Gf=100..."] });
+    const kitty = file({
+      relPath: "img.png",
+      kind: "image",
+      imageVerdict: { kind: "rendered", renderer: "native", lines: ["\x1b_Gf=100..."], cols: 2, rows: 2 },
+    });
     cache.store("img.png", { cacheable: false, variant: "native:kitty:2x2", file: kitty });
     expect(cache.size).toBe(1);
     expect(cache.lookup("img.png", { cacheable: true, mtimeMs: 1000, variant: "" })).toBe(text);
@@ -732,8 +736,13 @@ describe("createViewerCache (Issues #020, #109, #112, D7)", () => {
     const over = file({
       relPath: "big.png",
       kind: "image",
-      imageTier: "native",
-      imageLines: ["x".repeat(IMAGE_NATIVE_CACHE_MAX_CHARS + 1)],
+      imageVerdict: {
+        kind: "rendered",
+        renderer: "native",
+        lines: ["x".repeat(IMAGE_NATIVE_CACHE_MAX_CHARS + 1)],
+        cols: 2,
+        rows: 2,
+      },
     });
     cache.store("big.png", { cacheable: true, variant: "native:iterm2:2x2", file: over });
     expect(cache.size).toBe(0);
@@ -741,8 +750,13 @@ describe("createViewerCache (Issues #020, #109, #112, D7)", () => {
     const under = file({
       relPath: "small.png",
       kind: "image",
-      imageTier: "native",
-      imageLines: ["y".repeat(IMAGE_NATIVE_CACHE_MAX_CHARS - 1)],
+      imageVerdict: {
+        kind: "rendered",
+        renderer: "native",
+        lines: ["y".repeat(IMAGE_NATIVE_CACHE_MAX_CHARS - 1)],
+        cols: 2,
+        rows: 2,
+      },
     });
     cache.store("small.png", { cacheable: true, variant: "native:iterm2:2x2", file: under });
     expect(cache.size).toBe(1);
@@ -833,7 +847,9 @@ describe("makeImageSeams (Issue #116 fix 1)", () => {
     // The whole point of the snapshot binding: a load that captured a
     // non-native support must refuse natively even if the session has since
     // become native-capable, so the seam can never disagree with the tier the
-    // loader chose when it picked the seams.
+    // loader chose when it picked the seams. Since Issue #143 the guard is
+    // structural (the snapshot's protocol): eligibility itself is the plan's
+    // decision, made once at load start.
     const seams = makeImageSeams({
       support: snapshot({ tier: "chafa", nativeProtocol: null }),
       probeDecode: neverProbe,
@@ -842,6 +858,21 @@ describe("makeImageSeams (Issue #116 fix 1)", () => {
     await expect(seams.renderNativeImage("/work/x.png", { cols: 10, rows: 5 })).resolves.toEqual({
       ok: false,
       reason: "native rendering is not available",
+    });
+  });
+
+  it("keeps only the structural protocol guard: a protocol-bearing snapshot renders natively even at tier chafa (Issue #143)", async () => {
+    // The tier re-gate is deliberately gone — the plan decides eligibility, and
+    // the seam must not second-guess it. With a protocol present it proceeds to
+    // the render, here failing on the missing fixture path, not on a re-gate.
+    const seams = makeImageSeams({
+      support: snapshot({ tier: "chafa", nativeProtocol: "kitty" }),
+      probeDecode: neverProbe,
+      signal: new AbortController().signal,
+    });
+    await expect(seams.renderNativeImage("/work/x.png", { cols: 10, rows: 5 })).resolves.toEqual({
+      ok: false,
+      reason: "could not read the image file",
     });
   });
 
@@ -936,22 +967,28 @@ describe("makeImageSeams (Issue #116 fix 1)", () => {
       // (beginImageLoad) aborts A, exactly like index.ts.
       const loadA = loadFile(png, "a.png", {
         image: req,
-        renderNativeImage: seamsA.renderNativeImage,
-        renderImage: seamsA.renderImage,
+        attempts: [
+          { renderer: "native", render: seamsA.renderNativeImage },
+          { renderer: "chafa", render: seamsA.renderImage },
+        ],
       });
       await aEntered;
       controllerA.abort();
       const loadB = loadFile(png, "b.png", {
         image: req,
-        renderNativeImage: seamsB.renderNativeImage,
-        renderImage: seamsB.renderImage,
+        attempts: [
+          { renderer: "native", render: seamsB.renderNativeImage },
+          { renderer: "chafa", render: seamsB.renderImage },
+        ],
       });
       await bEntered;
 
       releaseA("no-reply");
       const a = await loadA;
-      expect(a.imageTier).toBe("metadata");
-      expect(a.imageError).toBe("render aborted");
+      expect(a.imageVerdict).toEqual({
+        kind: "card",
+        failed: { renderer: "native", detail: "render aborted" },
+      });
 
       // Defense in depth: even if the superseded load's chafa fallback ran
       // (the pre-#117 viewer did), it can only observe its own aborted signal —
@@ -965,8 +1002,9 @@ describe("makeImageSeams (Issue #116 fix 1)", () => {
       const b = await loadB;
       // Pre-#117 the superseded load's chafa fallback aborted B here and the
       // displayed image silently degraded to chafa.
-      expect(b.imageTier).toBe("native");
-      expect(b.imageLines?.length ?? 0).toBeGreaterThan(0);
+      expect(b.imageVerdict?.kind).toBe("rendered");
+      expect(b.imageVerdict?.kind === "rendered" && b.imageVerdict.renderer).toBe("native");
+      expect(b.imageVerdict?.kind === "rendered" && b.imageVerdict.lines.length > 0).toBe(true);
     } finally {
       setCapabilities(saved);
       resetCapabilitiesCache();

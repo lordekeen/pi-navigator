@@ -20,6 +20,16 @@ display string to recover the fact (Issue #142). The *displayed* open target is 
 the installed `ViewerFile`; navigator separately tracks the *in-flight* target while a load is
 running, which is what the switching placeholder and image-reflow arming read.
 
+## Image verdict
+
+The per-load outcome of the image pipeline (`ImageVerdict` in `types.ts`): either rendered
+rows plus the renderer that produced them (`"native"` / `"chafa"`), or a metadata card
+carrying the failure that ended the attempt list (renderer + bounded detail). One decision
+per load — `images.ts` `planImageLoad` orders the renderers eligible under the support
+snapshot, the session binds them to its seams, and `viewer.ts` executes the list (a clean
+failure continues, a throw or an abort stops it). Labels read the verdict, never re-derive
+which renderer spoke (Issue #143).
+
 ## Style key
 
 A fingerprint (`makeStyleKey` in `theme.ts`) of the theme tokens viewer content is baked with,

@@ -122,6 +122,25 @@ export type OpenTarget =
 
 export type ViewerKind = "empty" | "text" | "truncated" | "binary" | "image" | "error" | "diff";
 
+/**
+ * The per-load outcome of the image pipeline (Issue #143): either the rows a
+ * renderer produced — with the renderer named, so the pane never re-derives
+ * which one spoke — or the metadata card, carrying the failure that ended the
+ * attempt list when there was one. One decision per load: `planImageLoad`
+ * orders the eligible renderers, the session binds them to its seams, and
+ * `viewer.ts` executes the list (a clean failure continues, a throw or an
+ * abort stops it).
+ *
+ * For a native render, `cols`/`rows` are the REQUESTED geometry, not pi-tui's
+ * aspect-fitted result: resize detection compares pane-derived requests, so a
+ * fitted height shorter than the pane would otherwise read as a permanent
+ * geometry mismatch and reflow every frame. Chafa carries the renderer's
+ * returned geometry.
+ */
+export type ImageVerdict =
+  | { kind: "rendered"; renderer: "native" | "chafa"; lines: string[]; cols: number; rows: number }
+  | { kind: "card"; failed?: { renderer: "native" | "chafa"; detail: string } };
+
 export interface ViewerFile {
   kind: ViewerKind;
   relPath: string;
@@ -136,17 +155,11 @@ export interface ViewerFile {
   notice?: string;
   /** Message for binary, image, and error cards. */
   message?: string;
-  /** Image tier ladder outcome: metadata card, chafa symbol art, or (reserved)
-   *  native protocol blocks. */
-  imageTier?: "metadata" | "native" | "chafa";
-  /** chafa-rendered ANSI rows; set only with kind "image" and imageTier
-   *  "chafa" after sanitizeChafaPayload succeeded. `lines` stays empty. */
-  imageLines?: string[];
-  /** Geometry the chafa rows were rendered at (header badge + resize detect). */
-  imageCols?: number;
-  imageRows?: number;
-  /** Bounded chafa failure reason for the fallback card's hint row. */
-  imageError?: string;
+  /** The image pipeline's per-load outcome (Issue #143): rendered rows plus
+   *  the renderer that produced them, or the metadata card carrying the
+   *  failure that ended the attempt list. Set only with kind "image"; the
+   *  rendered rows live on the verdict, so `lines` stays empty. */
+  imageVerdict?: ImageVerdict;
   /** Diff-only: short hash the diff is for (v3 commit detail view). */
   commitHash?: string;
   /** Diff-only: parent short hashes, for the notice line. */
