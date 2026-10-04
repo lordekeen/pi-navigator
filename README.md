@@ -204,7 +204,7 @@ runtime dependencies, ever — `node_modules` is dev-only.
   than the plan's original "NodeNext" because pi loads extensions through jiti,
   which resolves the code's intentionally extensionless relative imports;
   NodeNext would demand `.js` extensions the runtime does not need.
-- `npm test` — 20 vitest suites: porcelain `-z` parsing plus a
+- `npm test` — 21 vitest suites: porcelain `-z` parsing plus a
   real-git scratch-repo integration pass, tree building/fs-walk fixtures
   (ignores, dot entries, symlink cycles), viewer caps and UTF-8 head decoding,
   the keymap reducer (escape precedence, focus cycling, copy), settings
@@ -214,8 +214,9 @@ runtime dependencies, ever — `node_modules` is dev-only.
   detection/config/probe/sanitizer/geometry, the native capability ladder and
   pi-tui encoder suite, the extracted pane view-models
   (frame geometry, files/git row builders, viewer pane, `?` modal) plus the diff
-  styler, theme token map and shared env parser, the notify-once factory, and
-  render width-safety at 120x36, 100x28 and 80x24 — plus 60/50-column,
+  styler, theme token map and shared env parser, the notify-once factory, the session
+  lifecycle (poll cadence/backoff, tree stamping, viewer-cache and abort ownership),
+  and render width-safety at 120x36, 100x28 and 80x24 — plus 60/50-column,
   settings-menu, chafa and native payload cases — including help/filter/search
   modes and the compact notice.
 

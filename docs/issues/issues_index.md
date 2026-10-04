@@ -9,8 +9,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
 | **Pending / Open** | 1 | 2 | 1 | **4** |
-| **Resolved** | 21 | 51 | 63 | **135** |
-| **Total** | **22** | **53** | **64** | **139** |
+| **Resolved** | 21 | 52 | 63 | **136** |
+| **Total** | **22** | **54** | **64** | **140** |
 
 ---
 
@@ -28,6 +28,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 ## 🟢 Resolved Issues
 
 | ID | Title | Type | Severity | Resolution Summary | Status |
+| [#140](140-session-module-extraction.md) | Extract the Session Module from `runNavigator`'s Mount Closure | Technical Debt / Refactor | Medium | The `ctx.ui.custom` closure became `session.ts`: `createSession(deps)` → `{ loadFile, loadCommit, start, refresh, onActivity, dispose }` over an `OverlaySink` port, with `loadFile`/`notify`/`notifyWarning`/`theme`/`kittyProbe`/`capabilities`/`pi`/settings/imagePaths injected and git/tree/diff/images imported directly; `refreshData` decomposed into private helpers; `dispose()` additionally sets the session's closed flag so a framework-driven dispose stops in-flight ticks. Pure move — `navigator.ts` and existing tests byte-identical (802/802 still green); +13 `session.test.ts` cases drive cadence/backoff (cap and resets revert-checked), stamping skips, cache identity, abort ownership, error dedupe, dispose and `loadCommit`; 815/815 across 21 suites. Policy helpers moved to `session.ts` and re-exported from `index.ts` for the frozen test imports; `tsconfig.json` include gained `session.ts`. version 0.14.3. | **Resolved** |
 | :--- | :--- | :--- | :--- | :--- | :---: |
 | [#139](139-completion-labels-show-token.md) | Subcommand Completions Are Labelled With a Sentence Instead of the Token | Bug / UX | Low | `navigatorCompletions` mapped the table's descriptive `completionLabel` into the host's `label` field, so the popup row name displaced the token the user was typing (`set` and `help` did not contain it at all). Items now label with the token and carry the sentence as `description`; the column was renamed `completionDescription` to match. Selection was always correct (`value` is inserted). +rewritten projection/prefix assertions, including a `label === value` sweep. version 0.14.2. | **Resolved** |
 | [#138](138-git-header-label-truncated.md) | Git Header Truncates the `GIT` Label to `GI` at 120 Columns | Bug / UI Consistency | Low | The counter guard in `buildGitHeader` omitted the one gap cell `joinLeftRight` reserves, so at `leftW = 31` it passed (4 + 22 + 5 = 31) while `maxLeft` was 3 and `hardTruncate` shaved `" GIT"` to `GI`. The guard now includes the gap: the counter is dropped and the label stays whole (verified live at 120 columns; intact from `leftW = 32`). +1 case pinning the 31/32 boundary. version 0.14.1. | **Resolved** |
@@ -280,6 +281,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#055: `isMarkdownPath` Excludes Common Markdown Extensions (`.mdx`, `.mkd`, `.mdown`)](055-markdown-extensions-whitelist.md) *(resolved)*
 
 ### Technical Debt & Code Robustness
+- [#140: Extract the Session Module from `runNavigator`'s Mount Closure](140-session-module-extraction.md) *(resolved)*
 - [#130: Overlay Height Computed Twice (Host `maxHeight` vs `frame.overlayHeight`)](130-overlay-height-computed-twice.md) *(resolved)*
 - [#131: Settings Reachable Only by File/Env — No `registerFlag`, No Headless Path](131-settings-flags-and-headless-path.md) *(resolved)*
 - [#135: UI Compliance Audit Polish Batch (13 Low Findings)](135-ui-audit-polish-batch.md) *(resolved)*
