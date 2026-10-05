@@ -8,9 +8,9 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
-| **Pending / Open** | 1 | 0 | 1 | **2** |
+| **Pending / Open** | 2 | 0 | 3 | **5** |
 | **Resolved** | 21 | 62 | 65 | **148** |
-| **Total** | **22** | **62** | **66** | **150** |
+| **Total** | **23** | **62** | **68** | **153** |
 
 ---
 
@@ -19,7 +19,10 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | ID | Title | Type | Severity | Component | Status |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | [#020](020-no-viewer-cache-blocking-highlight.md) | No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread | Bug / Performance | High | `viewer.ts` | Open (partial — cache done; event-loop yielding deferred: blocked by pi's bundled-runtime virtual-module boundary, needs a pi-side API) |
+| [#151](151-npm-files-missing-session.md) | The npm `files` Allowlist Omits `session.ts` | Bug / Packaging | High | `package.json` | Open — published 0.14.3–0.14.14 would fail to load `./session`; fix plus a guard that every root module is published (found by the 2026-10-04 OCR sweep) |
 | [#067](067-typed-config-registry-paths.md) | Typed Config Registry Paths (`path` is `readonly string[]`) | Technical Debt / Type Safety | Low | `settings.ts` | **Deferred** — tracked, not scheduled: the compile-time path/default check is not worth the rework at five fields. Revisit when the schema grows (~15+ fields or a third level), `live: true` lands, the byte-pinned serialize test is relaxed, or a defect escapes that a type check would have caught |
+| [#152](152-git-reveal-display-path.md) | The Git-Pane Reveal Uses the Display Path — Untracked Directory Rows Never Align the Files Cursor | Bug / UI Consistency | Low | `navigator.ts` | Pending — normalize the trailing slash before `expandTo`/`alignFilesCursor`; folds in #150's reveal delta and corrects its "no behavior change" wording (OCR sweep 2026-10-04) |
+| [#153](153-nativeonly-dead-parameter.md) | `renderedImageVerdict`'s `nativeOnly` Parameter Is Dead | Technical Debt / Dead Code | Low | `navigator.ts` | Pending — delete the parameter, its unreachable branch and the stale doc claim (OCR sweep 2026-10-04) |
 
 ---
 
@@ -181,6 +184,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 ## 📂 Issues by Category
 
 ### Bug Fixes & UI Consistency
+- [#151: The npm `files` Allowlist Omits `session.ts`](151-npm-files-missing-session.md) *(open)*
+- [#152: The Git-Pane Reveal Uses the Display Path — Untracked Directory Rows Never Align the Files Cursor](152-git-reveal-display-path.md) *(open)*
 - [#139: Subcommand Completions Are Labelled With a Sentence Instead of the Token](139-completion-labels-show-token.md) *(resolved)*
 - [#138: Git Header Truncates the `GIT` Label to `GI` at 120 Columns](138-git-header-label-truncated.md) *(resolved)*
 - [#136: Syntax Highlighting Stays Stale After a Theme Switch (the `viewerCache` Seam)](136-viewer-cache-stale-syntax-theme.md) *(resolved)*
@@ -292,6 +297,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#055: `isMarkdownPath` Excludes Common Markdown Extensions (`.mdx`, `.mkd`, `.mdown`)](055-markdown-extensions-whitelist.md) *(resolved)*
 
 ### Technical Debt & Code Robustness
+- [#153: `renderedImageVerdict`'s `nativeOnly` Parameter Is Dead](153-nativeonly-dead-parameter.md) *(open)*
 - [#150: Tree Surface Leaks — Test Support Out, One Mutation Door, No Back-Pointer](150-tree-surface-leaks.md) *(resolved)*
 - [#149: Viewer Pane Content — One Content Slot](149-viewer-content-slot.md) *(resolved)*
 - [#148: Frame Split-Brain — Layout Math, Assembly, and One Binding Table](148-frame-split-brain.md) *(resolved)*
