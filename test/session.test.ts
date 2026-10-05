@@ -756,13 +756,14 @@ describe("createSession: per-load abort ownership (Issue #117)", () => {
     ctl.gitState = makeGitState();
     const { session, sink } = makeSession();
     session.refresh();
-    await settle();
-    expect(sink.setImageSupport).toHaveBeenCalledWith(expect.objectContaining({ tier: "chafa" }));
+    await vi.waitFor(() =>
+      expect(sink.setImageSupport).toHaveBeenCalledWith(expect.objectContaining({ tier: "chafa" })),
+    );
 
     void session.loadFile("img.png", { image: IMAGE_REQ });
-    await settle();
+    await vi.waitFor(() => expect(ctl.chafaCalls).toHaveLength(1));
     void session.loadFile("img.png", { image: IMAGE_REQ });
-    await settle();
+    await vi.waitFor(() => expect(ctl.chafaCalls).toHaveLength(2));
     expect(ctl.chafaCalls).toHaveLength(2);
     expect(ctl.chafaCalls[0]?.signal.aborted).toBe(true); // superseded load
     expect(ctl.chafaCalls[1]?.signal.aborted).toBe(false); // its own signal
@@ -773,12 +774,14 @@ describe("createSession: per-load abort ownership (Issue #117)", () => {
     writeFileSync(join(dir, "img.png"), "png-bytes");
     ctl.support = "chafa";
     ctl.gitState = makeGitState();
-    const { session } = makeSession();
+    const { session, sink } = makeSession();
     session.refresh();
-    await settle();
+    await vi.waitFor(() =>
+      expect(sink.setImageSupport).toHaveBeenCalledWith(expect.objectContaining({ tier: "chafa" })),
+    );
 
     void session.loadFile("img.png", { image: IMAGE_REQ });
-    await settle();
+    await vi.waitFor(() => expect(ctl.chafaCalls).toHaveLength(1));
     expect(ctl.chafaCalls).toHaveLength(1);
     expect(ctl.chafaCalls[0]?.signal.aborted).toBe(false);
     session.dispose();
@@ -961,7 +964,11 @@ describe("createSession: reflow clock (Issue #144)", () => {
     await flushTicks();
 
     void session.loadFile("img.png", { image: IMAGE_REQ });
-    await flushTicks();
+    // vi.waitFor polls on real timers (safe timers are captured before fake
+    // timers install) and advances the virtual clock per check, so the real-fs
+    // stat → chafa spawn lands before the assertion regardless of load; the
+    // ≤50ms virtual drift stays under the 250ms re-arm debounce.
+    await vi.waitFor(() => expect(ctl.chafaCalls).toHaveLength(1));
     expect(ctl.chafaCalls).toHaveLength(1); // in flight, parked on its child
 
     await vi.advanceTimersByTimeAsync(IMAGE_RESIZE_DEBOUNCE_MS);

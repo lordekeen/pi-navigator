@@ -8,8 +8,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
-| **Pending / Open** | 1 | 1 | 1 | **3** |
-| **Resolved** | 22 | 62 | 67 | **151** |
+| **Pending / Open** | 1 | 0 | 1 | **2** |
+| **Resolved** | 22 | 63 | 67 | **152** |
 | **Total** | **23** | **63** | **68** | **154** |
 
 ---
@@ -20,7 +20,6 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | [#020](020-no-viewer-cache-blocking-highlight.md) | No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread | Bug / Performance | High | `viewer.ts` | Open (partial — cache done; event-loop yielding deferred: blocked by pi's bundled-runtime virtual-module boundary, needs a pi-side API) |
 | [#067](067-typed-config-registry-paths.md) | Typed Config Registry Paths (`path` is `readonly string[]`) | Technical Debt / Type Safety | Low | `settings.ts` | **Deferred** — tracked, not scheduled: the compile-time path/default check is not worth the rework at five fields. Revisit when the schema grows (~15+ fields or a third level), `live: true` lands, the byte-pinned serialize test is relaxed, or a defect escapes that a type check would have caught |
-| [#154](154-session-test-flakes-fixed-ticks.md) | `session.test.ts` Flakes Under Full-Suite Load — Fixed-Tick Settles Race Async Side Effects | Technical Debt / Test Reliability | Medium | `test/session.test.ts` | Open — three tests await a fixed 4-tick settle then assert async side effects; reproduced ~1 in 8 full runs and in the #153 gate run; adopt the #099 `vi.waitFor` condition convention |
 
 ---
 
@@ -28,6 +27,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | ID | Title | Type | Severity | Resolution Summary | Status |
 | [#140](140-session-module-extraction.md) | Extract the Session Module from `runNavigator`'s Mount Closure | Technical Debt / Refactor | Medium | The `ctx.ui.custom` closure became `session.ts`: `createSession(deps)` → `{ loadFile, loadCommit, start, refresh, onActivity, dispose }` over an `OverlaySink` port, with `loadFile`/`notify`/`notifyWarning`/`theme`/`kittyProbe`/`capabilities`/`pi`/settings/imagePaths injected and git/tree/diff/images imported directly; `refreshData` decomposed into private helpers; `dispose()` additionally sets the session's closed flag so a framework-driven dispose stops in-flight ticks. Pure move — `navigator.ts` and existing tests byte-identical (802/802 still green); +13 `session.test.ts` cases drive cadence/backoff (cap and resets revert-checked), stamping skips, cache identity, abort ownership, error dedupe, dispose and `loadCommit`; 815/815 across 21 suites. Policy helpers moved to `session.ts` and re-exported from `index.ts` for the frozen test imports; `tsconfig.json` include gained `session.ts`. version 0.14.3. | **Resolved** |
+| [#154](154-session-test-flakes-fixed-ticks.md) | `session.test.ts` Flakes Under Full-Suite Load — Fixed-Tick Settles Race Async Side Effects | Technical Debt / Test Reliability | Medium | The three fixed-tick tests now wait on observed conditions (`vi.waitFor`): the `refresh()` → support-snapshot wait and `chafaCalls` lengths 1/2 in the two abort tests, the chafa spawn in the fake-timer re-arms test. `vi.waitFor` under Vitest 5.0.1 polls on real safe timers while advancing the virtual clock ≤50 ms per check — under the 250 ms re-arm debounce, so the reflow semantics stay observable; no helper/fallback needed. Every assertion value unchanged. Red-green not applicable (flake); soak: 20/20 consecutive full-suite runs green, 930/930 across 22 suites, plus an orchestrator re-run. version 0.14.18. | **Resolved** |
 | :--- | :--- | :--- | :--- | :--- | :---: |
 | [#153](153-nativeonly-dead-parameter.md) | `renderedImageVerdict`'s `nativeOnly` Parameter Is Dead | Technical Debt / Dead Code | Low | `renderedImageVerdict()` lost the never-passed `nativeOnly` parameter and its unreachable `nativeOnly && renderer !== "native"` branch, plus the doc sentence claiming the parameter kept the native scroll pin structural. The pin still derives at the call site (`renderer === "native"`), native tests 6/6, and no source reference to `nativeOnly` remains. Behavior unchanged; 930/930. version 0.14.17. | **Resolved** |
 | [#152](152-git-reveal-display-path.md) | The Git-Pane Reveal Uses the Display Path — Untracked Directory Rows Never Align the Files Cursor | Bug / UI Consistency | Low | The git-pane Enter branch normalizes the reveal path once (`row.relPath.replace(/\/+$/, "")`) for `expandTo` + `alignFilesCursor` while `openRelPath` keeps the display path. Untracked-directory rows (whose display relPath carries `changedPath`'s slash) now move the files cursor where `alignFilesCursor` silently no-oped; `src`'s prefix expansion is pinned as deliberate, and `docs/issues/150`'s wording is corrected. Red-green: the cursor assertion fails with the old argument and passes with the fix; a naive `includes` assertion would have false-passed on the git row's own arrow. +2 cases; 930/930. version 0.14.16. | **Resolved** |
@@ -298,7 +298,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#055: `isMarkdownPath` Excludes Common Markdown Extensions (`.mdx`, `.mkd`, `.mdown`)](055-markdown-extensions-whitelist.md) *(resolved)*
 
 ### Technical Debt & Code Robustness
-- [#154: `session.test.ts` Flakes Under Full-Suite Load — Fixed-Tick Settles Race Async Side Effects](154-session-test-flakes-fixed-ticks.md) *(open)*
+- [#154: `session.test.ts` Flakes Under Full-Suite Load — Fixed-Tick Settles Race Async Side Effects](154-session-test-flakes-fixed-ticks.md) *(resolved)*
 - [#153: `renderedImageVerdict`'s `nativeOnly` Parameter Is Dead](153-nativeonly-dead-parameter.md) *(resolved)*
 - [#150: Tree Surface Leaks — Test Support Out, One Mutation Door, No Back-Pointer](150-tree-surface-leaks.md) *(resolved)*
 - [#149: Viewer Pane Content — One Content Slot](149-viewer-content-slot.md) *(resolved)*

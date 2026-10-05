@@ -1,6 +1,6 @@
 # Issue #154: `session.test.ts` Flakes Under Full-Suite Load — Fixed-Tick Settles Race Async Side Effects
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Technical Debt / Test Reliability
 - **Severity**: Medium
 - **Component(s)**: `test/session.test.ts`
@@ -64,12 +64,34 @@ logic is wrong.
 
 ## Acceptance Criteria
 
-- [ ] The three tests wait on the observed condition, not a fixed tick count.
-- [ ] A soak of **20 consecutive full-suite runs** with no failure of these
+- [x] The three tests wait on the observed condition, not a fixed tick count.
+- [x] A soak of **20 consecutive full-suite runs** with no failure of these
   tests (any unrelated failure still fails the soak).
-- [ ] No weakened assertions: the same values (call counts, abort flags, reflow
+- [x] No weakened assertions: the same values (call counts, abort flags, reflow
   counts) are asserted after the wait.
-- [ ] `npm run typecheck` and `npm test` green; case count unchanged.
+- [x] `npm run typecheck` and `npm test` green; case count unchanged.
+
+## Resolution
+
+Fixed (2026-10-05), version 0.14.18 — `test/session.test.ts` only, 15
+insertions / 8 deletions, no production code touched:
+
+- The three named tests observe conditions instead of tick budgets:
+  the `refresh()` → `setImageSupport({ tier: "chafa" })` snapshot wait and
+  `ctl.chafaCalls` lengths (1, then 2 in the supersession test) go through
+  `vi.waitFor`; the fake-timer re-arms test polls the chafa spawn the same way.
+  The final `flushTicks()` after the child release stays — a deterministic
+  microtask drain with no real I/O pending.
+- `vi.waitFor` under Vitest 5.0.1 fake timers was read from the installed
+  source, not assumed: `setSafeTimers()` captures the real timers before fake
+  timers install, so the poll runs on the real event loop while advancing the
+  virtual clock by ≤50 ms per check — safely under the 250 ms
+  `IMAGE_RESIZE_DEBOUNCE_MS`, so the re-arm semantics stay observable. No
+  fallback helper was needed.
+- Soak: 20 consecutive full-suite runs (`for i in $(seq 1 20); do npm test; done`,
+  nothing else running), **20/20 passed**, every run `Tests 930 passed (930)` /
+  `Test Files 22 passed (22)`; `npm run typecheck` clean; orchestrator re-ran
+  the suite independently (930/930).
 
 ## References
 
