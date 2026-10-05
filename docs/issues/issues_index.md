@@ -8,8 +8,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
-| **Pending / Open** | 1 | 2 | 1 | **4** |
-| **Resolved** | 22 | 63 | 68 | **153** |
+| **Pending / Open** | 1 | 1 | 1 | **3** |
+| **Resolved** | 22 | 64 | 68 | **154** |
 | **Total** | **23** | **65** | **69** | **157** |
 
 ---
@@ -18,7 +18,6 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | ID | Title | Type | Severity | Component | Status |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| [#157](157-devdeps-pin-lag.md) | devDependencies Pin Lags the Host pi (0.99.2 vs 1.0.3) | Technical Debt / Tooling | Medium | `package.json` | Open — host pi is 1.0.3 while both devDeps are `^0.99.2`, so typecheck/Vitest proved an API one major behind; raise to `^1.0.3` and re-run (found by #156) |
 | [#156](156-living-docs-drift.md) | Living Docs Drifted from the Code (AGENTS / DESIGN / README / GLOSSARY) | Documentation | Medium | `AGENTS.md`, `DESIGN.md`, `README.md`, `docs/GLOSSARY.md` | Open — audit of 2026-10-05: 44 findings (2 High, 15 Medium, 27 Low) across ownership attribution (#140), the #148 geometry split, the #142 typed target, the #143/#144 image pipeline, and the #121/#135/#137 self-contradictions; full finding list in the issue doc |
 | [#020](020-no-viewer-cache-blocking-highlight.md) | No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread | Bug / Performance | High | `viewer.ts` | Open (partial — cache done; event-loop yielding deferred: blocked by pi's bundled-runtime virtual-module boundary, needs a pi-side API) |
 | [#067](067-typed-config-registry-paths.md) | Typed Config Registry Paths (`path` is `readonly string[]`) | Technical Debt / Type Safety | Low | `settings.ts` | **Deferred** — tracked, not scheduled: the compile-time path/default check is not worth the rework at five fields. Revisit when the schema grows (~15+ fields or a third level), `live: true` lands, the byte-pinned serialize test is relaxed, or a defect escapes that a type check would have caught |
@@ -29,6 +28,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | ID | Title | Type | Severity | Resolution Summary | Status |
 | [#140](140-session-module-extraction.md) | Extract the Session Module from `runNavigator`'s Mount Closure | Technical Debt / Refactor | Medium | The `ctx.ui.custom` closure became `session.ts`: `createSession(deps)` → `{ loadFile, loadCommit, start, refresh, onActivity, dispose }` over an `OverlaySink` port, with `loadFile`/`notify`/`notifyWarning`/`theme`/`kittyProbe`/`capabilities`/`pi`/settings/imagePaths injected and git/tree/diff/images imported directly; `refreshData` decomposed into private helpers; `dispose()` additionally sets the session's closed flag so a framework-driven dispose stops in-flight ticks. Pure move — `navigator.ts` and existing tests byte-identical (802/802 still green); +13 `session.test.ts` cases drive cadence/backoff (cap and resets revert-checked), stamping skips, cache identity, abort ownership, error dedupe, dispose and `loadCommit`; 815/815 across 21 suites. Policy helpers moved to `session.ts` and re-exported from `index.ts` for the frozen test imports; `tsconfig.json` include gained `session.ts`. version 0.14.3. | **Resolved** |
+| [#157](157-devdeps-pin-lag.md) | devDependencies Pin Lags the Host pi (0.99.2 vs 1.0.3) | Technical Debt / Tooling | Medium | Both peers raised `^0.99.2` → `^1.0.3` (1.0.3 resolved) after the host moved to pi 1.0.3, so typecheck + Vitest again prove the API the extension loads into; `index.ts`'s version-specific comment updated after confirming `RegisteredCommand` is unchanged at 1.0.3. Verified typecheck clean and 931/931 with zero source edits; no version bump (the published artifact is unchanged). | **Resolved** |
 | [#155](155-readme-status-badge-drift.md) | README Status Badge Is Pinned to v0.10.7 — Seven Minor Versions Stale | Documentation | Low | Badge moved to `status-v0.14.18-green`, and a new `test/docs.test.ts` guard asserts the README contains `status-v<package.json version>-`, so a version bump with a stale badge now fails the suite instead of drifting silently through seven releases (last guarded-era update was #056 at v0.5.0). 22 suites / 931 cases. version 0.14.18. | **Resolved** |
 | [#154](154-session-test-flakes-fixed-ticks.md) | `session.test.ts` Flakes Under Full-Suite Load — Fixed-Tick Settles Race Async Side Effects | Technical Debt / Test Reliability | Medium | The three fixed-tick tests now wait on observed conditions (`vi.waitFor`): the `refresh()` → support-snapshot wait and `chafaCalls` lengths 1/2 in the two abort tests, the chafa spawn in the fake-timer re-arms test. `vi.waitFor` under Vitest 5.0.1 polls on real safe timers while advancing the virtual clock ≤50 ms per check — under the 250 ms re-arm debounce, so the reflow semantics stay observable; no helper/fallback needed. Every assertion value unchanged. Red-green not applicable (flake); soak: 20/20 consecutive full-suite runs green, 930/930 across 22 suites, plus an orchestrator re-run. version 0.14.18. | **Resolved** |
 | :--- | :--- | :--- | :--- | :--- | :---: |
@@ -301,7 +301,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#055: `isMarkdownPath` Excludes Common Markdown Extensions (`.mdx`, `.mkd`, `.mdown`)](055-markdown-extensions-whitelist.md) *(resolved)*
 
 ### Technical Debt & Code Robustness
-- [#157: devDependencies Pin Lags the Host pi (0.99.2 vs 1.0.3)](157-devdeps-pin-lag.md) *(open)*
+- [#157: devDependencies Pin Lags the Host pi (0.99.2 vs 1.0.3)](157-devdeps-pin-lag.md) *(resolved)*
 - [#156: Living Docs Drifted from the Code (AGENTS / DESIGN / README / GLOSSARY)](156-living-docs-drift.md) *(open)*
 - [#155: README Status Badge Is Pinned to v0.10.7 — Seven Minor Versions Stale](155-readme-status-badge-drift.md) *(resolved)*
 - [#154: `session.test.ts` Flakes Under Full-Suite Load — Fixed-Tick Settles Race Async Side Effects](154-session-test-flakes-fixed-ticks.md) *(resolved)*

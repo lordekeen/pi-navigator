@@ -1,6 +1,6 @@
 # Issue #157: devDependencies Pin Lags the Host pi (0.99.2 vs 1.0.3)
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Technical Debt / Tooling
 - **Severity**: Medium
 - **Component(s)**: `package.json` (devDependencies), `index.ts` (comment)
