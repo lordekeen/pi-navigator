@@ -32,7 +32,9 @@ typography:
     fontWeight: 700
     letterSpacing: 0.05em
 rounded:
-  none: 0px
+  # Corner glyphs: one curved cell per corner (╭ ╮ ╰ ╯, Issue #137 §2); the
+  # terminal cell grid has no sub-cell radius.
+  cell: 1ch
 spacing:
   xs: 1px
   sm: 2px
@@ -40,7 +42,7 @@ spacing:
 components:
   overlay-frame:
     textColor: "{colors.frame}"
-    rounded: "{rounded.none}"
+    rounded: "{rounded.cell}"
   pane-header:
     textColor: "{colors.accent}"
     typography:
@@ -48,7 +50,7 @@ components:
       fontSize: 0.75rem
       fontWeight: 700
   pane-header-muted:
-    textColor: "{colors.muted}"
+    textColor: "{colors.dim}"
   file-row-cursor:
     backgroundColor: "{colors.selected-bg}"
   file-row-default:
@@ -147,11 +149,11 @@ The visual identity follows the host **pi theme** (see `theme.ts`): no colors ar
 
 ## Colors
 
-All color is **semantic and theme-delegated**. The overlay calls `NavigatorTheme` methods (`T.accent`, `T.muted`, `T.dim`, `T.warning`, `T.success`, `T.error`, `T.text`, `T.frame`, `T.diffAdded`, `T.diffRemoved`, `T.diffContext`) which map onto the active pi `Theme`'s `fg`/`bg` tokens — `frame` onto the host's `borderMuted` role, and the diff trio onto its own `toolDiff*` roles (Issue #135 L6/L7). The hex values in the front matter are illustrative defaults for preview rendering only.
+All color is **semantic and theme-delegated**. The overlay calls `NavigatorTheme` methods (`T.accent`, `T.muted`, `T.dim`, `T.warning`, `T.success`, `T.error`, `T.text`, `T.bold`, `T.selectedBg`, `T.searchMatch`, `T.searchCurrent`, `T.frame`, `T.scrollbarTrack`, `T.scrollbarThumb`, `T.diffAdded`, `T.diffRemoved`, `T.diffContext`) which map onto the active pi `Theme`'s `fg`/`bg` tokens — `frame` onto the host's `borderMuted` role, and the diff trio onto its own `toolDiff*` roles (Issue #135 L6/L7). The hex values in the front matter are illustrative defaults for preview rendering only.
 
 - **accent (`#7AA2F7` default)** — primary interaction signal: the open file's row, the pane header for the focused pane, branch name, help-modal title, and the active footer pane label.
-- **muted (`#6C7278` default)** — secondary text: non-focused pane labels, card body text, help descriptions, secondary path segments.
-- **dim (`#6C7278` default)** — tertiary/de-emphasized: line-number gutter, indentation guides, footer hints, file-row hidden/untracked names. Frame borders are **not** here: they follow the host's `borderMuted` role (Issue #135 L6).
+- **muted (`#6C7278` default)** — secondary text: footer hint labels, the title-row path, the unfocused viewer header path, card body text, help descriptions, commit hashes, plain directory names, secondary path segments.
+- **dim (`#6C7278` default)** — tertiary/de-emphasized: line-number gutter, indentation guides, footer hint keys, non-focused pane labels, file-row hidden/untracked names. Frame borders are **not** here: they follow the host's `borderMuted` role (Issue #135 L6).
 - **success (`#9ECE6A` default)** — git "added" badge, staged file rows.
 - **warning (`#E0AF68` default)** — git "modified" badge, unstaged file rows, viewer truncation/disk-change notices, binary-card title, "has changes" file rows.
 - **error (`#F7768E` default)** — git "deleted" badge, error-card title. Not a failure signal: the git "behind" counter uses `warning`, because being behind is state, not an error (Issue #135 L8).
@@ -187,13 +189,13 @@ Agents must never introduce `fontFamily: sans-serif`/`serif`, `fontSize` in `px`
 
 ## Layout
 
-The overlay is a centered box bounded by `OVERLAY_OPTIONS` (width 90%, min 80, max height 85% — derived from `OVERLAY_HEIGHT_RATIO` in `constants.ts`, anchor center, margin 1 row). `frame.overlayHeight()` uses that same ratio and reserves `OVERLAY_MARGIN_ROWS` top and bottom, so the height the host allocates and the frame the component draws into it cannot drift (Issue #130); it is deliberately free to fall below the frame floor, which is what makes the compact "terminal too small" refusal notice reachable. Inside:
+The overlay is a centered box bounded by `OVERLAY_OPTIONS` (width 90%, min 80, max height 85% — derived from `OVERLAY_HEIGHT_RATIO` in `constants.ts`, anchor center, margin 1 row). `overlayHeight()` (`layout.ts`) uses that same ratio and reserves `OVERLAY_MARGIN_ROWS` top and bottom, so the height the host allocates and the frame the component draws into it cannot drift (Issue #130); it is deliberately free to fall below the frame floor, which is what makes the compact "terminal too small" refusal notice reachable. Inside:
 
 1. **Top border** — `╭─╮` with the product name in an accent-bold pill (`╭── pi-navigator ──…╮`, Issue #137 §2)
 2. **Subtitle row** — cwd short path (left) · branch + ahead/behind + changed counters (right); the product name lives in the top-border pill
 3. **Separator** — `├─┤`
-4. **Body** (`overlayHeight - 5` rows) — split into a left column (files + git, ~30% clamped 24–44) and a right column (viewer). Below `LEFT_COLUMN_HIDE_BELOW` (72 inner cols) the left column is hidden and the viewer takes the full width.
-5. **Footer** — context hint (left) as typed key/label pairs (`dim` keys, `muted` labels, ` · `-joined; the close pair advertises the default cancel key, `q Esc close`) · pane labels `files git viewer` with the focused one accented (right) (Issue #137 §1/§5)
+4. **Body** (`overlayHeight - 5` rows) — in the default `files-git-viewer` layout, split into a left column (files + git, ~30% clamped 24–44) and a right column (viewer); the single-pane layouts (`files-viewer`, `git-viewer`) hand the left column one pane at full height (Issue #119). Below `LEFT_COLUMN_HIDE_BELOW` (72 inner cols) the left column is hidden and the viewer takes the full width.
+5. **Footer** — context hint (left) as typed key/label pairs (`dim` keys, `muted` labels, ` · `-joined; the close pair advertises the default cancel key, `q Esc close`) · the layout's pane labels with the focused one accented (right) — `files git viewer` in the default layout, derived from `visiblePanes` (Issue #137 §1/§5)
 
 **Spacing** is cell-granular: `xs` (1px) for inline glyph separation, `sm` (2px) for the gutter/border gap, `md` (4px) for inter-pane separators. There is no large whitespace padding — density is the point. Below `MIN_OVERLAY_WIDTH` (40) or `MIN_OVERLAY_HEIGHT` (13) a compact "terminal too small" notice replaces the frame.
 
@@ -215,16 +217,16 @@ Corners are rounded on every bordered surface — `╭ ╮ ╰ ╯`, the only cu
 ## Components
 
 - **overlay-frame** — the outer bordered box; text color = `frame`.
-- **pane-header** — `FILES` / `GIT` labels; accented when its pane is focused, muted otherwise.
+- **pane-header** — `FILES` / `GIT` labels; accented when its pane is focused, dim otherwise.
 - **file-row-cursor** — the selected tree/git row; `selected-bg` background.
-- **file-row-modified / -hidden** — git-modified (warning) and hidden/untracked (dim) file labels.
+- **file-row-modified / -hidden** — changed directories carry a warning label; modified file rows keep a `text` label with the warning on their `M` badge, and hidden/untracked file labels are dim.
 - **git-badge-* ** — single-letter status badges: M=warning, A=success, D=error.
 - **viewer-gutter** — line-number column, dim.
 - **viewer-notice** — truncation / changed-on-disk banner, warning.
-- **diff-line-*** (v3) — commit-diff lines via the prefix styler (`styleDiffLines` in `diff.ts`): `+` success, `-` error, `@@` accent, meta muted, context text. The diff summary notice above the content is **dim** (informational), not warning.
+- **diff-line-*** (v3) — commit-diff lines via the prefix styler (`styleDiffLines` in `diff.ts`): `+` diffAdded (`toolDiffAdded`), `-` diffRemoved, context diffContext; `@@` accent, meta muted. The diff summary notice above the content is **dim** (informational), not warning.
 - **search-match / search-current** — in-file hit highlights; current match adds underline.
 - **viewer-scrollbar** — the frame's right border column over the viewer's content rows: track `│` on `scrollbarTrack`, proportional thumb `█` on `scrollbarThumb`; overflow-only, display-only (Issue #137 §4).
-- **help-modal-title / -keys / -desc** — accented title, accented key cell (16-col pad), muted description.
+- **help-modal-title / -keys / -desc** — accented title, accented key cell (width = longest key string + 1, Issue #132), muted description.
 - **card-title-binary / -error / -image** — card titles by kind; card-body is muted.
 
 When adding a component, declare it here and reuse an existing color role. Component variants (hover/active/pressed) are not applicable in a TUI — there is no pointer — so express state as `selected-bg` vs. default, or accent vs. dim.
@@ -233,7 +235,7 @@ When adding a component, declare it here and reuse an existing color role. Compo
 
 ### Do
 - **Do** route every color through `NavigatorTheme` (`theme.ts`) so it follows the user's active pi theme.
-- **Do** keep the render path pure: data enters via `setTree` / `setGitState` / `openRelPath`; `render(width)` returns strings.
+- **Do** keep the render path pure: data enters via the `OverlaySink` setters (`setTree` / `setGitState` / `setImageSupport`) and the open-target protocol; `render(width)` returns strings.
 - **Do** enforce width-safety on every row (`visibleWidth` / `truncateToWidth`), at every terminal size the render suite covers. Native image rows are the sole exception: their width comes from the sequence's own cell metrics, so they are emitted first and space-filled on the right only.
 - **Do** truncate styled strings with an **empty** ellipsis to avoid `truncateToWidth`'s `\x1b[0m`-wrapped `"..."` leaking bright default (Issue #010).
 - **Do** normalize `\r\n` / lone `\r` to `\n` before highlighting/splitting (Issue #009).
@@ -242,8 +244,8 @@ When adding a component, declare it here and reuse an existing color role. Compo
 ### Don't
 - **Don't** hardcode ANSI color codes in component code — the theme is the only source of color.
 - **Don't** introduce proportional fonts, web fonts, or `fontFamily` other than `monospace`.
-- **Don't** use rounded corners, shadows, gradients, or opacity — the cell grid forbids them.
-- **Don't** touch the filesystem or git from `navigator.ts`; keep async/data work in `index.ts`.
+- **Don't** use any rounding beyond the four box-drawing corner glyphs `╭ ╮ ╰ ╯` — no sub-cell rounding, shadows, gradients, or opacity (Issue #137 §2).
+- **Don't** touch the filesystem or git from `navigator.ts`; keep async/data work in `session.ts` (`index.ts` loads settings/env and wires the session).
 - **Don't** assume `string.length === visibleWidth` — ANSI escapes and wide characters break that.
 - **Don't** truncate a plain string with the default ellipsis and then wrap it in a style — the injected reset closes the style early and the ellipsis renders in bright default.
 - **Don't** width-process a native image row (`isImageLine`): no truncate, no re-anchor — right-side space fill only, so the sequence keeps its anchor column (spec §8, D9).

@@ -356,9 +356,9 @@ export function gitCodeMap(state: GitState): Map<string, string> {
 
 /**
  * A commit's diff, ready for the viewer pane. `lines` carries the **plain**
- * (unstyled) diff body; the caller (index.ts) styles it with the active
- * theme via styleDiffLines so git.ts stays theme-free (matching viewer.ts's
- * "highlight in the loader" split).
+ * (unstyled) diff body; the caller (`session.ts` `loadCommit`) composes it
+ * with the active theme via composeDiffLines/`styleDiffLines` so git.ts stays
+ * theme-free (matching viewer.ts's "highlight in the loader" split).
  */
 export interface CommitDiff {
   shortHash: string;

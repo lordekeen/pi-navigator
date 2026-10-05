@@ -14,7 +14,7 @@
  * `ctx.ui.custom` component, so it docks in the editor area on/above the
  * message textbox like pi's own `/settings` selector and the reference
  * extensions — the transcript stays visible. The module never touches the
- * filesystem (fs stays in settings.ts/index.ts) and hardcodes no colors — the
+ * filesystem (fs stays in settings.ts) and hardcodes no colors — the
  * SettingsListTheme is built from the injected pi `Theme` tokens.
  */
 

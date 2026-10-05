@@ -1,6 +1,6 @@
 # Issue #156: Living Docs Drifted from the Code (AGENTS / DESIGN / README / GLOSSARY)
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Documentation
 - **Severity**: Medium
 - **Component(s)**: `AGENTS.md`, `DESIGN.md`, `README.md`, `docs/GLOSSARY.md`, `constants.ts` (stale comment)
@@ -109,13 +109,53 @@ the default layout or default mode, say so explicitly.
 
 ## Acceptance Criteria
 
-- [ ] Every finding above is addressed in its document; wording names the
+- [x] Every finding above is addressed in its document; wording names the
   current module/function with the current issue reference, and no correction
   claims a behavior the code does not have.
-- [ ] No behavior changes; the only code file touched is the `constants.ts`
-  comment.
-- [ ] `test/docs.test.ts` guards stay green; suite count stays 22.
-- [ ] `npm run typecheck` and `npm test` green.
+- [x] No behavior changes; the only code files touched are module comments
+  (`constants.ts` plus the stale-loader comments swept in `diff.ts`, `git.ts`,
+  `navigator.ts`, `settings_menu.ts`).
+- [x] `test/docs.test.ts` guards stay green; suite count stays 22.
+- [x] `npm run typecheck` and `npm test` green.
+
+## Resolution
+
+Fixed (2026-10-05), version 0.14.18 (no bump: docs and comments only; the
+published behavior is unchanged):
+
+- **AGENTS.md** — all 15 (tree source, layout phrasing, `session.ts` ownership,
+  the #157 devDeps truth, scoped shell-outs, chafa `chafa`/`auto` + probe-even-
+  in-`off`, kitty probe vs pi-tui encoders, `layout.overlayHeight`, the session
+  row's pipeline binding, `HELP_ROWS` projection, `tree.ts`'s fs collection,
+  env import graph, settings-fs scope, `setImageSupport`, the typed commit
+  guard). One deviation recorded: `settings.ts` imports `parseTruthyEnv`
+  **directly**, so the env row reads "via `images.ts` in the component graph, and
+  directly by `settings.ts` and `icons.ts`".
+- **DESIGN.md** — all 11 (complete theme-method list; dim-vs-muted roles and
+  the front-matter `pane-header-muted`; `layout.overlayHeight`; default-layout
+  qualification + #119 variants + `visiblePanes`; file-row-modified semantics;
+  the #135 L7 diff roles; derived help key cell; `OverlaySink` data entries;
+  rounded corners reconciled with a `rounded.cell: 1ch` preview token; async
+  ownership).
+- **docs/GLOSSARY.md** — all 5 (sink is the session→component port with
+  injected callbacks; the one diff styling act; session-owned reflow arming;
+  the pipeline's `render()` executes the list; `FIELD_KIND_RULES`).
+- **README.md** — all 13 (draft + Save settings model and the capability note;
+  surplus-args vs unknown-token behavior and print/json refusal; the mock
+  **regenerated from a real `render(100, 28)`** — 23 rows, every row exactly
+  100 cells, labeled stylized, colors omitted; Git half-page + Home/End and
+  PgUp/PgDn aliases + search-mode line; refresh backoff; the two caps paths;
+  `terminal.showImages`; tmux passthrough advice deleted; `i` inert without a
+  tier; the file list with `session.ts`/`icons.ts`/`diff.ts`; git 2.56; the
+  `^1.0.3` pin). CRLF preserved in `README.md`/`constants.ts`
+  (`git ls-files --eol`: `i/crlf w/crlf`).
+- **Scope extension:** the same class of stale module comment still pointed at
+  `index.ts` for work that moved to `session.ts`; swept comment-only in
+  `constants.ts` (viewer cache), `diff.ts` (loader + separator ownership),
+  `git.ts` (`CommitDiff` caller), `navigator.ts` (header, `setTree` expansion
+  note, viewer cache), `settings_menu.ts` (fs scope).
+- Verified: typecheck clean; **22 suites / 931 cases**; `docs.test.ts` guards
+  green.
 
 ## References
 

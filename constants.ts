@@ -27,7 +27,7 @@ export const MAX_LINE_COUNT_BYTES = 256 * 1024;
 
 /**
  * Maximum number of parsed ViewerFile entries kept in the per-file viewer
- * cache in index.ts. Re-opening a file whose mtime is unchanged reuses the
+ * cache in `session.ts`. Re-opening a file whose mtime is unchanged reuses the
  * cached highlighted lines instead of re-running the loadFile pipeline.
  */
 export const MAX_VIEWER_CACHE_ENTRIES = 16;
@@ -177,7 +177,7 @@ export const FAMILY_MAX_ROWS = 16;
 
 /** Overlay options passed to ctx.ui.custom. */
 /** Overlay height as a fraction of the terminal. Shared by the host option
- *  below and `frame.overlayHeight`, so the box the host allocates and the frame
+ *  below and `layout.overlayHeight`, so the box the host allocates and the frame
  *  the component draws cannot drift apart (Issue #130). */
 export const OVERLAY_HEIGHT_RATIO = 0.85;
 /** Vertical frame margin in rows: shared by `OVERLAY_OPTIONS.margin` and the

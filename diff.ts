@@ -2,7 +2,7 @@
  * pi-navigator diff styler and view composer (v3 commit detail view).
  *
  * git.ts returns the commit diff as **plain** lines; this module applies the
- * theme in the loader (index.ts) so git.ts stays theme-free — the same
+ * theme in the loader (`session.ts` `loadCommit`) so git.ts stays theme-free — the same
  * "highlight in the loader" split viewer.ts uses for files. The styling is
  * prefix-keyed, matching the approach lazygit/gitui take: no diff parser, just
  * a per-line look at the leading characters. This module also owns the
@@ -31,9 +31,9 @@ export interface CommitMessage {
 
 /**
  * Style the commit message block shown above the diff (Issue #120):
- * subject bold, body plain text. Returns the lines without a separator —
- * the caller (index.ts) inserts the blank line between message and diff,
- * `git show`-style, only when a diff body follows.
+ * subject bold, body plain text. `composeDiffLines` inserts the blank line
+ * between message and diff (`git show`-style) only when a diff body follows;
+ * this function returns the lines without it.
  */
 export function styleCommitMessage(message: CommitMessage, T: NavigatorTheme): string[] {
   const lines: string[] = [];

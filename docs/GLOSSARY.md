@@ -9,7 +9,10 @@ from the project's shared design vocabulary and are not redefined here.
 The port (`OverlaySink` in `session.ts`) through which the data lifecycle reaches the TUI
 component: the session pushes tree, git and image-support snapshots in, and reads the open
 target / reports a disk check out. The component knows nothing about the filesystem or git;
-the session knows nothing about rendering. It is the only seam between them (Issue #140).
+the session knows nothing about frame or pane rendering — its one styling act is composing
+the theme-styled commit-diff lines in `loadCommit`. It is the session→component port, not the
+only seam: the component reaches the session through its injected loader / refresh / drift
+callbacks (Issue #140).
 
 ## Open target
 
@@ -18,7 +21,8 @@ The typed value describing what the viewer is showing: `{ kind: "file"; relPath 
 reload verb and the "open file" highlight share, so none of them parses the `commit:<hash>`
 display string to recover the fact (Issue #142). The *displayed* open target is derived from
 the installed `ViewerFile`; navigator separately tracks the *in-flight* target while a load is
-running, which is what the switching placeholder and image-reflow arming read.
+running, which feeds the switching placeholder, the header and copy — image-reflow arming
+is session-owned (`inFlightImageTarget ?? deps.sink.getOpenTarget()`, Issue #144).
 
 ## Image verdict
 
@@ -26,9 +30,10 @@ The per-load outcome of the image pipeline (`ImageVerdict` in `types.ts`): eithe
 rows plus the renderer that produced them (`"native"` / `"chafa"`), or a metadata card
 carrying the failure that ended the attempt list (renderer + bounded detail). One decision
 per load — `images.ts` `planImageLoad` orders the renderers eligible under the support
-snapshot, the session binds them to its seams, and `viewer.ts` executes the list (a clean
-failure continues, a throw or an abort stops it). Labels read the verdict, never re-derive
-which renderer spoke (Issue #143).
+snapshot, the session binds them to its seams, and the pipeline's single `render()` executes
+the list (a clean failure continues, a throw or an abort stops it); `viewer.ts` consumes the
+one outcome and stamps the verdict. Labels read the verdict, never re-derive which renderer
+spoke (Issues #143/#144).
 
 ## Image pipeline
 
@@ -50,11 +55,11 @@ the restyle path costs nothing there (Issues #136/#141).
 ## Settings field rule
 
 One registry row's complete declaration (`NAVIGATOR_CONFIG_FIELDS` in `settings.ts`): the
-settings path, kind, label, default, the per-kind accept/parse rules the JSON normalizer and
-the string editor both consume, and — when a startup layer can set it — its env name, flag
-descriptor and override parser. Adding a field is this row plus its section interface: the
-loader, the settings menu, `/navigator set` and flag registration all read the table
-(Issue #145).
+settings path, kind, label, default, and — when a startup layer can set it — its env name,
+flag descriptor and override parser. The row's `kind` selects `FIELD_KIND_RULES`, the
+per-kind accept/parse table the JSON normalizer and the string editor both consume. Adding a
+field is this row plus its section interface: the loader, the settings menu, `/navigator set`
+and flag registration all read the table (Issue #145).
 
 ## Override origin
 

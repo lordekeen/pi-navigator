@@ -6,10 +6,10 @@
  * plans/pi-navigator-implementation-plan.md section 4.
  *
  * All data arrives through setters that follow the plan section 3.6 contract
- * (setTree / setGitState); the viewer's state is installed by openTarget(),
- * which owns its async load. This class owns UI state only and never touches
- * the filesystem or git directly — the render path stays pure and the async
- * work stays in index.ts.
+ * (setTree / setGitState / setImageSupport); the viewer's state is installed
+ * by openTarget(), which owns its async load. This class owns UI state only
+ * and never touches the filesystem or git directly — the render path stays
+ * pure and the async work stays in `session.ts` (Issue #140).
  */
 
 import { copyToClipboard, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
@@ -337,8 +337,9 @@ export class NavigatorOverlay implements Focusable {
   // ── Public API ──
 
   /**
-   * Install a freshly built tree. Expansion state is applied by index.ts before
-   * this call, so the tree arrives ready to render (plan section 3.6 setters).
+   * Install a freshly built tree. Expansion state is applied by the session
+   * (`collectExpanded`/`reapplyExpansion` in `session.ts`) before this call,
+   * so the tree arrives ready to render (plan section 3.6 setters).
    */
   setTree(root: FileNode, treeSource: "git" | "fs"): void {
     // Re-anchor the selection by relPath (Issue #124): a refresh rebuilding
@@ -623,7 +624,7 @@ export class NavigatorOverlay implements Focusable {
     // Deliberately kept: the DATA-derived state. maxLineWidthCache holds raw
     // visible line widths (ANSI escapes are zero-width, so it is
     // theme-independent), filesRows/gitRows/gitNavRows caches hold plain
-    // row models, and the file-content cache lives in index.ts (viewerCache)
+    // row models, and the file-content cache lives in session.ts (viewerCache)
     // — re-reading and re-hashing files is the expensive part, and the
     // derivation above is all that must be redone to repaint.
     //
