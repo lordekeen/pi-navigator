@@ -952,11 +952,14 @@ export class NavigatorOverlay implements Focusable {
       const row = rows[this.gitCursor];
       if (!row) return;
       if (row.kind === "file") {
-        if (this.root) this.expandTo(this.root, row.relPath);
+        // Untracked directories render with a trailing slash (git_view.changedPath)
+        // while tree nodes are slash-free; reveal by the tree path.
+        const treePath = row.relPath.replace(/\/+$/, "");
+        if (this.root) this.expandTo(this.root, treePath);
         this.filterQuery = "";
-        this.alignFilesCursor(row.relPath);
+        this.alignFilesCursor(treePath);
         this.focus = "viewer";
-        void this.openRelPath(row.relPath);
+        void this.openRelPath(row.relPath); // display path: what gets opened is unchanged
       } else if (row.kind === "commit" || row.kind === "commit-child") {
         // v3: Enter is the "open" verb — open the commit's diff in the
         // viewer. Family expansion moves to l / right (see below), matching

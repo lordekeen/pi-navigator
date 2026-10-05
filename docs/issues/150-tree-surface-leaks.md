@@ -102,6 +102,9 @@ Implemented as designed (2026-10-04), version 0.14.14:
 - **Non-goals unchanged** — no row projection, `walkTree` stays exported with the recorded
   rationale, `FileNode` stays exported (the session holds the root).
 
+The git-pane reveal's prefix expansion for git rows absent from the tree is a deliberate
+outcome, and the trailing-slash reveal path is normalized in #152.
+
 Verification: `npm run typecheck` clean; `npm test` **22 suites / 927 cases** (count
 unchanged — the change is pure surface surgery).
 

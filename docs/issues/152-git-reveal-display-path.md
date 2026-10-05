@@ -1,6 +1,6 @@
 # Issue #152: The Git-Pane Reveal Uses the Display Path — Untracked Directory Rows Never Align the Files Cursor
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Bug / UI Consistency
 - **Severity**: Low
 - **Component(s)**: `navigator.ts`, `docs/issues/150-tree-surface-leaks.md`, tests
@@ -69,14 +69,32 @@ deliberate outcome, not part of a "no behavior change" claim.
 
 ## Acceptance Criteria
 
-- [ ] The untracked-directory reveal moves the files cursor onto the
-  `src/newdir` row (red at HEAD, green after the fix).
-- [ ] `src` expands on the same reveal (pinned; already true at HEAD, now
-  intentional).
-- [ ] A staged-deletion row expands the longest existing ancestor prefix, with
-  a test.
-- [ ] #150's Resolution records the reveal expansion as intended behavior.
-- [ ] `npm run typecheck` and `npm test` green; suite count unchanged.
+- [x] The untracked-directory reveal moves the files cursor onto the
+  `src/newdir` row — red at the previous revision (the cursor assertion fails
+  while `newdir` still appears via prefix expansion), green with the fix.
+- [x] `src` expands on the same reveal (pinned; already true before the fix,
+  now intentional).
+- [x] A staged-deletion row expands the longest existing ancestor prefix, with
+  a guard-pin test.
+- [x] #150's Resolution records the reveal expansion as intended behavior.
+- [x] `npm run typecheck` and `npm test` green: 22 suites / 930 cases.
+
+## Resolution
+
+Fixed (2026-10-04), version 0.14.16:
+
+- **`navigator.ts`** — the git-pane Enter branch normalizes the reveal path once
+  (`row.relPath.replace(/\/+$/, "")`), passes the tree path to `expandTo` and
+  `alignFilesCursor`, and keeps `openRelPath(row.relPath)` on the display path.
+  `expandAncestors` and `alignFilesCursor` are unchanged.
+- **Tests** — the untracked-directory case fails red on the cursor assertion
+  without the fix (`expected '│    ▸ newdir …' to contain '▶ '`) and passes
+  with it; the staged-deletion case pins the intended longest-prefix expansion.
+  The files-pane signal excludes lines containing the display path because the
+  git row itself carries both `newdir` and a selection arrow — a naive
+  `includes` assertion would false-pass.
+- **`docs/issues/150-tree-surface-leaks.md`** — Resolution notes the reveal's
+  prefix expansion as deliberate and points at #152 for the path normalization.
 
 ## References
 

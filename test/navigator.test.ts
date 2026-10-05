@@ -613,6 +613,62 @@ describe("tree mutations invalidate the files rows cache (Issue #064 finding 2)"
     // still render src collapsed here.
     expect(harness.overlay.render(120).join("\n")).toContain("other.ts");
   });
+
+  it("git-pane Enter on an untracked directory reveals the slash-free tree path and aligns the files cursor (Issue #152)", () => {
+    // The trailing-slash sugar makes src/newdir a directory node, exactly as
+    // readGitTree normalizes porcelain's `?? dir/` record (Issue #146).
+    const tree = buildTree("/work", entriesFromPaths(["src/newdir/", "src/other.ts"]), new Map());
+    const src = findNode(tree, "src");
+    expect(src?.expanded).toBe(true);
+    if (src) src.expanded = false; // setup-only collapse, before any render
+
+    const harness = makeHarness();
+    harness.overlay.setTree(tree, "git");
+    withGit(harness, { unstaged: [{ relPath: "src/newdir", code: "??", isDir: true }] });
+
+    // The git row and the viewer header echo the display path "src/newdir/";
+    // only the files pane renders the bare name, so the bare name is the
+    // unambiguous files-pane signal.
+    const filesRowsShowing = (frame: string): string[] =>
+      frame.split("\n").filter((line) => line.includes("newdir") && !line.includes("src/newdir"));
+
+    // Render first with src collapsed: no files-pane row shows newdir yet.
+    expect(filesRowsShowing(harness.overlay.render(120).join("\n"))).toEqual([]);
+
+    harness.overlay.handleInput(KEYS.tab); // focus git; cursor lands on the ?? row
+    harness.overlay.handleInput(KEYS.enter); // reveal by tree path, open the display path
+    expect(harness.opened).toEqual(["src/newdir/"]);
+
+    harness.overlay.handleInput(KEYS.shiftTab); // viewer -> git
+    harness.overlay.handleInput(KEYS.shiftTab); // git -> files
+
+    const shown = filesRowsShowing(harness.overlay.render(120).join("\n"));
+    expect(shown.length).toBe(1); // src expanded: the files pane shows newdir
+    expect(shown[0]).toContain("\u25b6 "); // ...and the files cursor landed on it
+  });
+
+  it("git-pane Enter on a staged deletion expands the longest existing ancestor prefix (Issue #152)", () => {
+    const tree = buildTree("/work", entriesFromPaths(["src/other.ts"]), new Map());
+    const src = findNode(tree, "src");
+    expect(src?.expanded).toBe(true);
+    if (src) src.expanded = false; // setup-only collapse, before any render
+
+    const harness = makeHarness();
+    harness.overlay.setTree(tree, "git");
+    withGit(harness, { unstaged: [], staged: [{ relPath: "src/gone.ts", code: "D" }] });
+
+    // Render first with the ancestor collapsed: the cache is populated and
+    // other.ts is nowhere on screen.
+    expect(harness.overlay.render(120).join("\n")).not.toContain("other.ts");
+
+    harness.overlay.handleInput(KEYS.tab); // focus git; cursor on the staged deletion
+    harness.overlay.handleInput(KEYS.enter); // src/gone.ts is absent from the tree
+    harness.overlay.handleInput(KEYS.shiftTab); // viewer -> git
+    harness.overlay.handleInput(KEYS.shiftTab); // git -> files
+    // Deliberate prefix expansion: the longest existing ancestor ("src")
+    // expands even though the row's own path is not in the tree.
+    expect(harness.overlay.render(120).join("\n")).toContain("other.ts");
+  });
 });
 
 // ── Git pane ──
