@@ -1009,7 +1009,7 @@ describe("settings menu integration via runSettings (Issues #121, #133)", () => 
       images: { mode: "chafa" },
       icons: { enabled: true },
       viewer: { wrap: true, markdown: "rendered" },
-      tree: { showHidden: true },
+      tree: { showHidden: true, respectGitignore: true },
       layout: { default: "git-viewer" },
     };
     const filePath = writeSettingsFile(dir, settings);
@@ -1046,7 +1046,7 @@ describe("settings menu integration via runSettings (Issues #121, #133)", () => 
       images: { mode: "off" },
       icons: { enabled: false },
       viewer: { wrap: false, markdown: "code" },
-      tree: { showHidden: false },
+      tree: { showHidden: false, respectGitignore: true },
       layout: { default: "files-git-viewer" },
     };
     const filePath = writeSettingsFile(dir, settings);
@@ -1062,7 +1062,7 @@ describe("settings menu integration via runSettings (Issues #121, #133)", () => 
       component.handleInput?.(KEYS.enter); // images.mode off -> chafa (staged)
       component.handleInput?.(KEYS.down); // icons.enabled
       component.handleInput?.(KEYS.enter); // false -> true (staged)
-      for (let i = 0; i < 5; i++) component.handleInput?.(KEYS.down); // to the Save row
+      for (let i = 0; i < 6; i++) component.handleInput?.(KEYS.down); // to the Save row
       component.handleInput?.(KEYS.enter); // Save: one commit, then close
       await pending;
 

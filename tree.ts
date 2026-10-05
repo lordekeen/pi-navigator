@@ -4,7 +4,10 @@
  * Two sources, one builder:
  * - git listing: tracked files plus untracked paths from git status
  * - filesystem walk: async, depth-capped, static ignore list (no .gitignore
- *   parsing in v1; documented follow-up)
+ *   parsing in v1; documented follow-up). The walk also accepts a
+ *   caller-supplied skip predicate: the session resolves git's ignore rules
+ *   into it when `tree.respectGitignore` is on (Issue #158), so the walk itself
+ *   stays git-free while an ignored subtree is pruned before it costs budget.
  *
  * Both normalize to TreeEntry records so a single builder keeps empty
  * directories and symlink markers. Every filesystem call on this path is async
@@ -29,6 +32,15 @@ export interface TreeEntry {
   isDir: boolean;
   symlink: boolean;
 }
+
+/**
+ * Optional synchronous skip predicate for the bounded fs walks (Issue #158):
+ * consulted (a) before an entry is pushed and (b) before a directory descent,
+ * so a skipped directory prunes its whole subtree instead of spending the
+ * shared entry budget on it. The session builds it from git's ignored listing
+ * when `tree.respectGitignore` is on; the walks themselves stay git-free.
+ */
+export type TreeSkipPredicate = (relPath: string) => boolean;
 
 /** Shared total-entry cap for filesystem walks (Issue #108): one budget
  * handed to every concurrent descent — and, in git mode, to every
@@ -78,12 +90,16 @@ function budgetCounted(budget: TreeWalkBudget): void {
  * directory's tree depth so the cap matches a root walk exactly; entries
  * stay cwd-relative so the caller can merge them straight into the build.
  * Callers that pass the same budget to several calls share one combined cap
- * (Issue #108); when omitted, the call draws on its own default budget.
+ * (Issue #108); when omitted, the call draws on its own default budget. An
+ * optional `skip` predicate filters the walk (Issue #158): a matching path is
+ * neither pushed nor descended into. The walk itself stays git-free — the
+ * predicate's policy lives with the caller.
  */
 export async function collectDirEntries(
   cwd: string,
   relDir: string,
   budget?: TreeWalkBudget,
+  skip?: TreeSkipPredicate,
 ): Promise<TreeEntry[]> {
   const segments = relDir.split("/").filter(Boolean).length;
   if (segments === 0) return [];
@@ -97,7 +113,7 @@ export async function collectDirEntries(
   } catch {
     // Unreachable root: the per-directory walk failures handle it.
   }
-  await walk(join(cwd, relDir), relDir, segments - 1, entries, visited, walkBudget);
+  await walk(join(cwd, relDir), relDir, segments - 1, entries, visited, walkBudget, skip);
   return entries;
 }
 
@@ -110,11 +126,12 @@ export async function collectDirEntries(
  * is refused, not walked. All descents share one total-entry budget (Issue
  * #108): once MAX_FS_ENTRIES entries exist the walk stops, `truncated` is
  * true and the tree is incomplete. `opts.maxEntries` overrides the cap for
- * tests.
+ * tests; `opts.skip` filters the walk (Issue #158) — a matching path is never
+ * pushed and a matching directory subtree is never descended.
  */
 export async function collectFsEntries(
   cwd: string,
-  opts?: { maxEntries?: number },
+  opts?: { maxEntries?: number; skip?: TreeSkipPredicate },
 ): Promise<{ entries: TreeEntry[]; truncated: boolean }> {
   const budget = createTreeWalkBudget(opts?.maxEntries);
   const entries: TreeEntry[] = [];
@@ -127,7 +144,7 @@ export async function collectFsEntries(
   } catch {
     // Unreachable root: the per-directory walk failures handle it.
   }
-  await walk(cwd, "", 0, entries, visited, budget);
+  await walk(cwd, "", 0, entries, visited, budget, opts?.skip);
   return { entries, truncated: budget.truncated };
 }
 
@@ -138,6 +155,7 @@ async function walk(
   entries: TreeEntry[],
   visited: Set<string>,
   budget: TreeWalkBudget,
+  skip?: TreeSkipPredicate,
 ): Promise<void> {
   let dirents;
   try {
@@ -157,6 +175,10 @@ async function walk(
     if (IGNORED_NAMES.has(name)) continue;
 
     const relPath = relDir ? `${relDir}/${name}` : name;
+    // Issue #158: the skip predicate is consulted before the push AND before
+    // any descent below, so a skipped directory prunes its whole subtree
+    // rather than spending the shared budget on entries that will never show.
+    if (skip?.(relPath)) continue;
     const fullPath = join(dirPath, name);
     const symlink = dirent.isSymbolicLink();
     let isDir = dirent.isDirectory();
@@ -193,7 +215,7 @@ async function walk(
       continue;
     }
     if (budgetHit(budget)) break;
-    descents.push(walk(fullPath, relPath, depth + 1, entries, visited, budget));
+    descents.push(walk(fullPath, relPath, depth + 1, entries, visited, budget, skip));
   }
   await Promise.all(descents);
 }
@@ -395,19 +417,23 @@ export function walkTree(root: FileNode, visit: (node: FileNode) => WalkAction):
 // ── Expansion state ──
 
 /**
- * RelPaths of expanded untracked (`??`) directory nodes. The git-mode probe's
- * porcelain signature cannot see entry changes inside an untracked directory
- * (`git status -unormal` reports it as one record no matter its contents), so
- * index.ts folds the mtimes of these subtrees into the probe via
- * collectFsProbe — mirroring fs-mode probing for exactly those subtrees
- * (Issue #058). Contents of collapsed directories are deliberately not
- * probed, matching the plan.
+ * RelPaths of expanded untracked (`??`) and ignored (`!!`) directory nodes.
+ * The git-mode probe's porcelain signature cannot see entry changes inside an
+ * untracked directory (`git status -unormal` reports it as one record no matter
+ * its contents), so the session folds the mtimes of these subtrees into the
+ * probe via collectFsProbe — mirroring fs-mode probing for exactly those
+ * subtrees (Issue #058). `!!` dirs are only ever visible with
+ * `tree.respectGitignore` off, where they must react to inner changes too
+ * (Issue #158); with the setting on the extra membership is inert. Contents of
+ * collapsed directories are deliberately not probed, matching the plan.
  */
 export function expandedUntrackedDirs(root: FileNode | null): Set<string> {
   const dirs = new Set<string>();
   if (!root) return dirs;
   walkTree(root, (node) => {
-    if (node.isDir && node.expanded && node.gitCode === "??" && node.relPath) dirs.add(node.relPath);
+    if (node.isDir && node.expanded && (node.gitCode === "??" || node.gitCode === "!!") && node.relPath) {
+      dirs.add(node.relPath);
+    }
   });
   return dirs;
 }

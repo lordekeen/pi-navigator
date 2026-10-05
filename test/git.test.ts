@@ -24,6 +24,7 @@ import {
   readCommitDiff,
   readGitState,
   readGitTree,
+  readIgnoredEntries,
   type RepoInfo,
 } from "../git";
 import type { GitState } from "../types";
@@ -243,6 +244,80 @@ describe("readGitTree (Issue #146)", () => {
       INFO,
     );
     expect(entries).toEqual([{ relPath: "new.txt", isDir: false, symlink: false }]);
+  });
+});
+
+// ── readIgnoredEntries: the one ignored-path listing (Issue #158) ──
+
+describe("readIgnoredEntries (Issue #158)", () => {
+  const INFO: RepoInfo = { available: true, prefix: "" };
+  /** Spawn argv of every stubbed invocation, newest stub session first. */
+  const spawns: string[][] = [];
+
+  /** Stub the listing's spawn: emit NUL-separated records, or fail. */
+  function stubIgnored(stdout: string | null): void {
+    spawns.length = 0;
+    vi.spyOn(gitRunner, "execFile").mockImplementation(
+      ((
+        _file: string,
+        args: readonly string[],
+        _options: object,
+        callback: (error: Error | null, stdout: string, stderr: string) => void,
+      ) => {
+        spawns.push([...args]);
+        if (stdout === null) callback(new Error("ls-files failed"), "", "");
+        else callback(null, stdout, "");
+      }) as unknown as typeof gitRunner.execFile,
+    );
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("spawns the ignored listing with --full-name and the documented flags", async () => {
+    stubIgnored("");
+    await readIgnoredEntries("/work", INFO);
+    expect(spawns).toEqual([
+      ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "--full-name", "-z"],
+    ]);
+  });
+
+  it("splits NUL records, drops empties, and normalizes a collapsed dir's trailing slash into isDir", async () => {
+    // `--directory` collapses a fully ignored tree into one `dir/` record; the
+    // slash is that record's dir marker and becomes isDir at this boundary.
+    stubIgnored("ignored.log\0ignored-dir/\0\0nested/thing.txt\0");
+    const entries = await readIgnoredEntries("/work", INFO);
+    expect(entries).toEqual([
+      { relPath: "ignored.log", isDir: false, symlink: false },
+      { relPath: "ignored-dir", isDir: true, symlink: false },
+      { relPath: "nested/thing.txt", isDir: false, symlink: false },
+    ]);
+  });
+
+  it("translates through the repo prefix, drops outsiders, and dedupes", async () => {
+    stubIgnored("sub/a.log\0other/b.log\0sub/collapsed/\0sub/dup.log\0sub/dup.log\0");
+    const entries = await readIgnoredEntries("/work/sub", { available: true, prefix: "sub/" });
+    expect(entries).toEqual([
+      { relPath: "a.log", isDir: false, symlink: false },
+      { relPath: "collapsed", isDir: true, symlink: false },
+      { relPath: "dup.log", isDir: false, symlink: false },
+    ]);
+  });
+
+  it("degrades to an empty listing on failure or overflow, never throwing", async () => {
+    stubIgnored(null);
+    expect(await readIgnoredEntries("/work", INFO)).toEqual([]);
+
+    vi.restoreAllMocks();
+    vi.spyOn(gitRunner, "execFile").mockImplementation(((...args: any[]) => {
+      const error = new Error("maxBuffer exceeded") as Error & { code?: string };
+      error.code = "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+      const callback = args[args.length - 1] as (error: Error, stdout: string, stderr: string) => void;
+      callback(error, "", "");
+      return {} as any;
+    }) as unknown as typeof gitRunner.execFile);
+    expect(await readIgnoredEntries("/work", INFO)).toEqual([]);
   });
 });
 
@@ -511,6 +586,50 @@ describe("git integration on a scratch repository", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it("lists ignored paths from the real ignore stack, collapsed dirs included (Issue #158)", async () => {
+    await writeFile(join(repo, ".gitignore"), "*.log\nignored-dir/\n");
+    await writeFile(join(repo, "tracked.txt"), "t\n");
+    // A tracked file matched by an ignore pattern stays tracked (git keeps it)
+    // and must never surface in the ignored listing. `git add -A` respects
+    // ignore rules, so the force-add is what pins the tracked-but-ignored case.
+    await writeFile(join(repo, "kept.log"), "tracked despite *.log\n");
+    await git(repo, ["add", "-f", "kept.log"]);
+    await commit(repo, "base");
+    await mkdir(join(repo, "ignored-dir"), { recursive: true });
+    await writeFile(join(repo, "ignored-dir/secret.txt"), "s\n");
+    await writeFile(join(repo, "loose.log"), "l\n");
+    await mkdir(join(repo, "untracked-dir/nested"), { recursive: true });
+    await writeFile(join(repo, "untracked-dir/keep.txt"), "k\n");
+    await writeFile(join(repo, "untracked-dir/debug.log"), "d\n");
+    await writeFile(join(repo, "untracked-dir/nested/other.log"), "o\n");
+    await writeFile(join(repo, ".git/info/exclude"), "excluded.txt\n");
+    await writeFile(join(repo, "excluded.txt"), "e\n");
+
+    const info = await detectRepo(repo);
+    expect(info.available).toBe(true);
+    const entries = await readIgnoredEntries(repo, info);
+    expect(entries.map((entry) => `${entry.relPath}${entry.isDir ? "/" : ""}`).sort()).toEqual([
+      "excluded.txt",
+      "ignored-dir/",
+      "loose.log",
+      "untracked-dir/debug.log",
+      "untracked-dir/nested/",
+      "untracked-dir/nested/other.log",
+    ]);
+    expect(entries.some((entry) => entry.relPath === "kept.log")).toBe(false);
+
+    // --full-name keeps the listing repository-root-relative; the prefix
+    // translation yields cwd-relative paths from a subdirectory cwd.
+    const subInfo = await detectRepo(join(repo, "untracked-dir"));
+    expect(subInfo.prefix).toBe("untracked-dir/");
+    const subEntries = await readIgnoredEntries(join(repo, "untracked-dir"), subInfo);
+    expect(subEntries.map((entry) => `${entry.relPath}${entry.isDir ? "/" : ""}`).sort()).toEqual([
+      "debug.log",
+      "nested/",
+      "nested/other.log",
+    ]);
   });
 
   // ── readCommitDiff (v3 commit-detail view) ──

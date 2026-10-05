@@ -46,6 +46,7 @@ export interface NavigatorViewerSettings {
 
 export interface NavigatorTreeSettings {
   readonly showHidden: boolean;
+  readonly respectGitignore: boolean;
 }
 
 export interface NavigatorLayoutSettings {
@@ -170,6 +171,17 @@ export const NAVIGATOR_CONFIG_FIELDS: readonly NavigatorConfigField[] = [
     label: "Hidden files",
     description: "Start with hidden files visible; the `.` key still toggles it per session.",
     default: false,
+    live: false,
+  },
+  {
+    id: "tree.respectGitignore",
+    path: ["tree", "respectGitignore"],
+    kind: "boolean",
+    section: "Tree",
+    label: "Respect .gitignore",
+    description:
+      "Hide untracked files and directories ignored by Git in the file tree (requires a git repository); tracked files always show.",
+    default: true,
     live: false,
   },
   {

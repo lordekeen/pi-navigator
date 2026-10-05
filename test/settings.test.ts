@@ -53,7 +53,7 @@ function fullSettings(overrides: Partial<{
   images: { mode: NavigatorImageMode };
   icons: { enabled: boolean };
   viewer: { wrap: boolean; markdown: "code" | "rendered" };
-  tree: { showHidden: boolean };
+  tree: { showHidden: boolean; respectGitignore: boolean };
   layout: { default: (typeof NAVIGATOR_LAYOUTS)[number] };
 }> = {}): ReturnType<typeof cloneDefaultsLike> {
   return {
@@ -61,7 +61,7 @@ function fullSettings(overrides: Partial<{
     images: overrides.images ?? { mode: "off" },
     icons: overrides.icons ?? { enabled: false },
     viewer: overrides.viewer ?? { wrap: false, markdown: "code" },
-    tree: overrides.tree ?? { showHidden: false },
+    tree: overrides.tree ?? { showHidden: false, respectGitignore: true },
     layout: overrides.layout ?? { default: "files-git-viewer" },
   };
 }
@@ -71,7 +71,7 @@ function cloneDefaultsLike(): {
   images: { mode: NavigatorImageMode };
   icons: { enabled: boolean };
   viewer: { wrap: boolean; markdown: "code" | "rendered" };
-  tree: { showHidden: boolean };
+  tree: { showHidden: boolean; respectGitignore: boolean };
   layout: { default: (typeof NAVIGATOR_LAYOUTS)[number] };
 } {
   return {
@@ -79,7 +79,7 @@ function cloneDefaultsLike(): {
     images: { mode: "off" },
     icons: { enabled: false },
     viewer: { wrap: false, markdown: "code" },
-    tree: { showHidden: false },
+    tree: { showHidden: false, respectGitignore: true },
     layout: { default: "files-git-viewer" },
   };
 }
@@ -215,7 +215,7 @@ describe("normalizeNavigatorSettings", () => {
       images: { mode: "off" },
       icons: { enabled: false },
       viewer: { wrap: false, markdown: "code" },
-      tree: { showHidden: false },
+      tree: { showHidden: false, respectGitignore: true },
       layout: { default: "files-git-viewer" },
     });
   });
@@ -315,7 +315,7 @@ describe("normalizeNavigatorSettings", () => {
       images: { mode: "off" },
       icons: { enabled: true },
       viewer: { wrap: true, markdown: "rendered" },
-      tree: { showHidden: true },
+      tree: { showHidden: true, respectGitignore: true },
       layout: { default: "git-viewer" },
     });
     expect(result.warnings).toEqual([]);
@@ -326,14 +326,15 @@ describe("normalizeNavigatorSettings", () => {
     }
   });
 
-  it("accepts only booleans for icons.enabled, viewer.wrap, and tree.showHidden", () => {
-    const enabled = normalizeNavigatorSettings({ version: 1, icons: { enabled: true }, viewer: { wrap: true }, tree: { showHidden: true } });
+  it("accepts only booleans for icons.enabled, viewer.wrap, tree.showHidden, and tree.respectGitignore", () => {
+    const enabled = normalizeNavigatorSettings({ version: 1, icons: { enabled: true }, viewer: { wrap: true }, tree: { showHidden: true, respectGitignore: false } });
     expect(enabled.settings.icons.enabled).toBe(true);
     expect(enabled.settings.viewer.wrap).toBe(true);
     expect(enabled.settings.tree.showHidden).toBe(true);
+    expect(enabled.settings.tree.respectGitignore).toBe(false);
     expect(enabled.warnings).toEqual([]);
     for (const [sectionKey, value] of [["icons", "yes"], ["viewer", 1], ["tree", "true"]] as const) {
-      const bad = normalizeNavigatorSettings({ version: 1, [sectionKey]: { enabled: value, wrap: value, showHidden: value } });
+      const bad = normalizeNavigatorSettings({ version: 1, [sectionKey]: { enabled: value, wrap: value, showHidden: value, respectGitignore: value } });
       if (sectionKey === "viewer") {
         expect(bad.settings.viewer.wrap).toBe(false);
         expect(bad.warnings.some((w) => w.includes("viewer.wrap"))).toBe(true);
@@ -342,7 +343,9 @@ describe("normalizeNavigatorSettings", () => {
         expect(bad.warnings.some((w) => w.includes("icons.enabled"))).toBe(true);
       } else {
         expect(bad.settings.tree.showHidden).toBe(false);
+        expect(bad.settings.tree.respectGitignore).toBe(true);
         expect(bad.warnings.some((w) => w.includes("tree.showHidden"))).toBe(true);
+        expect(bad.warnings.some((w) => w.includes("tree.respectGitignore"))).toBe(true);
       }
     }
   });
@@ -454,13 +457,13 @@ describe("serializeNavigatorSettings", () => {
       images: { mode: "off" },
       icons: { enabled: false },
       viewer: { wrap: false, markdown: "code" },
-      tree: { showHidden: false },
+      tree: { showHidden: false, respectGitignore: true },
       layout: { default: "files-git-viewer" },
     });
     // Key order is part of the persistence contract: the writer (and thus
     // versions of the file on disk) stays byte-identical across formats.
     expect(JSON.stringify(serializeNavigatorSettings(DEFAULT_NAVIGATOR_SETTINGS))).toBe(
-      '{"version":1,"images":{"mode":"off"},"icons":{"enabled":false},"viewer":{"wrap":false,"markdown":"code"},"tree":{"showHidden":false},"layout":{"default":"files-git-viewer"}}',
+      '{"version":1,"images":{"mode":"off"},"icons":{"enabled":false},"viewer":{"wrap":false,"markdown":"code"},"tree":{"showHidden":false,"respectGitignore":true},"layout":{"default":"files-git-viewer"}}',
     );
     expect(
       serializeNavigatorSettings(
@@ -468,7 +471,7 @@ describe("serializeNavigatorSettings", () => {
           images: { mode: "chafa" },
           icons: { enabled: true },
           viewer: { wrap: true, markdown: "rendered" },
-          tree: { showHidden: true },
+          tree: { showHidden: true, respectGitignore: false },
           layout: { default: "git-viewer" },
         }),
       ),
@@ -477,7 +480,7 @@ describe("serializeNavigatorSettings", () => {
       images: { mode: "chafa" },
       icons: { enabled: true },
       viewer: { wrap: true, markdown: "rendered" },
-      tree: { showHidden: true },
+      tree: { showHidden: true, respectGitignore: false },
       layout: { default: "git-viewer" },
     });
   });
@@ -488,7 +491,7 @@ describe("serializeNavigatorSettings", () => {
       fullSettings({ images: { mode: "chafa" } }),
       fullSettings({ images: { mode: "native" } }),
       fullSettings({ images: { mode: "auto" } }),
-      fullSettings({ icons: { enabled: true }, viewer: { wrap: true, markdown: "rendered" }, tree: { showHidden: true } }),
+      fullSettings({ icons: { enabled: true }, viewer: { wrap: true, markdown: "rendered" }, tree: { showHidden: true, respectGitignore: false } }),
     ];
     for (const settings of samples) {
       const result = normalizeNavigatorSettings(serializeNavigatorSettings(settings));
@@ -900,7 +903,7 @@ describe("writeNavigatorSettings", () => {
       images: { mode: "chafa" },
       icons: { enabled: true },
       viewer: { wrap: false, markdown: "code" },
-      tree: { showHidden: false },
+      tree: { showHidden: false, respectGitignore: true },
       layout: { default: "git-viewer" },
     });
     const entries = readdirSync(join(dir, "nested", "deep"));
@@ -926,7 +929,7 @@ describe("writeNavigatorSettings", () => {
       images: { mode: "chafa" },
       icons: { enabled: false },
       viewer: { wrap: false, markdown: "code" },
-      tree: { showHidden: false },
+      tree: { showHidden: false, respectGitignore: true },
       layout: { default: "files-viewer" },
     });
     expect(readdirSync(dir)).toEqual(["pi-navigator.json"]);
@@ -1022,6 +1025,18 @@ describe("applyFieldEdit", () => {
     if (!result.ok) expect(result.error).toContain("expected on or off");
   });
 
+  it("edits tree.respectGitignore through the on/off string face (Issue #158)", () => {
+    const off = applyFieldEdit(fullSettings(), "tree.respectGitignore", "off");
+    expect(off.ok).toBe(true);
+    if (off.ok) expect(off.settings.tree.respectGitignore).toBe(false);
+    const on = applyFieldEdit(off.ok ? off.settings : fullSettings(), "tree.respectGitignore", "on");
+    expect(on.ok).toBe(true);
+    if (on.ok) expect(on.settings.tree.respectGitignore).toBe(true);
+    const bad = applyFieldEdit(fullSettings(), "tree.respectGitignore", "maybe");
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.error).toContain("expected on or off");
+  });
+
   it("rejects a bad enum value", () => {
     const result = applyFieldEdit(fullSettings(), "images.mode", "kitty");
     expect(result.ok).toBe(false);
@@ -1114,8 +1129,8 @@ describe("field rule parity (Issue #145)", () => {
 // ── NAVIGATOR_CONFIG_FIELDS sync guard (overseer pattern) ──
 
 describe("NAVIGATOR_CONFIG_FIELDS", () => {
-  it("has exactly six entries matching the spec table", () => {
-    expect(NAVIGATOR_CONFIG_FIELDS).toHaveLength(6);
+  it("has exactly seven entries matching the spec table", () => {
+    expect(NAVIGATOR_CONFIG_FIELDS).toHaveLength(7);
     expect(fieldById("images.mode")).toMatchObject({
       id: "images.mode",
       path: ["images", "mode"],
@@ -1156,6 +1171,15 @@ describe("NAVIGATOR_CONFIG_FIELDS", () => {
       kind: "boolean",
       section: "Tree",
       label: "Hidden files",
+      live: false,
+    });
+    expect(fieldById("tree.respectGitignore")).toMatchObject({
+      id: "tree.respectGitignore",
+      path: ["tree", "respectGitignore"],
+      kind: "boolean",
+      section: "Tree",
+      label: "Respect .gitignore",
+      default: true,
       live: false,
     });
     expect(fieldById("layout.default")).toMatchObject({
@@ -1214,7 +1238,7 @@ describe("NAVIGATOR_CONFIG_FIELDS", () => {
       parse: expect.any(Function),
     });
     // File-only rows carry no startup layer at all.
-    for (const id of ["viewer.wrap", "viewer.markdown", "tree.showHidden"]) {
+    for (const id of ["viewer.wrap", "viewer.markdown", "tree.showHidden", "tree.respectGitignore"]) {
       expect(fieldById(id).override, id).toBeUndefined();
     }
   });

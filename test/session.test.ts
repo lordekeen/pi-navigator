@@ -46,9 +46,19 @@ const ctl = vi.hoisted(() => ({
   gitReads: 0,
   trackedReads: 0,
   commitDiff: null as unknown,
+  // git.ts (Issue #158)
+  ignored: [] as TreeEntry[],
+  ignoredReads: 0,
   // tree.ts
   buildCalls: 0,
   codeStamps: 0,
+  // tree.ts (Issue #158)
+  dirEntries: {} as Record<string, TreeEntry[]>,
+  fsEntries: [] as TreeEntry[],
+  dirSkips: [] as Array<{ relDir: string; skip: ((relPath: string) => boolean) | undefined }>,
+  fsSkips: [] as Array<((relPath: string) => boolean) | undefined>,
+  lastBuildEntries: [] as TreeEntry[],
+  lastBuildCodes: null as Map<string, string> | null,
   // images.ts (mocked seams)
   support: "deferred" as "deferred" | "chafa" | "native",
   supportResolved: 0,
@@ -69,22 +79,48 @@ vi.mock("../git", () => ({
   readGitTree: (): Promise<TreeEntry[]> => {
     ctl.trackedReads += 1;
     return Promise.resolve(
-      ctl.tracked.map((relPath) => ({ relPath, isDir: relPath.endsWith("/"), symlink: false })),
+      ctl.tracked.map((relPath) => ({
+        relPath: relPath.replace(/\/$/, ""),
+        isDir: relPath.endsWith("/"),
+        symlink: false,
+      })),
     );
+  },
+  readIgnoredEntries: (): Promise<TreeEntry[]> => {
+    ctl.ignoredReads += 1;
+    return Promise.resolve(ctl.ignored);
   },
   readCommitDiff: (): Promise<CommitDiff> => Promise.resolve(ctl.commitDiff as CommitDiff),
 }));
 
 vi.mock("../tree", () => ({
   createTreeWalkBudget: () => ({ truncated: false }),
-  collectDirEntries: () => Promise.resolve([]),
-  collectFsEntries: () => Promise.resolve({ entries: [], truncated: false }),
+  collectDirEntries: (
+    _cwd: string,
+    relDir: string,
+    _budget?: unknown,
+    skip?: (relPath: string) => boolean,
+  ) => {
+    ctl.dirSkips.push({ relDir, skip });
+    const entries = ctl.dirEntries[relDir] ?? [];
+    return Promise.resolve(entries.filter((entry) => skip === undefined || !skip(entry.relPath)));
+  },
+  collectFsEntries: (_cwd: string, opts?: { skip?: (relPath: string) => boolean }) => {
+    ctl.fsSkips.push(opts?.skip);
+    const skip = opts?.skip;
+    return Promise.resolve({
+      entries: ctl.fsEntries.filter((entry) => skip === undefined || !skip(entry.relPath)),
+      truncated: false,
+    });
+  },
   collectFsProbe: () => Promise.resolve("fs-probe-static"),
   expandedUntrackedDirs: () => new Set<string>(),
   collectExpanded: () => new Set<string>(),
   reapplyExpansion: () => {},
-  buildTree: (): FileNode => {
+  buildTree: (_cwd: string, entries: TreeEntry[], codes: Map<string, string>): FileNode => {
     ctl.buildCalls += 1;
+    ctl.lastBuildEntries = entries;
+    ctl.lastBuildCodes = codes;
     return {
       name: "",
       lowerName: "",
@@ -404,6 +440,14 @@ beforeEach(async () => {
   ctl.tracked = [];
   ctl.gitReads = 0;
   ctl.trackedReads = 0;
+  ctl.ignored = [];
+  ctl.ignoredReads = 0;
+  ctl.dirEntries = {};
+  ctl.fsEntries = [];
+  ctl.dirSkips = [];
+  ctl.fsSkips = [];
+  ctl.lastBuildEntries = [];
+  ctl.lastBuildCodes = null;
   ctl.commitDiff = null;
   ctl.buildCalls = 0;
   ctl.codeStamps = 0;
@@ -670,6 +714,207 @@ describe("createSession: tree stamping (Issue #022)", () => {
     expect(ctl.trackedReads).toBe(3);
     expect(ctl.buildCalls).toBe(2);
     expect(ctl.codeStamps).toBe(1); // the build carried the new codes itself
+  });
+});
+
+describe("createSession: tree.respectGitignore (Issue #158)", () => {
+  const offSettings: NavigatorSettings = {
+    ...settings,
+    tree: { ...settings.tree, respectGitignore: false },
+  };
+
+  it("on (default): the untracked-dir fill drops ignored paths, prunes ignored dirs, and adds no listing read on idle ticks", async () => {
+    ctl.gitState = makeGitState();
+    ctl.treeProbe = "probe-1";
+    ctl.tracked = ["untracked-dir/", "tracked.txt"];
+    ctl.ignored = [
+      { relPath: "untracked-dir/debug.log", isDir: false, symlink: false },
+      { relPath: "untracked-dir/ignored-sub", isDir: true, symlink: false },
+    ];
+    ctl.dirEntries = {
+      "untracked-dir": [
+        { relPath: "untracked-dir/keep.txt", isDir: false, symlink: false },
+        { relPath: "untracked-dir/debug.log", isDir: false, symlink: false },
+        { relPath: "untracked-dir/ignored-sub", isDir: true, symlink: false },
+        { relPath: "untracked-dir/ignored-sub/hidden.txt", isDir: false, symlink: false },
+      ],
+    };
+    vi.useFakeTimers();
+    const { session } = makeSession();
+    session.start();
+    await flushTicks();
+
+    // The leak this issue closes: an ignored child of a `??` dir never enters
+    // the tree, and an ignored dir prunes its whole subtree.
+    const rels = ctl.lastBuildEntries.map((entry) => entry.relPath);
+    expect(rels).toHaveLength(3); // untracked-dir, tracked.txt, keep.txt
+    expect(rels).toContain("untracked-dir/keep.txt");
+    expect(rels).not.toContain("untracked-dir/debug.log");
+    expect(rels).not.toContain("untracked-dir/ignored-sub");
+    expect(rels).not.toContain("untracked-dir/ignored-sub/hidden.txt");
+    // The ignored listing never feeds the badge map when the setting is on.
+    expect(ctl.lastBuildCodes?.get("untracked-dir/debug.log")).toBeUndefined();
+
+    // The predicate matches exact paths and ignored-dir prefixes (a collapsed
+    // `dir/` record does not enumerate its children).
+    const { skip } = ctl.dirSkips[0] ?? {};
+    expect(skip?.("untracked-dir/debug.log")).toBe(true);
+    expect(skip?.("untracked-dir/ignored-sub/hidden.txt")).toBe(true);
+    expect(skip?.("untracked-dir/keep.txt")).toBe(false);
+
+    // One listing read for the changed tick's fill; an idle tick adds none
+    // (the default-on path adds no work to the every-tick status read).
+    expect(ctl.ignoredReads).toBe(1);
+    ctl.ignored = [...ctl.ignored, { relPath: "later.log", isDir: false, symlink: false }];
+    session.refresh();
+    await flushTicks();
+    expect(ctl.buildCalls).toBe(1);
+    expect(ctl.ignoredReads).toBe(1);
+    session.dispose();
+  });
+
+  it("off: merges the ignored listing with !! codes, fills ignored dirs, and dedupes the fill overlap", async () => {
+    ctl.gitState = makeGitState();
+    ctl.treeProbe = "probe-1";
+    ctl.tracked = ["untracked-dir/", "tracked.txt"];
+    ctl.ignored = [
+      { relPath: "ignored-dir", isDir: true, symlink: false },
+      { relPath: "loose.log", isDir: false, symlink: false },
+      { relPath: "untracked-dir/debug.log", isDir: false, symlink: false },
+      { relPath: "untracked-dir/nested", isDir: true, symlink: false },
+    ];
+    ctl.dirEntries = {
+      "untracked-dir": [
+        { relPath: "untracked-dir/keep.txt", isDir: false, symlink: false },
+        { relPath: "untracked-dir/debug.log", isDir: false, symlink: false },
+        { relPath: "untracked-dir/nested", isDir: true, symlink: false },
+        { relPath: "untracked-dir/nested/other.log", isDir: false, symlink: false },
+      ],
+      "ignored-dir": [{ relPath: "ignored-dir/secret.txt", isDir: false, symlink: false }],
+      "untracked-dir/nested": [{ relPath: "untracked-dir/nested/other.log", isDir: false, symlink: false }],
+    };
+    vi.useFakeTimers();
+    const { session, sink } = makeSession({ settings: offSettings });
+    session.start();
+    await flushTicks();
+
+    // Ignored files and dirs are visible, and ignored dirs are expanded into
+    // their children (the fill ran for `!!` dirs too).
+    const rels = ctl.lastBuildEntries.map((entry) => entry.relPath);
+    for (const rel of [
+      "ignored-dir",
+      "loose.log",
+      "untracked-dir/debug.log",
+      "untracked-dir/keep.txt",
+      "untracked-dir/nested/other.log",
+      "ignored-dir/secret.txt",
+    ]) {
+      expect(rels).toContain(rel);
+    }
+    // The listing repeated paths the fill also produced; first occurrence
+    // wins, so no relPath reaches buildTree twice (duplicate file rows).
+    expect(new Set(rels).size).toBe(rels.length);
+    expect(rels.filter((rel) => rel === "untracked-dir/debug.log")).toHaveLength(1);
+    expect(rels.filter((rel) => rel === "untracked-dir/nested/other.log")).toHaveLength(1);
+
+    // Only the ignored listing's own entries are badged `!!`; filled children
+    // keep the existing no-per-file-code convention.
+    for (const rel of ["ignored-dir", "loose.log", "untracked-dir/debug.log", "untracked-dir/nested"]) {
+      expect(ctl.lastBuildCodes?.get(rel)).toBe("!!");
+    }
+    expect(ctl.lastBuildCodes?.get("untracked-dir/keep.txt")).toBeUndefined();
+    expect(ctl.lastBuildCodes?.get("ignored-dir/secret.txt")).toBeUndefined();
+    expect(ctl.lastBuildCodes?.get("untracked-dir/nested/other.log")).toBeUndefined();
+
+    // `??` dirs and `!!` dirs alike are filled; nothing is skipped when off.
+    expect(ctl.dirSkips.map((call) => call.relDir).sort()).toEqual([
+      "ignored-dir",
+      "untracked-dir",
+      "untracked-dir/nested",
+    ]);
+    for (const call of ctl.dirSkips) expect(call.skip).toBeUndefined();
+
+    // The git panel is untouched: the same state object reaches the sink and
+    // ignored records never enter it.
+    expect(sink.setGitState).toHaveBeenCalledWith(ctl.gitState);
+    session.dispose();
+  });
+
+  it("off: the ignored listing joins the probe, so a top-level ignored add rebuilds the tree", async () => {
+    ctl.gitState = makeGitState();
+    ctl.treeProbe = "probe-1";
+    ctl.tracked = ["src/a.ts"];
+    ctl.ignored = [{ relPath: "first.log", isDir: false, symlink: false }];
+    vi.useFakeTimers();
+    const { session } = makeSession({ settings: offSettings });
+    session.start();
+    await flushTicks();
+    expect(ctl.buildCalls).toBe(1);
+    expect(ctl.ignoredReads).toBe(1);
+
+    // Porcelain is unchanged; only the ignored listing moved. The setting is
+    // off, so the new entry is visible and must trigger a rebuild.
+    ctl.ignored = [
+      { relPath: "first.log", isDir: false, symlink: false },
+      { relPath: "second.log", isDir: false, symlink: false },
+    ];
+    session.refresh();
+    await flushTicks();
+    expect(ctl.ignoredReads).toBe(2);
+    expect(ctl.buildCalls).toBe(2);
+    session.dispose();
+  });
+
+  it("on: the empty-repo fs fallback is filtered through the predicate (git can resolve ignores)", async () => {
+    ctl.gitState = makeGitState();
+    ctl.treeProbe = "probe-1";
+    ctl.tracked = []; // nothing tracked or untracked: a fresh repository
+    ctl.ignored = [
+      { relPath: "ignored-dir", isDir: true, symlink: false },
+      { relPath: "loose.log", isDir: false, symlink: false },
+    ];
+    ctl.fsEntries = [
+      { relPath: "ignored-dir", isDir: true, symlink: false },
+      { relPath: "ignored-dir/secret.txt", isDir: false, symlink: false },
+      { relPath: "loose.log", isDir: false, symlink: false },
+      { relPath: "keep.txt", isDir: false, symlink: false },
+    ];
+    vi.useFakeTimers();
+    const { session, sink } = makeSession();
+    session.start();
+    await flushTicks();
+
+    expect(sink.setTree.mock.calls[0]?.[1]).toBe("fs");
+    expect(ctl.lastBuildEntries.map((entry) => entry.relPath)).toEqual(["keep.txt"]);
+    expect(ctl.fsSkips).toHaveLength(1);
+    expect(ctl.fsSkips[0]).toBeDefined();
+    session.dispose();
+  });
+
+  it("no git: fs mode is a documented no-op in both polarities", async () => {
+    ctl.gitState = makeGitState({ available: false, error: "not a repo" });
+    ctl.treeProbe = "probe-1";
+    ctl.ignored = [{ relPath: "loose.log", isDir: false, symlink: false }];
+    ctl.fsEntries = [
+      { relPath: "loose.log", isDir: false, symlink: false },
+      { relPath: "keep.txt", isDir: false, symlink: false },
+    ];
+    vi.useFakeTimers();
+    for (const treeSettings of [settings, offSettings]) {
+      ctl.ignoredReads = 0;
+      ctl.fsSkips = [];
+      ctl.lastBuildEntries = [];
+      const { session, sink } = makeSession({ settings: treeSettings });
+      session.start();
+      await flushTicks();
+      expect(sink.setTree.mock.calls[0]?.[1]).toBe("fs");
+      // No git, no ignore resolution: the static ignore list stays the only
+      // filter and the setting changes nothing here.
+      expect(ctl.ignoredReads).toBe(0);
+      expect(ctl.fsSkips[0]).toBeUndefined();
+      expect(ctl.lastBuildEntries.map((entry) => entry.relPath)).toEqual(["loose.log", "keep.txt"]);
+      session.dispose();
+    }
   });
 });
 

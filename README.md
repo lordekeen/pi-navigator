@@ -2,7 +2,7 @@
 
 Read-only project file navigator for pi. Opens a centered overlay inside a running pi session with a file tree, git state, and a syntax-highlighted viewer. No file editing, no runtime dependencies; images optionally render natively (kitty/iTerm2) or through a user-installed `chafa` (see [Images](#images-optional)).
 
-![status](https://img.shields.io/badge/status-v0.14.18-green)
+![status](https://img.shields.io/badge/status-v0.15.0-green)
 
 ## Install
 
@@ -25,7 +25,7 @@ Settings live in `~/.pi/agent/pi-navigator.json`. All fields are optional; missi
   "images": { "mode": "off" },
   "icons":  { "enabled": false },
   "viewer": { "wrap": false, "markdown": "code" },
-  "tree":   { "showHidden": false },
+  "tree":   { "showHidden": false, "respectGitignore": true },
   "layout": { "default": "files-git-viewer" }
 }
 ```
@@ -37,6 +37,7 @@ Settings live in `~/.pi/agent/pi-navigator.json`. All fields are optional; missi
 | `viewer.wrap` | `false` | `true`, `false` | Start files with word wrap enabled; the `w` key still toggles it per session |
 | `viewer.markdown` | `code` | `code`, `rendered` | Open Markdown files as rendered text or plain code; the `m` key still toggles it per session |
 | `tree.showHidden` | `false` | `true`, `false` | Start with hidden files visible; the `.` key still toggles it per session |
+| `tree.respectGitignore` | `true` | `true`, `false` | Hide untracked files and directories ignored by Git in the tree (git's full ignore stack; requires a git repository). Tracked files always show; without git the filesystem walk keeps its static ignore list, so the setting is a no-op there |
 | `layout.default` | `files-git-viewer` | `files-git-viewer`, `files-viewer`, `git-viewer` | Layout opened by bare `/navigator`; `/navigator all`, `/navigator files`, and `/navigator git` always open their own layout for one session |
 
 Environment variables override the file, and launcher flags override both (precedence: defaults ← file ← env ← flags):
@@ -146,7 +147,7 @@ Esc precedence in one line: filter, then search, then close. Search mode adds `�
 - Launch mechanism: the extension is launched via the `/navigator` command, avoiding keybinding conflicts with pi's built-in shortcuts (such as `ctrl+n` / `app.session.toggleNamedFilter`).
 
 - Syntax highlighting uses pi's own `highlightCode` and `getLanguageFromPath`, so colors follow the active theme and no tools like `bat` are needed.
-- Tree source is hybrid: inside a repository it lists tracked plus untracked non-ignored files; without git, and in a repository with nothing to list yet (a fresh `git init`), it falls back to an async filesystem walk with a static ignore list, dot entries included but hidden by default. `.gitignore` parsing is a v2 candidate.
+- Tree source is hybrid: inside a repository it lists tracked plus untracked non-ignored files; ignored untracked paths stay hidden by default (git's full ignore stack: `.gitignore`, nested `.gitignore`, `.git/info/exclude`, the global excludes file), and `tree.respectGitignore: false` shows them instead — ignored files with a dim `!` badge and ignored directories expandable. Tracked files matched by an ignore pattern always remain visible. Without git, or in a repository with nothing to list yet (a fresh `git init`), the tree falls back to an async filesystem walk with a static ignore list, dot entries included but hidden by default — inside a repository that fallback is still filtered through git's ignore rules when the setting is on, while with no git binary or repository the rules cannot be resolved, so the setting is a documented no-op there (a `.gitignore` parser remains out of scope).
 - Git panel: branch or detached HEAD, ahead and behind counters, unstaged and staged lists, last 20 commits. All git calls are async with a 3 s timeout; the panel shows a single explanation row when git is missing or the cwd is not a repository, and a dim `Clean` row when nothing is staged or unstaged. Status and the tracked listing are read with `-z`, so paths containing spaces, quotes or newlines survive intact.
 - Commit rows: `Enter` opens the commit's diff in the viewer (prefix-styled `+`/`-`/`@@` lines, a stat summary notice, and a `commit <hash>` header); `l` expands one level of its ancestor family (`▸`/`▾` markers), `h` collapses and steps out to the anchor. Expanding is capped by `FAMILY_MAX_DEPTH` (a notice tells you when you hit the floor) and `FAMILY_MAX_ROWS` (a dim `… more ancestors` hint marks the cut).
 - Refresh runs every 3 s while something changes or a key is pressed, backing off to at most 10 s on an idle overlay, plus `r`, with one refresh in flight at a time: a tick that arrives mid-refresh is dropped. Git state is re-read every tick; the tree is re-collected only when a cheap probe changes — the porcelain-derived signature in git mode, the modification times of the expanded directories in fs mode — and rebuilt only when the path set itself changes, with git codes otherwise stamped in place. Expanded and collapsed directories, top-level ones included, are preserved across rebuilds. Repeated failures notify once per distinct message instead of once per tick.

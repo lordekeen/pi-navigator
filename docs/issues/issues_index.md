@@ -9,8 +9,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
 | **Pending / Open** | 1 | 0 | 1 | **2** |
-| **Resolved** | 22 | 65 | 68 | **155** |
-| **Total** | **23** | **65** | **69** | **157** |
+| **Resolved** | 22 | 66 | 68 | **156** |
+| **Total** | **23** | **66** | **69** | **158** |
 
 ---
 
@@ -26,6 +26,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 ## 🟢 Resolved Issues
 
 | ID | Title | Type | Severity | Resolution Summary | Status |
+| [#158](158-respect-gitignore-setting.md) | `.gitignore`d Files Leak Into the Tree (Untracked Subdirectories, Filesystem Mode); No Setting Controls It | Feature / Tree Collection | Medium | New `tree.respectGitignore` boolean (default `on`, file/menu/`set` only): the new `readIgnoredEntries` (`ls-files --others --ignored --exclude-standard --directory --full-name -z`, prefix-translated, `dir/` → `isDir`, deduped, degrades to `[]`) filters the untracked-dir fs fill through the new walk-level skip predicate (prunes ignored subtrees before the shared budget) and the empty-repo fs fallback; `off` merges the listing with `!!` badges, fills ignored dirs and dedupes first-wins; the probe folds the listing when off and `expandedUntrackedDirs` covers `!!` dirs; tracked-but-ignored stays visible; the no-git fs walk is unchanged in both polarities. +14 cases; 945/945 across 22 suites. version 0.15.0. | **Resolved** |
 | [#140](140-session-module-extraction.md) | Extract the Session Module from `runNavigator`'s Mount Closure | Technical Debt / Refactor | Medium | The `ctx.ui.custom` closure became `session.ts`: `createSession(deps)` → `{ loadFile, loadCommit, start, refresh, onActivity, dispose }` over an `OverlaySink` port, with `loadFile`/`notify`/`notifyWarning`/`theme`/`kittyProbe`/`capabilities`/`pi`/settings/imagePaths injected and git/tree/diff/images imported directly; `refreshData` decomposed into private helpers; `dispose()` additionally sets the session's closed flag so a framework-driven dispose stops in-flight ticks. Pure move — `navigator.ts` and existing tests byte-identical (802/802 still green); +13 `session.test.ts` cases drive cadence/backoff (cap and resets revert-checked), stamping skips, cache identity, abort ownership, error dedupe, dispose and `loadCommit`; 815/815 across 21 suites. Policy helpers moved to `session.ts` and re-exported from `index.ts` for the frozen test imports; `tsconfig.json` include gained `session.ts`. version 0.14.3. | **Resolved** |
 | [#156](156-living-docs-drift.md) | Living Docs Drifted from the Code (AGENTS / DESIGN / README / GLOSSARY) | Documentation | Medium | All 44 audit findings applied: async/data ownership re-attributed to `session.ts` (#140); `layout.overlayHeight` (#148); the typed `OpenTarget` guard (#142); the pipeline's attempt loop vs `viewer.ts`'s one-outcome consumption (#143/#144); the draft+Save settings model (#121); the #135 L7 diff roles and #137 rounded corners; the README mock regenerated from a real 100×28 render (23 rows × 100 cells, labeled stylized). One deviation recorded (`settings.ts` imports `parseTruthyEnv` directly). Scope extension: stale loader comments pointing at `index.ts` swept comment-only in `constants.ts`/`diff.ts`/`git.ts`/`navigator.ts`/`settings_menu.ts`. 22 suites / 931 cases; typecheck clean. | **Resolved** |
 | [#157](157-devdeps-pin-lag.md) | devDependencies Pin Lags the Host pi (0.99.2 vs 1.0.3) | Technical Debt / Tooling | Medium | Both peers raised `^0.99.2` → `^1.0.3` (1.0.3 resolved) after the host moved to pi 1.0.3, so typecheck + Vitest again prove the API the extension loads into; `index.ts`'s version-specific comment updated after confirming `RegisteredCommand` is unchanged at 1.0.3. Verified typecheck clean and 931/931 with zero source edits; no version bump (the published artifact is unchanged). | **Resolved** |
@@ -284,6 +285,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#054: Redundant `getRenderedMarkdownLines` Invocation in `buildRightRows`](054-redundant-rendered-markdown-line-call.md) *(resolved)*
 
 ### User Experience & Keyboard Navigation
+- [#158: `.gitignore`d Files Leak Into the Tree (Untracked Subdirectories, Filesystem Mode); No Setting Controls It](158-respect-gitignore-setting.md) *(resolved)*
 - [#137: E-Style Chrome Migration (Typed Hint Pairs, Title Pill, Rounded Frame, Viewer Scrollbar + Readout)](137-e-style-chrome-migration.md) *(resolved)*
 - [#125: `Ctrl+C` Does Nothing While the Overlay Is Open](125-ctrl-c-does-nothing.md) *(resolved)*
 - [#126: Injected `KeybindingsManager` Ignored; User Key Remapping Never Applies](126-keybindings-manager-ignored.md) *(resolved)*

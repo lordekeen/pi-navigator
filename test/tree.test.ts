@@ -23,6 +23,7 @@ import {
   collectFsEntries,
   collectFsProbe,
   expandAncestors,
+  expandedUntrackedDirs,
   filterRows,
   flattenVisible,
   hasChanges,
@@ -304,6 +305,65 @@ describe("collectFsEntries", () => {
     }
   });
 
+  it("skips matching paths and prunes matching directories without spending the budget (Issue #158)", async () => {
+    const capDir = await mkdtemp(join(tmpdir(), "pi-nav-skip-"));
+    try {
+      await mkdir(join(capDir, "ignored-dir"));
+      await writeFile(join(capDir, "ignored-dir/a.txt"), "x\n");
+      await writeFile(join(capDir, "ignored-dir/b.txt"), "x\n");
+      await writeFile(join(capDir, "ignored-dir/c.txt"), "x\n");
+      await writeFile(join(capDir, "debug.log"), "x\n");
+      await writeFile(join(capDir, "keep.txt"), "x\n");
+      const skip = (relPath: string): boolean => relPath === "ignored-dir" || relPath === "debug.log";
+      // maxEntries 2: were the ignored dir pushed and descended, its three
+      // children would exhaust the budget and truncate the walk. Because the
+      // skip is consulted before the push AND before the descent, the pruned
+      // walk finishes naturally with one entry and no truncation.
+      const { entries: out, truncated } = await collectFsEntries(capDir, { maxEntries: 2, skip });
+      expect(out.map((entry) => entry.relPath)).toEqual(["keep.txt"]);
+      expect(out.some((entry) => entry.relPath.startsWith("ignored-dir"))).toBe(false);
+      expect(truncated).toBe(false);
+    } finally {
+      await rm(capDir, { recursive: true, force: true });
+    }
+  });
+
+  it("applies the skip predicate in collectDirEntries before push and descent (Issue #158)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-nav-dirskip-"));
+    try {
+      await mkdir(join(dir, "brandnew/ignored-sub"), { recursive: true });
+      await mkdir(join(dir, "brandnew/sub"));
+      await writeFile(join(dir, "brandnew/keep.txt"), "x\n");
+      await writeFile(join(dir, "brandnew/debug.log"), "x\n");
+      await writeFile(join(dir, "brandnew/ignored-sub/hidden.txt"), "x\n");
+      await writeFile(join(dir, "brandnew/sub/debug.log"), "x\n");
+      await writeFile(join(dir, "brandnew/sub/keep.txt"), "x\n");
+      // The session's predicate shape: exact ignored files plus ignored-dir
+      // prefixes (a collapsed `dir/` record does not enumerate its children).
+      const skip = (relPath: string): boolean =>
+        relPath === "brandnew/debug.log" ||
+        relPath === "brandnew/sub/debug.log" ||
+        relPath.startsWith("brandnew/ignored-sub");
+      const out = await collectDirEntries(dir, "brandnew", undefined, skip);
+      expect(out.map((entry) => entry.relPath).sort()).toEqual([
+        "brandnew/keep.txt",
+        "brandnew/sub",
+        "brandnew/sub/keep.txt",
+      ]);
+      expect(out.some((entry) => entry.relPath.includes("ignored-sub"))).toBe(false);
+      expect(out.some((entry) => entry.relPath.endsWith("debug.log"))).toBe(false);
+
+      // The pruned subtree spent nothing: one surviving entry fits a
+      // one-entry budget without truncation only because the skipped paths
+      // never counted.
+      const budget = createTreeWalkBudget(1);
+      const capped = await collectDirEntries(dir, "brandnew", budget, skip);
+      expect(capped).toHaveLength(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("shares one budget across collectDirEntries calls (Issue #108)", async () => {
     const capDir = await mkdtemp(join(tmpdir(), "pi-nav-shared-"));
     try {
@@ -520,6 +580,42 @@ describe("untracked directory subtree (Issue #058)", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("expandedUntrackedDirs (Issues #058, #158)", () => {
+  it("collects expanded ?? and !! dirs, and nothing else", () => {
+    const tree = buildTree(
+      CWD,
+      [
+        { relPath: "untracked", isDir: true, symlink: false },
+        { relPath: "ignored", isDir: true, symlink: false },
+        { relPath: "plain", isDir: true, symlink: false },
+      ],
+      new Map([
+        ["untracked", "??"],
+        ["ignored", "!!"],
+        ["plain", "M"],
+      ]),
+    );
+    walkTree(tree, (node) => {
+      if (node.isDir) node.expanded = false;
+    });
+    const expand = (relPath: string): void => {
+      const node = findNode(tree, relPath);
+      if (node) node.expanded = true;
+    };
+    expand("untracked");
+    expand("ignored");
+    expand("plain");
+    // Both badge families are probed (Issue #158 extended the set); a dir
+    // with any other code carries no mtime signal of its own.
+    expect([...expandedUntrackedDirs(tree)].sort()).toEqual(["ignored", "untracked"]);
+    // Collapsed untracked dirs are deliberately not probed.
+    const untracked = findNode(tree, "untracked");
+    if (untracked) untracked.expanded = false;
+    expect([...expandedUntrackedDirs(tree)].sort()).toEqual(["ignored"]);
+    expect(expandedUntrackedDirs(null).size).toBe(0);
   });
 });
 

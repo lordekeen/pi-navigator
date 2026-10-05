@@ -35,6 +35,7 @@ import {
   readCommitDiff,
   readGitState,
   readGitTree,
+  readIgnoredEntries,
   type RepoInfo,
 } from "./git";
 import {
@@ -61,6 +62,7 @@ import {
   expandedUntrackedDirs,
   reapplyExpansion,
   type TreeEntry,
+  type TreeSkipPredicate,
 } from "./tree";
 import type { FileNode, GitState, OpenTarget, ViewerFile } from "./types";
 import { extOf, restyleViewerFile, sameTarget, type LoadFileOptions } from "./viewer";
@@ -82,6 +84,46 @@ export function makeTreeTruncationWarner(
     warned = true;
     notify(`file tree truncated at ${MAX_FS_ENTRIES} entries \u2014 some files are not listed`);
   };
+}
+
+/**
+ * Skip predicate built from git's ignored listing (Issue #158): a path is
+ * skipped when it is an ignored entry itself or lives under an ignored
+ * directory. The listing's directory records are collapsed by `--directory`
+ * (`dir/` → `isDir`), so descendants of an ignored directory are matched by
+ * ancestor prefix rather than by enumerating its children.
+ */
+function makeIgnoredSkip(ignored: TreeEntry[]): TreeSkipPredicate {
+  const exact = new Set<string>();
+  const dirs = new Set<string>();
+  for (const entry of ignored) {
+    exact.add(entry.relPath);
+    if (entry.isDir) dirs.add(entry.relPath);
+  }
+  return (relPath: string): boolean => {
+    if (exact.has(relPath)) return true;
+    for (let slash = relPath.indexOf("/"); slash !== -1; slash = relPath.indexOf("/", slash + 1)) {
+      if (dirs.has(relPath.slice(0, slash))) return true;
+    }
+    return false;
+  };
+}
+
+/**
+ * First-occurrence-wins dedupe for the assembled tree entries (Issue #158):
+ * the ignored listing can repeat paths the untracked-directory fill already
+ * produced (e.g. `untracked-dir/debug.log`), and `buildTree` dedupes
+ * directories but would emit duplicate file rows for repeated file entries.
+ */
+function dedupeEntries(entries: TreeEntry[]): TreeEntry[] {
+  const seen = new Set<string>();
+  const out: TreeEntry[] = [];
+  for (const entry of entries) {
+    if (seen.has(entry.relPath)) continue;
+    seen.add(entry.relPath);
+    out.push(entry);
+  }
+  return out;
 }
 
 /**
@@ -307,6 +349,9 @@ export interface NavigatorSession {
 
 export function createSession(deps: SessionDeps): NavigatorSession {
   const cwd = deps.cwd;
+  // Issue #158: the gitignore policy is fixed for the overlay's lifetime, like
+  // every other setting — settings are read once per /navigator invocation.
+  const respectGitignore = deps.settings.tree.respectGitignore;
 
   let root: FileNode | null = null;
   let treeSource: "git" | "fs" | null = null;
@@ -645,17 +690,29 @@ export function createSession(deps: SessionDeps): NavigatorSession {
    * mode the mtimes of expanded UNTRACKED directories are folded in:
    * -unormal reports each as a single `?? dir/` record no matter its
    * contents, so the porcelain signature alone could never see an
-   * entry added inside one (Issue #058).
+   * entry added inside one (Issue #058). Expanded ignored (`!!`) dirs
+   * join that set too (Issue #158).
+   *
+   * With `tree.respectGitignore` off the ignored listing is part of the
+   * visible tree, so its path signature joins the probe: a top-level
+   * ignored add/remove changes the tree without changing porcelain
+   * (Issue #158). With the setting on the folded signature is empty, so
+   * the probe string is byte-identical to the pre-#158 behavior.
    */
-  const collectTreeProbe = async (git: GitState): Promise<string> =>
-    git.available
-      ? gitTreeProbe(git) + "\n" + (await collectFsProbe(cwd, expandedUntrackedDirs(root)))
-      : await collectFsProbe(cwd, collectExpanded(root));
+  const collectTreeProbe = async (git: GitState, ignored: TreeEntry[]): Promise<string> => {
+    if (!git.available) return await collectFsProbe(cwd, collectExpanded(root));
+    const ignoredSignature =
+      respectGitignore || ignored.length === 0
+        ? ""
+        : ignored.map((entry) => entry.relPath + (entry.isDir ? "/" : "")).join("\n") + "\n";
+    return gitTreeProbe(git) + "\n" + ignoredSignature + (await collectFsProbe(cwd, expandedUntrackedDirs(root)));
+  };
 
   /** Collect the entries for a changed tick, source tag included. */
   const collectTreeEntries = async (
     git: GitState,
     repo: RepoInfo,
+    ignored: TreeEntry[],
   ): Promise<{ entries: TreeEntry[]; source: "git" | "fs" }> => {
     let entries: TreeEntry[];
     let nextSource: "git" | "fs";
@@ -672,14 +729,40 @@ export function createSession(deps: SessionDeps): NavigatorSession {
       // expandable node. Keep it read-only: the `??` badge lives on the
       // directory row itself; filled children carry no per-file codes.
       const declaredDirs = base.filter((entry) => entry.isDir);
+      let merged = base;
+      let skip: TreeSkipPredicate | undefined;
+      if (!respectGitignore) {
+        // Issue #158 off-polarity: the ignored listing is part of the
+        // visible tree (badged `!!` through the per-tick code map). Its
+        // own directories join the subtree fill too, so `!!` dirs expand
+        // into their (ignored) children, still with no per-file codes on
+        // the filled rows — the existing `??` convention.
+        merged = dedupeEntries([...base, ...ignored]);
+        for (const entry of ignored) {
+          if (entry.isDir && !declaredDirs.some((dir) => dir.relPath === entry.relPath)) {
+            declaredDirs.push(entry);
+          }
+        }
+      } else if (declaredDirs.length > 0) {
+        // Issue #158 on-polarity: the untracked-dir fill must not surface
+        // ignored children. One listing call, and only when a fill will
+        // actually run (otherwise there is nothing to filter). The
+        // predicate prunes the walk before an ignored entry is pushed or
+        // descended into, so the shared budget is never spent on hidden
+        // subtrees.
+        const fillIgnored = await readIgnoredEntries(cwd, repo);
+        if (fillIgnored.length > 0) skip = makeIgnoredSkip(fillIgnored);
+      }
       // Issue #108: one shared budget across every untracked-dir walk,
       // so the concurrent per-dir calls draw from a single total cap
       // instead of multiplying it.
       const fsBudget = createTreeWalkBudget();
       const subtreeEntries = await Promise.all(
-        declaredDirs.map((dir) => collectDirEntries(cwd, dir.relPath, fsBudget)),
+        declaredDirs.map((dir) => collectDirEntries(cwd, dir.relPath, fsBudget, skip)),
       );
-      entries = [...base, ...subtreeEntries.flat()];
+      // Issue #158: the ignored listing can repeat paths the fill already
+      // produced; buildTree would emit duplicate file rows for those.
+      entries = dedupeEntries([...merged, ...subtreeEntries.flat()]);
       noteTruncation(fsBudget.truncated);
       nextSource = "git";
     } else {
@@ -690,8 +773,16 @@ export function createSession(deps: SessionDeps): NavigatorSession {
     }
     if (git.available && entries.length === 0) {
       // Fresh repository: git has nothing to list, so fall back to the
-      // filesystem walk (plan section 9, empty repository row).
-      const fsFallback = await collectFsEntries(cwd);
+      // filesystem walk (plan section 9, empty repository row). Git is
+      // available here, so the ignore rules can still be resolved: with
+      // the setting on, the fallback walk is filtered through the same
+      // predicate; with it off the walk already shows everything.
+      let skip: TreeSkipPredicate | undefined;
+      if (respectGitignore) {
+        const fallbackIgnored = await readIgnoredEntries(cwd, repo);
+        if (fallbackIgnored.length > 0) skip = makeIgnoredSkip(fallbackIgnored);
+      }
+      const fsFallback = await collectFsEntries(cwd, skip ? { skip } : undefined);
       entries = fsFallback.entries;
       noteTruncation(fsFallback.truncated);
       nextSource = "fs";
@@ -770,12 +861,22 @@ export function createSession(deps: SessionDeps): NavigatorSession {
       // Issue #146: one pure code map per tick, shared by the rebuild and the
       // unchanged-shape re-stamp branches below.
       const codes = gitCodeMap(git);
-      const probe = await collectTreeProbe(git);
+      // Issue #158: with the setting off, one ignored listing drives the
+      // probe, the `!!` badge map and the merge. It is read once per tick
+      // before the probe so a top-level ignored add/remove changes the probe
+      // too; with the setting on it is read inside collectTreeEntries only
+      // when an untracked-dir fill actually needs filtering.
+      const ignored = !respectGitignore && git.available ? await readIgnoredEntries(cwd, repo) : [];
+      if (closed) return;
+      if (!respectGitignore) {
+        for (const entry of ignored) codes.set(entry.relPath, "!!");
+      }
+      const probe = await collectTreeProbe(git, ignored);
       const treeChanged = root === null || probe !== treeProbe;
 
       if (treeChanged) {
         const expandedBefore = collectExpanded(root);
-        const { entries, source } = await collectTreeEntries(git, repo);
+        const { entries, source } = await collectTreeEntries(git, repo, ignored);
         if (closed) return;
         stampTree(entries, codes, probe, expandedBefore);
         treeSource = source;

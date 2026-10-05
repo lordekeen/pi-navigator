@@ -38,7 +38,7 @@ function fullSettings(): NavigatorSettings {
     images: { mode: "off" },
     icons: { enabled: false },
     viewer: { wrap: false, markdown: "code" },
-    tree: { showHidden: false },
+    tree: { showHidden: false, respectGitignore: true },
     layout: { default: "files-git-viewer" },
   };
 }
@@ -49,7 +49,7 @@ function markedUpSettings(): NavigatorSettings {
     images: { mode: "chafa" },
     icons: { enabled: true },
     viewer: { wrap: true, markdown: "rendered" },
-    tree: { showHidden: true },
+    tree: { showHidden: true, respectGitignore: false },
     layout: { default: "git-viewer" },
   };
 }
@@ -117,6 +117,7 @@ describe("buildSettingItems", () => {
       "viewer.wrap",
       "viewer.markdown",
       "tree.showHidden",
+      "tree.respectGitignore",
       "layout.default",
     ]);
     expect(items[0]).toMatchObject({ label: "Image rendering", currentValue: "off", values: ["off", "chafa", "native", "auto"] });
@@ -124,8 +125,10 @@ describe("buildSettingItems", () => {
     expect(items[2]).toMatchObject({ label: "Word wrap", currentValue: "off", values: ["on", "off"] });
     expect(items[3]).toMatchObject({ label: "Markdown view", currentValue: "code", values: ["code", "rendered"] });
     expect(items[4]).toMatchObject({ label: "Hidden files", currentValue: "off", values: ["on", "off"] });
+    // Issue #158: the gitignore toggle sits in the Tree section, default on.
+    expect(items[5]).toMatchObject({ label: "Respect .gitignore", currentValue: "on", values: ["on", "off"] });
     // Issue #119: the Layout section row exposes the three layouts.
-    expect(items[5]).toMatchObject({
+    expect(items[6]).toMatchObject({
       label: "Default layout",
       currentValue: "files-git-viewer",
       values: ["files-git-viewer", "files-viewer", "git-viewer"],
@@ -139,7 +142,8 @@ describe("buildSettingItems", () => {
     expect(items[2]?.currentValue).toBe("on");
     expect(items[3]?.currentValue).toBe("rendered");
     expect(items[4]?.currentValue).toBe("on");
-    expect(items[5]?.currentValue).toBe("git-viewer");
+    expect(items[5]?.currentValue).toBe("off");
+    expect(items[6]?.currentValue).toBe("git-viewer");
   });
 
   it("annotates env-shadowed rows with the env var name", () => {
@@ -151,7 +155,7 @@ describe("buildSettingItems", () => {
     expect(items[0]?.description).toContain("\u2014 overridden by PI_NAV_IMAGES (env wins)");
     expect(items[1]?.description).toContain("\u2014 overridden by PI_NAV_ICONS (env wins)");
     // Issue #119: the layout row annotates the same way.
-    expect(items[5]?.description).toContain("\u2014 overridden by PI_NAV_LAYOUT (env wins)");
+    expect(items[6]?.description).toContain("\u2014 overridden by PI_NAV_LAYOUT (env wins)");
     expect(items[0]?.description.startsWith("Render images as native terminal graphics")).toBe(true);
     expect(items[2]?.description).not.toContain("overridden");
     expect(items[4]?.description).not.toContain("overridden");
@@ -180,11 +184,11 @@ describe("buildSettingItems", () => {
   it("safely handles partial or empty settings without throwing TypeError", () => {
     expect(() => buildSettingItems({} as any, {})).not.toThrow();
     const items = buildSettingItems({} as any, {});
-    expect(items).toHaveLength(6);
+    expect(items).toHaveLength(7);
     expect(items[0]?.currentValue).toBe("off");
     expect(items[1]?.currentValue).toBe("off");
     // A missing layout section falls back to the registry default.
-    expect(items[5]?.currentValue).toBe("files-git-viewer");
+    expect(items[6]?.currentValue).toBe("files-git-viewer");
   });
 
   it("supports numeric fields with submenu and text input", () => {
@@ -264,7 +268,7 @@ describe("settings menu integration (real SettingsList)", () => {
 
     // The trailing Save row is the explicit confirm.
     expect(dirtyLines.some((line) => line.includes("save and go back"))).toBe(true);
-    for (let i = 0; i < 5; i++) component.handleInput?.(KEYS.down); // to the Save row
+    for (let i = 0; i < 6; i++) component.handleInput?.(KEYS.down); // to the Save row
     component.handleInput?.(KEYS.enter); // Save: one commit with the whole draft
     expect(commit).toHaveBeenCalledTimes(1);
     expect(commit.mock.calls[0]![0]!.images.mode).toBe("native");
@@ -282,7 +286,7 @@ describe("settings menu integration (real SettingsList)", () => {
     component.handleInput?.(KEYS.enter); // images.mode off -> chafa: staged, no commit yet
     expect(commit).not.toHaveBeenCalled();
 
-    for (let i = 0; i < 6; i++) component.handleInput?.(KEYS.down); // to the Save row
+    for (let i = 0; i < 7; i++) component.handleInput?.(KEYS.down); // to the Save row
     component.handleInput?.(KEYS.enter); // Save fails: warn, stay open, keep the draft
     expect(commit).toHaveBeenCalledTimes(1);
     expect(onWarning).toHaveBeenCalledTimes(1);
@@ -384,8 +388,8 @@ describe("settings menu integration (real SettingsList)", () => {
       const onWarning = vi.fn();
       const { component, closed, outcome } = await openMenu({ settings: fullSettings(), overrides: {}, commit, onWarning });
 
-      // Rows: 6 registry fields + the pushed number field + the Save row.
-      for (let i = 0; i < 6; i++) component.handleInput?.(KEYS.down); // to the number row
+      // Rows: 7 registry fields + the pushed number field + the Save row.
+      for (let i = 0; i < 7; i++) component.handleInput?.(KEYS.down); // to the number row
       component.handleInput?.(KEYS.enter); // open the number input submenu
       for (const ch of "abc") component.handleInput?.(ch);
       component.handleInput?.(KEYS.enter); // submit the invalid value
@@ -460,7 +464,7 @@ describe("settings menu integration (real SettingsList)", () => {
     const { component, closed } = await openMenu({ settings: fullSettings(), overrides: {}, commit, onWarning });
     component.handleInput?.(KEYS.enter); // stage only: no commit, no throw
     expect(commit).not.toHaveBeenCalled();
-    for (let i = 0; i < 6; i++) component.handleInput?.(KEYS.down); // to the Save row
+    for (let i = 0; i < 7; i++) component.handleInput?.(KEYS.down); // to the Save row
     component.handleInput?.(KEYS.enter); // Save throws
     expect(commit).toHaveBeenCalledTimes(1);
     expect(onWarning).toHaveBeenCalledWith(expect.stringContaining("failed to save settings"));
@@ -525,7 +529,7 @@ describe("settings menu integration (real SettingsList)", () => {
 
 describe("countChangedFields (Issue #121 draft accounting)", () => {
   it("counts exactly the registry fields whose values differ", () => {
-    expect(countChangedFields(fullSettings(), markedUpSettings())).toBe(6);
+    expect(countChangedFields(fullSettings(), markedUpSettings())).toBe(7);
     expect(countChangedFields(fullSettings(), fullSettings())).toBe(0);
   });
 

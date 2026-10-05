@@ -308,6 +308,45 @@ async function readTrackedFiles(cwd: string): Promise<string[]> {
 }
 
 /**
+ * Ignored untracked paths via `git ls-files --others --ignored --exclude-standard
+ * --directory --full-name -z` (Issue #158). `--exclude-standard` covers the full
+ * ignore stack git applies (`.gitignore`, `.git/info/exclude`, the global
+ * excludes file); `--directory` collapses a fully ignored directory into ONE
+ * `dir/` record, whose trailing slash this boundary normalizes into a
+ * slash-free relPath plus `isDir` — the same convention `readGitTree` uses for
+ * porcelain's `?? dir/` marker. `--full-name` keeps the listing
+ * repository-root-relative even from a subdirectory cwd, so `stripPrefix`
+ * translates it exactly like `readTrackedFiles` (without it a subdirectory cwd
+ * yields cwd-relative paths such as `./`). First occurrence wins. Never throws:
+ * a failed or overflowing listing degrades to `[]` (the caller then simply has
+ * nothing to merge or filter), and ignored records never enter `GitState`, so
+ * the git panel's staged/unstaged lists and the porcelain probe stay untouched.
+ */
+export async function readIgnoredEntries(cwd: string, repo: RepoInfo): Promise<TreeEntry[]> {
+  const result = await runGit(cwd, [
+    "ls-files",
+    "--others",
+    "--ignored",
+    "--exclude-standard",
+    "--directory",
+    "--full-name",
+    "-z",
+  ]);
+  if (result.status !== "ok") return [];
+  const seen = new Set<string>();
+  const entries: TreeEntry[] = [];
+  for (const raw of result.stdout.split(NUL)) {
+    if (raw.length === 0) continue;
+    const isDir = raw.endsWith("/");
+    const relPath = stripPrefix(isDir ? raw.slice(0, -1) : raw, repo.prefix);
+    if (!relPath || seen.has(relPath)) continue; // outsiders dropped, deduped
+    seen.add(relPath);
+    entries.push({ relPath, isDir, symlink: false });
+  }
+  return entries;
+}
+
+/**
  * Tree-ready cwd-relative entries for the git source (Issue #146): tracked
  * paths from `ls-files -z` translated through `repo.prefix` (outsiders
  * dropped) first, then the untracked `??` records from the porcelain state
