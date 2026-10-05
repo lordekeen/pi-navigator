@@ -9,8 +9,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
 | **Pending / Open** | 1 | 0 | 1 | **2** |
-| **Resolved** | 22 | 63 | 67 | **152** |
-| **Total** | **23** | **63** | **68** | **154** |
+| **Resolved** | 22 | 63 | 68 | **153** |
+| **Total** | **23** | **63** | **69** | **155** |
 
 ---
 
@@ -27,6 +27,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | ID | Title | Type | Severity | Resolution Summary | Status |
 | [#140](140-session-module-extraction.md) | Extract the Session Module from `runNavigator`'s Mount Closure | Technical Debt / Refactor | Medium | The `ctx.ui.custom` closure became `session.ts`: `createSession(deps)` → `{ loadFile, loadCommit, start, refresh, onActivity, dispose }` over an `OverlaySink` port, with `loadFile`/`notify`/`notifyWarning`/`theme`/`kittyProbe`/`capabilities`/`pi`/settings/imagePaths injected and git/tree/diff/images imported directly; `refreshData` decomposed into private helpers; `dispose()` additionally sets the session's closed flag so a framework-driven dispose stops in-flight ticks. Pure move — `navigator.ts` and existing tests byte-identical (802/802 still green); +13 `session.test.ts` cases drive cadence/backoff (cap and resets revert-checked), stamping skips, cache identity, abort ownership, error dedupe, dispose and `loadCommit`; 815/815 across 21 suites. Policy helpers moved to `session.ts` and re-exported from `index.ts` for the frozen test imports; `tsconfig.json` include gained `session.ts`. version 0.14.3. | **Resolved** |
+| [#155](155-readme-status-badge-drift.md) | README Status Badge Is Pinned to v0.10.7 — Seven Minor Versions Stale | Documentation | Low | Badge moved to `status-v0.14.18-green`, and a new `test/docs.test.ts` guard asserts the README contains `status-v<package.json version>-`, so a version bump with a stale badge now fails the suite instead of drifting silently through seven releases (last guarded-era update was #056 at v0.5.0). 22 suites / 931 cases. version 0.14.18. | **Resolved** |
 | [#154](154-session-test-flakes-fixed-ticks.md) | `session.test.ts` Flakes Under Full-Suite Load — Fixed-Tick Settles Race Async Side Effects | Technical Debt / Test Reliability | Medium | The three fixed-tick tests now wait on observed conditions (`vi.waitFor`): the `refresh()` → support-snapshot wait and `chafaCalls` lengths 1/2 in the two abort tests, the chafa spawn in the fake-timer re-arms test. `vi.waitFor` under Vitest 5.0.1 polls on real safe timers while advancing the virtual clock ≤50 ms per check — under the 250 ms re-arm debounce, so the reflow semantics stay observable; no helper/fallback needed. Every assertion value unchanged. Red-green not applicable (flake); soak: 20/20 consecutive full-suite runs green, 930/930 across 22 suites, plus an orchestrator re-run. version 0.14.18. | **Resolved** |
 | :--- | :--- | :--- | :--- | :--- | :---: |
 | [#153](153-nativeonly-dead-parameter.md) | `renderedImageVerdict`'s `nativeOnly` Parameter Is Dead | Technical Debt / Dead Code | Low | `renderedImageVerdict()` lost the never-passed `nativeOnly` parameter and its unreachable `nativeOnly && renderer !== "native"` branch, plus the doc sentence claiming the parameter kept the native scroll pin structural. The pin still derives at the call site (`renderer === "native"`), native tests 6/6, and no source reference to `nativeOnly` remains. Behavior unchanged; 930/930. version 0.14.17. | **Resolved** |
@@ -298,6 +299,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#055: `isMarkdownPath` Excludes Common Markdown Extensions (`.mdx`, `.mkd`, `.mdown`)](055-markdown-extensions-whitelist.md) *(resolved)*
 
 ### Technical Debt & Code Robustness
+- [#155: README Status Badge Is Pinned to v0.10.7 — Seven Minor Versions Stale](155-readme-status-badge-drift.md) *(resolved)*
 - [#154: `session.test.ts` Flakes Under Full-Suite Load — Fixed-Tick Settles Race Async Side Effects](154-session-test-flakes-fixed-ticks.md) *(resolved)*
 - [#153: `renderedImageVerdict`'s `nativeOnly` Parameter Is Dead](153-nativeonly-dead-parameter.md) *(resolved)*
 - [#150: Tree Surface Leaks — Test Support Out, One Mutation Door, No Back-Pointer](150-tree-surface-leaks.md) *(resolved)*

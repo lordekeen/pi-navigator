@@ -128,6 +128,11 @@ describe("documentation guards (Issue #115)", () => {
     expect(readme).not.toMatch(/\b\d[\d,]*\s+cases\b/i);
     expect(agents).not.toMatch(/\b\d[\d,]*\s+cases\b/i);
   });
+
+  it("pins the README status badge to the shipped version (Issue #155)", () => {
+    const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as { version: string };
+    expect(readme).toContain(`status-v${pkg.version}-`);
+  });
 });
 
 describe("issue tracker guards (Issue #115)", () => {
