@@ -1015,13 +1015,10 @@ export class NavigatorOverlay implements Focusable {
   /**
    * The displayed file's rendered-image verdict, or null when there is none
    * to act on (no image, a card verdict, an empty row list, or the `i`
-   * toggle hiding it). `nativeOnly` keeps the native-pinned scroll gate
-   * structural. Issue #143: one verdict read replaces the per-site tier +
-   * imageLines re-derivations.
+   * toggle hiding it). Issue #143: one verdict read replaces the per-site
+   * tier + imageLines re-derivations.
    */
-  private renderedImageVerdict(
-    nativeOnly = false,
-  ): Extract<ImageVerdict, { kind: "rendered" }> | null {
+  private renderedImageVerdict(): Extract<ImageVerdict, { kind: "rendered" }> | null {
     if (this.imageAsCard) return null;
     const file = this.viewFile;
     if (file === null || file.kind !== "image") return null;
@@ -1029,7 +1026,6 @@ export class NavigatorOverlay implements Focusable {
     if (verdict === undefined || verdict.kind !== "rendered" || verdict.lines.length === 0) {
       return null;
     }
-    if (nativeOnly && verdict.renderer !== "native") return null;
     return verdict;
   }
 
