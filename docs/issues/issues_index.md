@@ -8,9 +8,9 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
-| **Pending / Open** | 1 | 0 | 1 | **2** |
+| **Pending / Open** | 1 | 2 | 1 | **4** |
 | **Resolved** | 22 | 63 | 68 | **153** |
-| **Total** | **23** | **63** | **69** | **155** |
+| **Total** | **23** | **65** | **69** | **157** |
 
 ---
 
@@ -18,6 +18,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | ID | Title | Type | Severity | Component | Status |
 | :--- | :--- | :--- | :--- | :--- | :--- |
+| [#157](157-devdeps-pin-lag.md) | devDependencies Pin Lags the Host pi (0.99.2 vs 1.0.3) | Technical Debt / Tooling | Medium | `package.json` | Open — host pi is 1.0.3 while both devDeps are `^0.99.2`, so typecheck/Vitest proved an API one major behind; raise to `^1.0.3` and re-run (found by #156) |
+| [#156](156-living-docs-drift.md) | Living Docs Drifted from the Code (AGENTS / DESIGN / README / GLOSSARY) | Documentation | Medium | `AGENTS.md`, `DESIGN.md`, `README.md`, `docs/GLOSSARY.md` | Open — audit of 2026-10-05: 44 findings (2 High, 15 Medium, 27 Low) across ownership attribution (#140), the #148 geometry split, the #142 typed target, the #143/#144 image pipeline, and the #121/#135/#137 self-contradictions; full finding list in the issue doc |
 | [#020](020-no-viewer-cache-blocking-highlight.md) | No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread | Bug / Performance | High | `viewer.ts` | Open (partial — cache done; event-loop yielding deferred: blocked by pi's bundled-runtime virtual-module boundary, needs a pi-side API) |
 | [#067](067-typed-config-registry-paths.md) | Typed Config Registry Paths (`path` is `readonly string[]`) | Technical Debt / Type Safety | Low | `settings.ts` | **Deferred** — tracked, not scheduled: the compile-time path/default check is not worth the rework at five fields. Revisit when the schema grows (~15+ fields or a third level), `live: true` lands, the byte-pinned serialize test is relaxed, or a defect escapes that a type check would have caught |
 
@@ -299,6 +301,8 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#055: `isMarkdownPath` Excludes Common Markdown Extensions (`.mdx`, `.mkd`, `.mdown`)](055-markdown-extensions-whitelist.md) *(resolved)*
 
 ### Technical Debt & Code Robustness
+- [#157: devDependencies Pin Lags the Host pi (0.99.2 vs 1.0.3)](157-devdeps-pin-lag.md) *(open)*
+- [#156: Living Docs Drifted from the Code (AGENTS / DESIGN / README / GLOSSARY)](156-living-docs-drift.md) *(open)*
 - [#155: README Status Badge Is Pinned to v0.10.7 — Seven Minor Versions Stale](155-readme-status-badge-drift.md) *(resolved)*
 - [#154: `session.test.ts` Flakes Under Full-Suite Load — Fixed-Tick Settles Race Async Side Effects](154-session-test-flakes-fixed-ticks.md) *(resolved)*
 - [#153: `renderedImageVerdict`'s `nativeOnly` Parameter Is Dead](153-nativeonly-dead-parameter.md) *(resolved)*
