@@ -13,7 +13,7 @@
  * had no marker at all, while the overview counts are hand-maintained on every
  * resolution.
  */
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -102,6 +102,23 @@ describe("documentation guards (Issue #115)", () => {
     expect(listed.length).toBeGreaterThan(0);
     for (const suite of suiteNames()) {
       expect(listed, `${suite} is missing from the AGENTS.md test inventory`).toContain(suite);
+    }
+  });
+
+  it("keeps the package.json files allowlist complete and on disk (Issue #151)", () => {
+    const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as { files: string[] };
+    // Every publishable root module must be allowlisted, or the published
+    // tarball cannot load (the `session.ts` gap of Issue #140/#151).
+    const rootModules = readdirSync(repoRoot)
+      .filter((name) => name.endsWith(".ts"))
+      .filter((name) => name !== "vitest.config.ts");
+    for (const module of rootModules) {
+      expect(pkg.files, `${module} is missing from package.json "files"`).toContain(module);
+    }
+    // Deletion direction: a stale entry means `files` promises a file that
+    // npm will not find.
+    for (const entry of pkg.files) {
+      expect(existsSync(join(repoRoot, entry)), `package.json "files" entry "${entry}" does not exist on disk`).toBe(true);
     }
   });
 

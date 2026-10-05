@@ -1,6 +1,6 @@
 # Issue #151: The npm `files` Allowlist Omits `session.ts` — Published Packages Cannot Load
 
-- **Status**: Open
+- **Status**: Resolved
 - **Type**: Bug / Packaging
 - **Severity**: High
 - **Component(s)**: `package.json`, `test/docs.test.ts` (guard)
@@ -41,10 +41,26 @@ part of the fix so the third instance cannot ship.
 
 ## Acceptance Criteria
 
-- [ ] `npm pack --dry-run` lists `session.ts`.
-- [ ] The guard fails red with `session.ts` removed from `files` and passes
-  green with it restored.
-- [ ] `npm run typecheck` and `npm test` green (22 suites, count unchanged).
+- [x] `npm pack --dry-run` lists `session.ts` (24 files total; the module is
+  36.2 kB in the tarball).
+- [x] The guard fails red with `session.ts` removed from `files` and passes
+  green with it restored — verified independently by the orchestrator
+  (`AssertionError: session.ts is missing from package.json "files"`).
+- [x] `npm run typecheck` and `npm test` green: 22 suites, 927 → 928 cases (the
+  guard adds one to the existing docs suite).
+
+## Resolution
+
+Fixed (2026-10-04), version 0.14.15:
+
+- **`package.json`** — `"session.ts"` added to the `files` allowlist beside the
+  other root modules. Every published release from 0.14.3 through 0.14.14 would
+  have failed to resolve `./session`; this closes that window.
+- **`test/docs.test.ts`** — one new guard case in the existing documentation
+  suite (no new suite file): every root `*.ts` module except the dev-only
+  `vitest.config.ts` must be allowlisted, and every allowlisted entry must exist
+  on disk. Red verified by temporarily removing the entry (the failure names
+  `session.ts`); green after restoring.
 
 ## References
 
