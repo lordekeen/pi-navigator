@@ -2,7 +2,7 @@
 
 Read-only project file navigator for pi. Opens a centered overlay inside a running pi session with a file tree, git state, and a syntax-highlighted viewer. No file editing, no runtime dependencies; images optionally render natively (kitty/iTerm2) or through a user-installed `chafa` (see [Images](#images-optional)).
 
-![status](https://img.shields.io/badge/status-v0.15.0-green)
+![status](https://img.shields.io/badge/status-v0.16.0-green)
 
 ## Install
 
@@ -62,7 +62,7 @@ Launcher flags are the only layer you can discover from the terminal — they ar
 
 In `-p` / print and json mode the UI commands (`/navigator`, `/navigator settings`) refuse **silently**: the host's `notify` is a no-op there, so an extension has no channel to report through, and json mode's stdout is contractually a single machine-readable document. That is a deliberate, documented deviation rather than an oversight — `set` is the path those modes can use, and it needs no UI at all.
 
-**`/navigator settings`** opens a settings menu (interactive TUI) over the same fields — Enter/Space cycles a row into an in-memory draft; the trailing Save row writes all changes atomically in one shot; Esc discards the draft without writing. Rows whose runtime requirement is missing carry a note (e.g. `images.mode` notes chafa + pi-chafa). The menu follows the host settings-panel standard: it docks above the message input, uses the host list roles (bright labels, muted values), and is framed by full-width rules like pi's own `/settings`; mouse wheel and click work in fullscreen mode. Rows shadowed by an environment variable are annotated (`— overridden by PI_NAV_IMAGES (env wins)`); editing one still writes the file, and the env value stays effective until it is unset. Settings are read once per `/navigator` invocation, so **changes apply the next time /navigator opens** — there is nothing applied live mid-session.
+**`/navigator settings`** opens a settings menu (interactive TUI) over the same fields — Enter/Space cycles a row into an in-memory draft; Ctrl+S saves and closes, writing all changes atomically in one shot; Esc discards the draft without writing. Rows whose runtime requirement is missing carry a note (e.g. `images.mode` notes chafa + pi-chafa). The menu follows the host settings-panel standard: it docks above the message input, uses the host list roles (bright labels, muted values), and is framed by full-width rules like pi's own `/settings`; mouse wheel and click work in fullscreen mode. Rows shadowed by an environment variable are annotated (`— overridden by PI_NAV_IMAGES (env wins)`); editing one still writes the file, and the env value stays effective until it is unset. Settings are read once per `/navigator` invocation, so **changes apply the next time /navigator opens** — there is nothing applied live mid-session.
 
 Icons depend on a terminal Nerd Font — without one, glyphs render as placeholder boxes (tofu). The overlay shows a one-time, non-blocking hint when icons are on. The git pane, commit-family view, and viewer follow the active pi theme with no hardcoded colors.
 

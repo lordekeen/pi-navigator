@@ -500,7 +500,7 @@ async function runNavigator(
  * /navigator settings (Issue #061): open the SettingsList menu over the FILE
  * view of the settings (loaded without env; env-shadowed rows are annotated
  * and the env still wins at the next open). Edits stage in the menu's draft;
- * the Save row commits once = atomic write → reload → notify warnings; any
+ * Ctrl+S commits once = atomic write → reload → notify warnings; any
  * throw becomes a bounded `{ok:false}` — the menu warns and keeps the draft
  * for a retry. After the menu closes, the outcome is reported: info naming
  * the count and the file on save, info "unchanged (cancelled)" on Esc (#133).

@@ -954,7 +954,7 @@ describe("makeImagePipeline (Issues #116/#144)", () => {
 });
 
 describe("settings menu integration via runSettings (Issues #121, #133)", () => {
-  const KEYS = { enter: "\r", down: "\x1b[B", escape: "\x1b" } as const;
+  const KEYS = { enter: "\r", down: "\x1b[B", escape: "\x1b", ctrlS: "\x13" } as const;
 
   /** A tui-mode ctx whose ui.custom mounts the real menu and closes on done(). */
   function mockSettingsCtx(): {
@@ -1038,7 +1038,7 @@ describe("settings menu integration via runSettings (Issues #121, #133)", () => 
     }
   });
 
-  it("the Save row writes the draft exactly once and reports count + file as info (#121, #133)", async () => {
+  it("Ctrl+S writes the draft exactly once and reports count + file as info (#121, #133, #159)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "nav121-save-"));
     agentDir.dir = dir;
     const settings: NavigatorSettings = {
@@ -1062,8 +1062,7 @@ describe("settings menu integration via runSettings (Issues #121, #133)", () => 
       component.handleInput?.(KEYS.enter); // images.mode off -> chafa (staged)
       component.handleInput?.(KEYS.down); // icons.enabled
       component.handleInput?.(KEYS.enter); // false -> true (staged)
-      for (let i = 0; i < 6; i++) component.handleInput?.(KEYS.down); // to the Save row
-      component.handleInput?.(KEYS.enter); // Save: one commit, then close
+      component.handleInput?.(KEYS.ctrlS); // Ctrl+S: one commit, then close
       await pending;
 
       const after = JSON.parse(readFileSync(filePath, "utf8")) as Record<string, unknown>;

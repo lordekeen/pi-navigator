@@ -7,10 +7,15 @@
  * convention (top/bottom full-width rule in the `border` token, like pi's
  * own `/settings` and pi-overseer). Mouse events are forwarded to the list
  * with y translated past the frame chrome. Edits are staged in an in-memory
- * draft; the trailing Save row commits it exactly once and Esc discards it
- * (pi-tui's SettingsList has no form-level confirm callback — only per-change
- * `onChange` and `onCancel` — so the confirm is the host's own "save and go
- * back" row pattern). The menu renders as a plain (non-overlay)
+ * draft; Ctrl+S saves and closes with exactly one commit, and Esc discards
+ * it (pi-tui's SettingsList has no form-level confirm callback — only
+ * per-change `onChange` and `onCancel` — so the frame intercepts the chord
+ * before delegating to the list, which would otherwise hand it to its search
+ * input; the same frame-level interception @aliou/pi-utils-settings uses).
+ * `ctrl+s` is matched literally with `matchesKey(data, Key.ctrl("s"))`: no
+ * host action id has "save this menu" semantics — the host ctrl+s ids are
+ * context-local to the model picker / thinking selector / session sort. The
+ * menu renders as a plain (non-overlay)
  * `ctx.ui.custom` component, so it docks in the editor area on/above the
  * message textbox like pi's own `/settings` selector and the reference
  * extensions — the transcript stays visible. The module never touches the
@@ -21,9 +26,11 @@
 import {
   type Component,
   Input,
+  Key,
   type SettingItem,
   SettingsList,
   type SettingsListTheme,
+  matchesKey,
   truncateToWidth,
   type TuiMouseEvent,
   type TuiMouseEventResult,
@@ -187,7 +194,7 @@ const CLEAN_FOOTER = "changes apply the next time /navigator opens";
  * Footer while the draft differs: the frame states the unsaved state so a
  * dirty menu is never silent (Issue #121 acceptance criterion).
  */
-const DIRTY_FOOTER = "unsaved changes \u2014 Enter on Save writes them \u00b7 Esc discards";
+const DIRTY_FOOTER = "unsaved changes \u2014 Ctrl+S saves and closes \u00b7 Esc discards";
 
 /**
  * Host-framed wrapper: top/bottom rules in the border token, the title row,
@@ -204,6 +211,7 @@ class SettingsMenuFrame implements Component {
   private readonly footerText: () => string;
   private readonly truncate: (text: string, maxWidth: number) => string;
   private readonly rule: (text: string) => string;
+  private readonly onSave: () => void;
   private listHeight = 0;
 
   constructor(
@@ -211,12 +219,14 @@ class SettingsMenuFrame implements Component {
     theme: SettingsMenuTheme,
     truncate: (text: string, maxWidth: number) => string,
     footerText: () => string,
+    onSave: () => void,
   ) {
     this.list = list;
     this.title = theme.fg("accent", theme.bold("pi-navigator \u00b7 settings"));
     this.theme = theme;
     this.footerText = footerText;
     this.truncate = truncate;
+    this.onSave = onSave;
     this.rule = (text) => theme.fg("border", text);
   }
 
@@ -237,6 +247,17 @@ class SettingsMenuFrame implements Component {
   }
 
   handleInput(data: string): void {
+    // Ctrl+S is intercepted here, before the list: SettingsList claims only
+    // up/down/confirm/cancel and hands everything else (including this chord)
+    // to its search input, and an open submenu would swallow it entirely —
+    // so frame-level interception is what makes save work from any row and
+    // with a submenu open. Matched literally: no host action id has "save
+    // this menu" semantics (the host ctrl+s ids are context-local to the
+    // model picker / thinking selector / session sort).
+    if (matchesKey(data, Key.ctrl("s"))) {
+      this.onSave();
+      return;
+    }
     this.list.handleInput?.(data);
   }
 
@@ -268,23 +289,23 @@ class SettingsMenuFrame implements Component {
   }
 }
 
-/** The staged draft's file is written only when this row is activated. */
-const SAVE_ROW_ID = "save";
-const SAVE_ROW_LABEL = "Save";
-const SAVE_ROW_VALUE = "save and go back";
-
 /**
  * Open the settings menu in the editor dock. Edits are staged in an
  * in-memory draft (`applyFieldEdit` on `current`); `deps.commit` runs once,
- * when the trailing Save row is activated — pi-tui's SettingsList offers no
- * form-level confirm callback, so the confirm is the host's own "save and go
- * back" row pattern (`pi-tui/dist/components/settings-list.d.ts` exposes only
- * `onChange` + `onCancel`; pi's own settings-selector uses a Save row for
- * staged flows). Esc discards the draft via `onCancel` and returns a
- * "cancelled" outcome, so an aborted session leaves the settings file
- * byte-identical (#121). Field-validation failures warn and revert the row
- * display; a failed save warns, keeps the draft, and stays open for a retry.
- * The outcome carries the committed settings so the caller reports count and
+ * when the user presses Ctrl+S (save-and-close). pi-tui's SettingsList
+ * offers no form-level confirm callback (`pi-tui/dist/components/settings-list.d.ts`
+ * exposes only `onChange` + `onCancel`), and its search input would swallow
+ * the chord, so `SettingsMenuFrame.handleInput` intercepts
+ * `matchesKey(data, Key.ctrl("s"))` before delegating — which is also what
+ * makes save work from any row and with a submenu open. `ctrl+s` is matched
+ * literally because no host action id has "save this menu" semantics (the
+ * host's ctrl+s ids are context-local to the model picker / thinking
+ * selector / session sort), so no action id is rerouted. Esc discards the
+ * draft via `onCancel` (still `tui.select.cancel`) and returns a "cancelled"
+ * outcome, so an aborted session leaves the settings file byte-identical
+ * (#121). Field-validation failures warn and revert the row display; a
+ * failed save warns, keeps the draft, and stays open for a retry. The
+ * outcome carries the committed settings so the caller reports count and
  * file AFTER the modal closes (#133) — nothing renders inside it.
  */
 export async function openSettingsMenu(ui: SettingsMenuUi, deps: SettingsMenuDeps): Promise<SettingsMenuOutcome> {
@@ -318,15 +339,6 @@ export async function openSettingsMenu(ui: SettingsMenuUi, deps: SettingsMenuDep
         values: [...data.values],
         submenu: data.submenu,
       }));
-      // The explicit confirm row: Enter on it writes the staged draft exactly
-      // once and closes; Esc stays the only cancel path.
-      items.push({
-        id: SAVE_ROW_ID,
-        label: SAVE_ROW_LABEL,
-        description: "Write all changes to the settings file and close",
-        currentValue: SAVE_ROW_VALUE,
-        values: [SAVE_ROW_VALUE],
-      });
 
       const saveAndClose = (): void => {
         try {
@@ -342,10 +354,6 @@ export async function openSettingsMenu(ui: SettingsMenuUi, deps: SettingsMenuDep
       };
 
       const onChange = (id: string, rawValue: string): void => {
-        if (id === SAVE_ROW_ID) {
-          saveAndClose();
-          return;
-        }
         try {
           const edited = applyFieldEdit(current, id, rawValue);
           if (!edited.ok) {
@@ -372,7 +380,7 @@ export async function openSettingsMenu(ui: SettingsMenuUi, deps: SettingsMenuDep
         () => done({ kind: "cancelled" }),
         { enableSearch: true },
       );
-      return new SettingsMenuFrame(settingsList, theme, truncate, () => (dirty() ? DIRTY_FOOTER : CLEAN_FOOTER));
+      return new SettingsMenuFrame(settingsList, theme, truncate, () => (dirty() ? DIRTY_FOOTER : CLEAN_FOOTER), saveAndClose);
     },
   );
 }

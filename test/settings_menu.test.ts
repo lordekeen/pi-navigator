@@ -2,10 +2,10 @@
  * settings_menu.ts suites (Issue #061): the pure buildSettingItems mapping
  * (values, env-override annotations) and end-to-end integration against the
  * real pi-tui SettingsList — Enter/Space stages edits into an in-memory
- * draft (zero commits), the trailing Save row commits the draft exactly
- * once, a failed save warns and keeps the draft, Esc discards with zero
- * commits, and the frame footer announces the draft while it differs from
- * the loaded file. No filesystem, no process.env.
+ * draft (zero commits), Ctrl+S commits the draft exactly once and closes,
+ * a failed save warns and keeps the draft, Esc discards with zero commits,
+ * and the frame footer announces the draft (advertising Ctrl+S) while it
+ * differs from the loaded file. No filesystem, no process.env.
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -60,6 +60,7 @@ const KEYS = {
   enter: "\r",
   down: "\x1b[B",
   escape: "\x1b",
+  ctrlS: "\x13",
 } as const;
 
 /**
@@ -246,7 +247,7 @@ describe("buildSettingsMenuTheme (host settings-list roles)", () => {
 });
 
 describe("settings menu integration (real SettingsList)", () => {
-  it("stages each edit without committing and saves the draft exactly once on the Save row (#121)", async () => {
+  it("stages each edit without committing and saves the draft exactly once on Ctrl+S (#121, #159)", async () => {
     const commit = vi.fn((next: NavigatorSettings): CommitResult => ({ ok: true, settings: next }));
     const onWarning = vi.fn();
     const { component, closed, outcome } = await openMenu({ settings: fullSettings(), overrides: {}, commit, onWarning });
@@ -262,14 +263,23 @@ describe("settings menu integration (real SettingsList)", () => {
     expect(commit).not.toHaveBeenCalled();
     expect(onWarning).not.toHaveBeenCalled();
 
-    // The dirty frame announces the draft.
+    // The dirty frame announces the draft; the footer text pins Ctrl+S (#159).
     const dirtyLines = component.render(80);
     expect(dirtyLines.join("\n")).toContain("unsaved changes");
+    expect(dirtyLines.join("\n")).toContain(
+      "unsaved changes \u2014 Ctrl+S saves and closes \u00b7 Esc discards",
+    );
 
-    // The trailing Save row is the explicit confirm.
-    expect(dirtyLines.some((line) => line.includes("save and go back"))).toBe(true);
-    for (let i = 0; i < 6; i++) component.handleInput?.(KEYS.down); // to the Save row
-    component.handleInput?.(KEYS.enter); // Save: one commit with the whole draft
+    // No synthetic Save row: one rendered row per registry field (#159).
+    const registryLabels = buildSettingItems(fullSettings(), {}).map((item) => item.label);
+    expect(registryLabels).toHaveLength(NAVIGATOR_CONFIG_FIELDS.length);
+    for (const label of registryLabels) {
+      expect(dirtyLines.filter((line) => line.includes(label))).toHaveLength(1);
+    }
+    expect(dirtyLines.some((line) => line.includes("save and go back"))).toBe(false);
+
+    // Ctrl+S from the current row: one commit with the whole draft, then close.
+    component.handleInput?.(KEYS.ctrlS);
     expect(commit).toHaveBeenCalledTimes(1);
     expect(commit.mock.calls[0]![0]!.images.mode).toBe("native");
     expect(commit.mock.calls[0]![0]!.icons.enabled).toBe(true);
@@ -286,8 +296,7 @@ describe("settings menu integration (real SettingsList)", () => {
     component.handleInput?.(KEYS.enter); // images.mode off -> chafa: staged, no commit yet
     expect(commit).not.toHaveBeenCalled();
 
-    for (let i = 0; i < 7; i++) component.handleInput?.(KEYS.down); // to the Save row
-    component.handleInput?.(KEYS.enter); // Save fails: warn, stay open, keep the draft
+    component.handleInput?.(KEYS.ctrlS); // Ctrl+S fails: warn, stay open, keep the draft
     expect(commit).toHaveBeenCalledTimes(1);
     expect(onWarning).toHaveBeenCalledTimes(1);
     expect(onWarning.mock.calls[0]?.[0]).toContain("disk full");
@@ -297,8 +306,8 @@ describe("settings menu integration (real SettingsList)", () => {
     const row = lines.find((line) => line.includes("Image rendering"));
     expect(row ?? "").toContain("chafa");
 
-    // Retrying Save calls commit again.
-    component.handleInput?.(KEYS.enter);
+    // Retrying Ctrl+S calls commit again.
+    component.handleInput?.(KEYS.ctrlS);
     expect(commit).toHaveBeenCalledTimes(2);
 
     component.handleInput?.(KEYS.escape); // abort: the file never saw the draft
@@ -388,7 +397,7 @@ describe("settings menu integration (real SettingsList)", () => {
       const onWarning = vi.fn();
       const { component, closed, outcome } = await openMenu({ settings: fullSettings(), overrides: {}, commit, onWarning });
 
-      // Rows: 7 registry fields + the pushed number field + the Save row.
+      // Rows: 7 registry fields + the pushed number field (no synthetic row, #159).
       for (let i = 0; i < 7; i++) component.handleInput?.(KEYS.down); // to the number row
       component.handleInput?.(KEYS.enter); // open the number input submenu
       for (const ch of "abc") component.handleInput?.(ch);
@@ -447,16 +456,55 @@ describe("settings menu integration (real SettingsList)", () => {
     component.handleMouse?.({ type: "release", button: "left", y: 0, height: lines.length });
     // Now click on first item (y=5 in frame coords)
     component.handleMouse?.({ type: "click", button: "left", y: 5, height: lines.length });
-    // The click stages the value; nothing is written until the Save row.
+    // The click stages the value; nothing is written until Ctrl+S.
     expect(commit).not.toHaveBeenCalled();
     const row = component.render(80).find((line) => line.includes("Image rendering"));
     expect(row ?? "").toContain("chafa");
-    component.handleInput?.(KEYS.escape);
+    component.handleInput?.(KEYS.ctrlS); // one commit with the staged draft
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(commit.mock.calls[0]![0]!.images.mode).toBe("chafa");
     await closed;
-    expect(outcome()).toEqual({ kind: "cancelled" });
+    expect(outcome()).toEqual({ kind: "saved", settings: commit.mock.calls[0]![0] });
   });
 
-  it("catches an exception thrown by commit on Save, keeps the draft, and warns", async () => {
+  it("saves on Ctrl+S even while a submenu is open (#159)", async () => {
+    const numberField: NavigatorConfigField = {
+      id: "viewer.tabWidth",
+      path: ["viewer", "tabWidth"],
+      kind: "number",
+      section: "Viewer",
+      label: "Tab width",
+      description: "Spaces per tab stop",
+      min: 1,
+      max: 8,
+      default: 4,
+      live: false,
+    };
+    (NAVIGATOR_CONFIG_FIELDS as any).push(numberField);
+    try {
+      const commit = vi.fn((next: NavigatorSettings): CommitResult => ({ ok: true, settings: next }));
+      const onWarning = vi.fn();
+      const { component, closed, outcome } = await openMenu({ settings: fullSettings(), overrides: {}, commit, onWarning });
+
+      component.handleInput?.(KEYS.enter); // images.mode off -> chafa (staged)
+      expect(commit).not.toHaveBeenCalled();
+      for (let i = 0; i < 7; i++) component.handleInput?.(KEYS.down); // to the number row
+      component.handleInput?.(KEYS.enter); // open the number input submenu
+
+      // The frame intercepts the chord before the list can route it into the
+      // submenu/search: one commit with the whole draft, then close.
+      component.handleInput?.(KEYS.ctrlS);
+      expect(commit).toHaveBeenCalledTimes(1);
+      expect(commit.mock.calls[0]![0]!.images.mode).toBe("chafa");
+      expect(onWarning).not.toHaveBeenCalled();
+      await closed;
+      expect(outcome()).toEqual({ kind: "saved", settings: commit.mock.calls[0]![0] });
+    } finally {
+      (NAVIGATOR_CONFIG_FIELDS as any).pop();
+    }
+  });
+
+  it("catches an exception thrown by commit on Ctrl+S, keeps the draft, and warns", async () => {
     const commit = vi.fn(() => {
       throw new Error("EACCES: permission denied");
     });
@@ -464,8 +512,7 @@ describe("settings menu integration (real SettingsList)", () => {
     const { component, closed } = await openMenu({ settings: fullSettings(), overrides: {}, commit, onWarning });
     component.handleInput?.(KEYS.enter); // stage only: no commit, no throw
     expect(commit).not.toHaveBeenCalled();
-    for (let i = 0; i < 7; i++) component.handleInput?.(KEYS.down); // to the Save row
-    component.handleInput?.(KEYS.enter); // Save throws
+    component.handleInput?.(KEYS.ctrlS); // Ctrl+S throws
     expect(commit).toHaveBeenCalledTimes(1);
     expect(onWarning).toHaveBeenCalledWith(expect.stringContaining("failed to save settings"));
     expect(onWarning).toHaveBeenCalledWith(expect.stringContaining("permission denied"));
