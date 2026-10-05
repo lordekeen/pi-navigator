@@ -8,9 +8,9 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 
 | Status | High | Medium | Low | Total |
 | :--- | :---: | :---: | :---: | :---: |
-| **Pending / Open** | 1 | 0 | 1 | **2** |
+| **Pending / Open** | 1 | 1 | 1 | **3** |
 | **Resolved** | 22 | 62 | 67 | **151** |
-| **Total** | **23** | **62** | **68** | **153** |
+| **Total** | **23** | **63** | **68** | **154** |
 
 ---
 
@@ -20,6 +20,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | [#020](020-no-viewer-cache-blocking-highlight.md) | No Per-File Viewer Cache; Synchronous Highlight Blocks the Main Thread | Bug / Performance | High | `viewer.ts` | Open (partial — cache done; event-loop yielding deferred: blocked by pi's bundled-runtime virtual-module boundary, needs a pi-side API) |
 | [#067](067-typed-config-registry-paths.md) | Typed Config Registry Paths (`path` is `readonly string[]`) | Technical Debt / Type Safety | Low | `settings.ts` | **Deferred** — tracked, not scheduled: the compile-time path/default check is not worth the rework at five fields. Revisit when the schema grows (~15+ fields or a third level), `live: true` lands, the byte-pinned serialize test is relaxed, or a defect escapes that a type check would have caught |
+| [#154](154-session-test-flakes-fixed-ticks.md) | `session.test.ts` Flakes Under Full-Suite Load — Fixed-Tick Settles Race Async Side Effects | Technical Debt / Test Reliability | Medium | `test/session.test.ts` | Open — three tests await a fixed 4-tick settle then assert async side effects; reproduced ~1 in 8 full runs and in the #153 gate run; adopt the #099 `vi.waitFor` condition convention |
 
 ---
 
@@ -297,6 +298,7 @@ Central tracking index for all bugs, enhancements, technical debt, and performan
 - [#055: `isMarkdownPath` Excludes Common Markdown Extensions (`.mdx`, `.mkd`, `.mdown`)](055-markdown-extensions-whitelist.md) *(resolved)*
 
 ### Technical Debt & Code Robustness
+- [#154: `session.test.ts` Flakes Under Full-Suite Load — Fixed-Tick Settles Race Async Side Effects](154-session-test-flakes-fixed-ticks.md) *(open)*
 - [#153: `renderedImageVerdict`'s `nativeOnly` Parameter Is Dead](153-nativeonly-dead-parameter.md) *(resolved)*
 - [#150: Tree Surface Leaks — Test Support Out, One Mutation Door, No Back-Pointer](150-tree-surface-leaks.md) *(resolved)*
 - [#149: Viewer Pane Content — One Content Slot](149-viewer-content-slot.md) *(resolved)*
