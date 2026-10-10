@@ -19,7 +19,7 @@ For local development, place the directory in a pi extension location and pi dis
 
 Then start pi and run `/navigator`.
 
-Does pi-navigator fit your setup? [Read more](./AGENTS.md) — [Dev docs](./docs/plans/pi-navigator-implementation-plan.md) — [Open issues](./docs/issues/issues_index.md)
+Does pi-navigator fit your setup? [Read more](./AGENTS.md)
 
 ## Configuration
 
@@ -199,15 +199,14 @@ off or no capability the key does nothing. Images are **user-only**: they are ne
 sent to the model. A missing binary, extension, terminal capability, or opt-in
 always degrades to the metadata card — never an error.
 
-The tiers are documented in
-[docs/specs/chafa-image-rendering.md](docs/specs/chafa-image-rendering.md) and
-[docs/specs/native-image-rendering.md](docs/specs/native-image-rendering.md).
+The tiers' design notes are local-only: `docs/specs/chafa-image-rendering.md` and
+`docs/specs/native-image-rendering.md` (gitignored with the rest of `docs/`).
 
 ## Development
 
 Files: `index.ts` (entry, command routing, settings/env loading, session wiring), `session.ts` (the overlay's data lifecycle: poll/backoff, tree and git reads, viewer cache, image pipeline binding), `navigator.ts` (overlay component state, caches, input routing, render orchestration), `frame.ts` / `layout.ts` / `files_view.ts` / `git_view.ts` / `viewer_view.ts` / `help_view.ts` (extracted pure view-models — frame composition/assembly, overlay geometry, files rows, git rows, viewer pane, `?` modal), `tree.ts` (tree model, bounded fs walk/entry collection), `git.ts` (async git access and porcelain parsing), `viewer.ts` (load caps, highlighting, search, display rows, `hardTruncate`), `diff.ts` (v3 diff prefix styler + composer), `theme.ts` (token mapping), `types.ts`, `constants.ts`, `env.ts` (shared env truth table), `icons.ts` (Nerd Font glyph map + icon-mode parsing), `settings.ts` (pi-navigator settings terrain), `settings_menu.ts` (`/navigator settings` menu, rendered in the editor area above the input), `help.ts` (the one keybinding table + `/navigator help` entry layout), `images.ts` (pi-chafa detection, chafa probe/sanitize/geometry, native capability ladder + bounded pi-tui native renderer).
 
-Planning documents live in `docs/plans/`: `ui-standards-report.md` (platform and reference findings), `pi-navigator-implementation-plan.md` (the original plan — now superseded; see `docs/issues/issues_index.md` for current state), and `qa-evidence.md`. Issues are tracked in `docs/issues/`. The throwaway visual mock is `mockups/navigator.html` — open it in a browser and drive it with the same keymap.
+Planning documents, specs, and the issue tracker live in the local-only `docs/` tree (gitignored, never published) — `docs/plans/` (`ui-standards-report.md`, the superseded `pi-navigator-implementation-plan.md`, `qa-evidence.md`), `docs/specs/`, and `docs/issues/` with its central `issues_index.md`. The throwaway visual mock is `mockups/navigator.html` (also local-only) — open it in a browser and drive it with the same keymap.
 
 ### Tooling (enabled — Linux, Node 26, git 2.56)
 

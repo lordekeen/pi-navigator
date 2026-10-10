@@ -1,4 +1,6 @@
 node_modules/
 .pi/
 .vitest/
-/docs/exploration/
+# Local-only development trees (issue tracker, plans, specs, mockups) — never published
+/docs/
+/mockups/

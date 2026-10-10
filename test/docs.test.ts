@@ -21,7 +21,12 @@ import { describe, expect, it } from "vitest";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const issuesDir = join(repoRoot, "docs", "issues");
-const index = readFileSync(join(issuesDir, "issues_index.md"), "utf8");
+const issuesIndexPath = join(issuesDir, "issues_index.md");
+// `docs/` is a local-only, gitignored development tree, so a fresh clone and
+// CI have no tracker to guard: the tracker suites skip there instead of failing
+// on a missing file, and run in full on a working tree that has one.
+const hasTracker = existsSync(issuesIndexPath);
+const index = hasTracker ? readFileSync(issuesIndexPath, "utf8") : "";
 const readme = readFileSync(join(repoRoot, "README.md"), "utf8");
 const agents = readFileSync(join(repoRoot, "AGENTS.md"), "utf8");
 
@@ -135,7 +140,7 @@ describe("documentation guards (Issue #115)", () => {
   });
 });
 
-describe("issue tracker guards (Issue #115)", () => {
+describe.skipIf(!hasTracker)("issue tracker guards (Issue #115)", () => {
   it("keeps the overview arithmetic true against the issue docs", () => {
     const all = issues();
     const open = all.filter((issue) => !isResolved(issue));
