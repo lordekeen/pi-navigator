@@ -1,0 +1,44 @@
+# One-off / emergency staging run of the current main state, gated on the full
+# verification suite. Normally this happens automatically via release-please.yml
+# when a GitHub release is created. Staged versions need maintainer approval
+# with 2FA before they go live (`npm stage approve <stage-id>`). Requires
+# NPM_TOKEN (a staging-capable granular token).
+#
+# Staging requires the package to already exist on npm; the first-ever publish
+# (v0.16.0) was direct and manual with `npm publish --access public`.
+#
+# Node 24 is required: `npm stage publish` needs npm CLI >= 11.15.0, and Node 22
+# still bundles npm 10.x (Node 24 bundles npm 11.19).
+#
+# Security: actions pinned to full commit SHAs, least-privilege job
+# permissions, credential-less checkout, staging serialized via concurrency.
+name: manual-publish
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      # pi-lens-ignore: line-length
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org/
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      # Stages the version; a maintainer approves it on npm to publish.
+      - run: npm stage publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

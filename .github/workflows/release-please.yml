@@ -1,0 +1,65 @@
+# Automated releases: release-please maintains a release PR (semver bump +
+# CHANGELOG.md) from conventional commits, and on each GitHub release STAGES the
+# package on npm with `npm stage publish`. Staging needs no 2FA, so it works in
+# CI; a maintainer then approves the staged version with 2FA (`npm stage approve
+# <stage-id>`, or the Staged Packages tab on npmjs.com) before it goes live.
+# Requires the NPM_TOKEN repository secret (a staging-capable granular token).
+#
+# The FIRST publish (v0.16.0) was direct and manual: a package that does not
+# exist on the registry yet cannot be staged, so there was nothing for this job
+# to stage. Every release after it stages normally.
+#
+# Node 24 is required, not just preferred: `npm stage publish` needs npm CLI
+# >= 11.15.0, and Node 22 still bundles npm 10.x (Node 24 bundles npm 11.19).
+#
+# Security: every action is pinned to a full commit SHA (not a mutable tag),
+# permissions are least-privilege per job, and checkout drops the GitHub
+# credentials before build/stage steps run.
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - id: release
+        # pi-lens-ignore: line-length
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          # Manifest config. `bump-minor-pre-major` makes a breaking commit land
+          # as a MINOR bump while pre-1.0, and `include-component-in-tag: false`
+          # keeps the vX.Y.Z tag scheme.
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      # pi-lens-ignore: line-length
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org/
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      # Stages the version; a maintainer approves it on npm to publish.
+      - run: npm stage publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

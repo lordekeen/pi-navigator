@@ -4,9 +4,15 @@ Read-only project file navigator for pi. Opens a centered overlay inside a runni
 
 ![status](https://img.shields.io/badge/status-v0.16.0-green)
 
+![pi-navigator overlay: files tree and git panel on the left, syntax-highlighted viewer on the right](assets/files-git-viewer.png)
+
 ## Install
 
-Place the directory in a pi extension location and pi discovers it:
+```bash
+pi install npm:@lordekeen/pi-navigator   # or: pi install git:github.com/lordekeen/pi-navigator
+```
+
+For local development, place the directory in a pi extension location and pi discovers it:
 
 - Global: `~/.pi/agent/extensions/pi-navigator/` (or any directory containing `index.ts`)
 - Project: `.pi/extensions/pi-navigator/`

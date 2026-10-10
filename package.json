@@ -1,5 +1,5 @@
 {
-  "name": "pi-navigator",
+  "name": "@lordekeen/pi-navigator",
   "version": "0.16.0",
   "description": "Read-only project file navigator overlay for pi: file tree, git state, and syntax-highlighted viewing without leaving the session.",
   "keywords": [
@@ -16,6 +16,15 @@
     "overlay"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lordekeen/pi-navigator.git"
+  },
+  "homepage": "https://github.com/lordekeen/pi-navigator#readme",
+  "bugs": "https://github.com/lordekeen/pi-navigator/issues",
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "files": [
     "index.ts",
@@ -40,9 +49,13 @@
     "git_view.ts",
     "help_view.ts",
     "viewer_view.ts",
+    "assets/",
+    "LICENSE",
+    "CHANGELOG.md",
     "README.md"
   ],
   "pi": {
+    "image": "https://raw.githubusercontent.com/lordekeen/pi-navigator/main/assets/files-git-viewer.png",
     "extensions": [
       "./index.ts"
     ]

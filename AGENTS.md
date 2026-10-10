@@ -99,6 +99,7 @@ The overlay is a pure TUI component; it never touches the filesystem or git dire
 - **Memory stays bounded by the caps** (`MAX_HIGHLIGHT_BYTES`, `MAX_HIGHLIGHT_LINES`), not by the file. Oversized files read a capped head, not the whole file.
 - **Icons are explicitly opt-in, not auto-detected.** `icons.enabled` in the settings file or `PI_NAV_ICONS` opts into the Nerd Font column (env wins); index.ts reads the env-resolved setting once and passes `enableIcons` into the ctor. The component never touches `process.env`, and there is no capability probe (pi-tui has none for fonts). Keep it that way — a user who didn't opt in keeps plain glyphs always.
 - **Key handling is narrowed, not literal.** Host-owned action ids go through the injected `KeybindingsManager` so user remaps apply — `tui.select.cancel` (default keys Esc and Ctrl+C) is the single funnel, `NavigatorOverlay.matchesCancel`, consulted at every level of the Esc stack; `index.ts` threads the manager it receives from `ctx.ui.custom` into the overlay. Overlay-local letters (j/k, h/l, g/G, `/`, `?`, …) stay literal: they have no host binding ids and are this extension's own key language. The no-manager fallback exists for harnesses only and matches Esc alone, so it is never a substitute for the real wiring — a test must drive the production path, not just construct the overlay with a manager (Issue #114 recorded that failure class, Issue #126 fixed this one).
+- **Screenshots live in `assets/`** at the repo root, named by what they show: the three layouts as `files-git-viewer.png` / `files-viewer.png` / `git-viewer.png`, feature shots by feature (`settings-menu.png`, `image-preview.png`). The README hero and the pi.dev gallery preview (`pi.image` in `package.json`) are the same file, `assets/files-git-viewer.png`; `pi.image` must stay an absolute raw-GitHub URL on `main` — the gallery cannot resolve repo-relative paths.
 - **Issues are tracked** in `docs/issues/` with a central `issues_index.md`. New bug → create `NNN-<slug>.md`, add to the Pending table; resolved → move to Resolved and update the overview counts. Follow the lifecycle in the index.
 
 ---
@@ -114,3 +115,22 @@ The overlay is a pure TUI component; it never touches the filesystem or git dire
 - **Reference the issue** in the commit body when one exists; create an issue doc first if the change is non-trivial.
 - **Keep diffs minimal.** Prefer one-line ellipsis-argument fixes over refactors when the root cause is localized. Don't refactor unrelated hotspots mid-bugfix.
 - **Version:** bump `package.json` `version` (patch for bugfixes, minor for features) and re-run `pi install .` so the local registration reflects it.
+
+---
+
+## Publishing
+
+The package is published to npm as `@lordekeen/pi-navigator`. Two workflows in `.github/workflows/`: `release-please.yml` (automatic) and `publish-manual.yml` (on demand). Publishing is **staged**: CI submits the version without 2FA, a maintainer approves with 2FA, and only then is it live.
+
+1. `release-please` maintains a release PR from conventional commits (version bump + `CHANGELOG.md`).
+2. Merging that PR creates the GitHub release and tag — **the merge alone does not publish to npm**; nothing is live yet.
+3. Creating the release triggers the `publish` job, which stages the new version with `npm stage publish` (no 2FA in CI).
+4. A maintainer approves with 2FA — `npm stage approve <stage-id>`, or npmjs.com -> Staged Packages tab -> Approve — and only then is it live.
+
+- The **first-ever publish (v0.16.0) was direct and manual** (`npm publish --access public`): a package that does not exist on the registry yet cannot be staged. Staging takes over from the next version.
+- `NPM_TOKEN` (repo secret) is a **staging-capable granular token** — correct and intentional. Do not "fix" it into a direct-publish token; staging is the intended flow, not a workaround.
+- The publish jobs must run on **Node 24**: `npm stage publish` needs npm CLI >= 11.15.0, and Node 22 bundles npm 10.x (Node 24 bundles npm 11.x).
+- `manual-publish` (`gh workflow run manual-publish`) stages the current `main` version on demand.
+- Before claiming a release shipped: `npm view @lordekeen/pi-navigator version` must show the new version. A successful staging run is not a publish.
+- The npmjs.com README renders asynchronously and is only refreshed by a **new version publish** — editing `README.md` alone never updates the package page, so README changes must ride a version bump.
+- General mechanics (staged publishing, version floors, GitHub Actions failures): the `npm-release-automation` skill.
