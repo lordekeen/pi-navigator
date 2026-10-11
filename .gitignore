@@ -1,6 +1,8 @@
 node_modules/
 .pi/
 .vitest/
+# CodeGraph index (local machine state)
+.codegraph/
 # Local-only development trees (issue tracker, plans, specs, mockups) — never published
 /docs/
 /mockups/
