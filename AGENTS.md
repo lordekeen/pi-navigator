@@ -100,7 +100,7 @@ The overlay is a pure TUI component; it never touches the filesystem or git dire
 - **Icons are explicitly opt-in, not auto-detected.** `icons.enabled` in the settings file or `PI_NAV_ICONS` opts into the Nerd Font column (env wins); index.ts reads the env-resolved setting once and passes `enableIcons` into the ctor. The component never touches `process.env`, and there is no capability probe (pi-tui has none for fonts). Keep it that way — a user who didn't opt in keeps plain glyphs always.
 - **Key handling is narrowed, not literal.** Host-owned action ids go through the injected `KeybindingsManager` so user remaps apply — `tui.select.cancel` (default keys Esc and Ctrl+C) is the single funnel, `NavigatorOverlay.matchesCancel`, consulted at every level of the Esc stack; `index.ts` threads the manager it receives from `ctx.ui.custom` into the overlay. Overlay-local letters (j/k, h/l, g/G, `/`, `?`, …) stay literal: they have no host binding ids and are this extension's own key language. The no-manager fallback exists for harnesses only and matches Esc alone, so it is never a substitute for the real wiring — a test must drive the production path, not just construct the overlay with a manager (Issue #114 recorded that failure class, Issue #126 fixed this one).
 - **Screenshots live in `assets/`** at the repo root, named by what they show: the three layouts as `files-git-viewer.png` / `files-viewer.png` / `git-viewer.png`, feature shots by feature (`settings-menu.png`, `image-preview.png`). The README hero and the pi.dev gallery preview (`pi.image` in `package.json`) are the same file, `assets/files-git-viewer.png`; `pi.image` must stay an absolute raw-GitHub URL on `main` — the gallery cannot resolve repo-relative paths.
-- **Issues are tracked locally** in `docs/issues/` with a central `issues_index.md` (`docs/` and `mockups/` are gitignored development trees — they never ship; a fresh clone has neither). New bug → create `NNN-<slug>.md`, add to the Pending table; resolved → move to Resolved and update the overview counts. Follow the lifecycle in the index.
+- **Issues are tracked on GitHub** — [`lordekeen/pi-navigator/issues`](https://github.com/lordekeen/pi-navigator/issues); the former local `docs/issues/` tracker was migrated there (and archived locally as `docs/issues-archive-2026-10-12.tar.gz`). New bug → open a GitHub issue labelled with a type (`bug`, `enhancement`, `feature`, `technical-debt`, `performance`, `documentation`, `test-quality`, `accessibility`) and a severity (`high`, `medium`, `low`); resolved → close it as completed. `docs/` and `mockups/` remain gitignored development trees — they never ship; a fresh clone has neither.
 
 ---
 
@@ -109,10 +109,10 @@ The overlay is a pure TUI component; it never touches the filesystem or git dire
 - **Commit message format:** `<type>(<scope>): <subject> (#NNN)`
   - `type`: `fix`, `feat`, `refactor`, `test`, `docs`, `chore`
   - `scope`: `viewer`, `help`, `navigator`, `tree`, `git`, `theme`, etc.
-  - `(#NNN)`: the issue number from `docs/issues/` when applicable.
+  - `(#NNN)`: the GitHub issue number when applicable.
   - Examples: `fix(viewer): normalize CRLF line endings … (#009)`, `fix(help): stop bright ellipsis leaking … (#010)`.
 - **Always run `npm run typecheck` and `npm test` before committing.** Both must be green.
-- **Reference the issue** in the commit body when one exists; create an issue doc first if the change is non-trivial.
+- **Reference the issue** in the commit body when one exists; open a GitHub issue first if the change is non-trivial.
 - **Keep diffs minimal.** Prefer one-line ellipsis-argument fixes over refactors when the root cause is localized. Don't refactor unrelated hotspots mid-bugfix.
 - **Version:** bump `package.json` `version` (patch for bugfixes, minor for features) and re-run `pi install .` so the local registration reflects it.
 
