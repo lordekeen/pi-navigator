@@ -70,8 +70,12 @@ describe("documentation guards (Issue #115)", () => {
     expect(agents).not.toMatch(/\b\d[\d,]*\s+cases\b/i);
   });
 
-  it("pins the README status badge to the shipped version (Issue #155)", () => {
-    const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as { version: string };
-    expect(readme).toContain(`status-v${pkg.version}-`);
+  it("reads the README status badge from the registry, not a hand-pinned version (Issue #155)", () => {
+    // The release PR bumps package.json but cannot rewrite README (Issue
+    // #162), so a hand-pinned badge desyncs on every release. The npm-version
+    // badge tracks what is actually published, and this guard keeps a
+    // hand-pinned one from creeping back.
+    expect(readme).toContain("img.shields.io/npm/v/@lordekeen/pi-navigator");
+    expect(readme).not.toMatch(/badge\/status-v\d+\.\d+\.\d+/);
   });
 });
