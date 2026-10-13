@@ -168,6 +168,12 @@ export interface ViewerFile {
   sizeBytes?: number;
   /** Total line count when below MAX_LINE_COUNT_BYTES. */
   lineCount?: number;
+  /**
+   * Estimated token count of the shown text under pi's chars/4 budget
+   * heuristic (compaction's `estimateTokens`); the displayed head for
+   * truncated views. Undefined for non-text kinds.
+   */
+  tokens?: number;
   /** Modification time at load, used for the "changed on disk" notice. */
   mtimeMs?: number;
   /** Highlighted ANSI lines for text kinds. */

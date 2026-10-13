@@ -294,6 +294,7 @@ export function buildViewerHeader(view: ViewerPaneView, rightW: number): string 
     const size = formatSize(file.sizeBytes);
     if (size) meta.push(size);
     if (file.lineCount !== undefined) meta.push(`${file.lineCount}L`);
+    if (file.tokens !== undefined) meta.push(`~${file.tokens} tok`);
     if (file.kind === "truncated") meta.push("truncated");
     if (canRenderMarkdown(file)) {
       meta.push(view.renderMarkdown ? "m code" : "m render");

@@ -384,6 +384,14 @@ describe("loadFile", () => {
     expect(stripAnsi(file.lines[0] ?? "")).toBe("// comment");
   });
 
+  it("estimates the shown text's tokens with pi's chars/4 heuristic", async () => {
+    const path = join(dir, "tokens.ts");
+    await writeFile(path, "const answer = 42;"); // 18 chars -> 5
+    const file = await loadFile(path, "tokens.ts");
+    expect(file.kind).toBe("text");
+    expect(file.tokens).toBe(5);
+  });
+
   it("detects binary content by NUL byte", async () => {
     const path = join(dir, "blob.bin");
     await writeFile(path, Buffer.from([0x61, 0x00, 0x62, 0x63]));
@@ -391,6 +399,7 @@ describe("loadFile", () => {
     expect(file.kind).toBe("binary");
     expect(file.message).toContain("binary");
     expect(file.sizeBytes).toBe(4);
+    expect(file.tokens).toBeUndefined();
   });
 
   it("shows an image metadata card with dimensions", async () => {
@@ -421,6 +430,9 @@ describe("loadFile", () => {
     expect(file.lines).toHaveLength(MAX_HIGHLIGHT_LINES);
     expect(file.lineCount).toBe(MAX_HIGHLIGHT_LINES + 100);
     expect(file.notice).toContain("Truncated view:");
+    // The count covers the displayed head, not the unread tail.
+    const shownHead = Array.from({ length: MAX_HIGHLIGHT_LINES }, (_, i) => `line ${i}`).join("\n");
+    expect(file.tokens).toBe(Math.ceil(shownHead.length / 4));
   });
 
   it("truncates at the byte cap without ever reading the whole file", async () => {

@@ -77,6 +77,7 @@ function makeHarness(rows: number, enableIcons = false, initialLayout?: Navigato
       relPath,
       sizeBytes: 2048,
       lineCount: 200,
+      tokens: 512,
       lines: [
         "const value = 'a long line that would overflow a narrow pane without clamping';",
         "\x1b[31mconst colored = 'red string'; // keeps escapes inside the pane\x1b[0m",

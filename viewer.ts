@@ -287,6 +287,16 @@ export function formatSize(bytes: number | undefined): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/**
+ * Estimated token count under pi's chars/4 context-budget heuristic
+ * (compaction's `estimateTokens`). It is an estimate by design — no offline
+ * tokenizer exists for the model the viewer runs under — so the UI marks it
+ * with a `~`.
+ */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
 // ── Loading ──
 
 /**
@@ -555,6 +565,7 @@ export async function loadFile(
       sizeBytes,
       mtimeMs,
       lineCount,
+      tokens: estimateTokens(styleText),
       lines,
       notice: `Truncated view: ${reason}. Showing the first ${head.length} lines.`,
       ...retainedStyle(styleText, relPath, opts?.styleKey),
@@ -571,6 +582,7 @@ export async function loadFile(
     sizeBytes,
     mtimeMs,
     lineCount,
+    tokens: estimateTokens(expanded),
     lines,
     ...retainedStyle(expanded, relPath, opts?.styleKey),
     ...(rawText !== undefined ? { rawText } : {}),

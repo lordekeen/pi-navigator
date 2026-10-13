@@ -328,6 +328,13 @@ describe("buildViewerHeader", () => {
     expect(loading).toContain("loading\u2026");
     expect(loading).toContain("src/other.ts");
   });
+
+  it("shows the estimated token count when present and omits it otherwise", () => {
+    const withTokens = buildViewerHeader(paneView({ file: viewerFile({ tokens: 1234 }) }), 60);
+    expect(withTokens).toContain("~1234 tok");
+    const withoutTokens = buildViewerHeader(paneView({ file: viewerFile() }), 60);
+    expect(withoutTokens).not.toContain(" tok");
+  });
 });
 
 
