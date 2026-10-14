@@ -607,7 +607,7 @@ export default function (pi: ExtensionAPI): void {
     // There is deliberately no `argumentHint` field: the building-pi-extension-ui
     // skill's contract.md documents one on registerCommand, but the host's
     // RegisteredCommand has no such member in any version we run (verified
-    // against 1.0.3: {name, sourceInfo, description?, getArgumentCompletions?,
+    // against 1.2.0: {name, sourceInfo, description?, getArgumentCompletions?,
     // handler}). The skill is wrong on that point, so trimming is the available
     // fix rather than relocating the signature to a hint field.
     description: "Open the read-only project navigator overlay; /navigator help lists subcommands",

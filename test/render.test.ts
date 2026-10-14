@@ -50,6 +50,17 @@ const KEYS = {
   enter: "\r",
 } as const;
 
+/**
+ * pi-tui's fake-cursor pair (`FAKE_CURSOR_START` / `FAKE_CURSOR_END`, not
+ * re-exported from the package root as of 1.2.0). pi-tui's own `Input` — the
+ * settings list's search row — wraps its caret cell in the pair, and the host
+ * TUI layer resolves it to reverse video or the real hardware cursor when it
+ * paints, so it is host-owned scaffolding that never reaches the terminal.
+ * The settings-menu width-safety test strips it before the SGR-only check so
+ * that check still catches navigator's own non-SGR escapes (issue #010).
+ */
+const PI_TUI_FAKE_CURSOR = /\x1b_pi:(\/)?fc\x07/g;
+
 interface Harness {
   overlay: NavigatorOverlay;
   rows: number;
@@ -935,7 +946,12 @@ describe("settings menu render width safety (Issue #061)", () => {
         // The SettingsList truncates its OWN hint line with pi-tui's internal
         // default ellipsis (issue #010 applies to navigator's own truncations),
         // so only width-safety and the SGR-only whitelist are enforced here.
-        expect(line, `line ${i} has a non-SGR escape: ${JSON.stringify(line)}`).not.toMatch(/\x1b(?!\[[0-9;]*m)/);
+        // pi-tui's own Input (the list's search row) wraps its caret cell in
+        // fake-cursor markers, which the host TUI layer resolves to reverse
+        // video or the real hardware cursor at paint time (pi 1.2.0) — strip
+        // them so the guard still catches navigator's own non-SGR escapes.
+        const ownEscapes = line.replace(PI_TUI_FAKE_CURSOR, "");
+        expect(ownEscapes, `line ${i} has a non-SGR escape: ${JSON.stringify(line)}`).not.toMatch(/\x1b(?!\[[0-9;]*m)/);
       }
       harness.getComponent()?.handleInput?.("\x1b"); // close: nothing is written
       await harness.closed;
