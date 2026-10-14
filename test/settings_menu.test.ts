@@ -215,7 +215,7 @@ describe("buildSettingItems", () => {
     expect(itemById(items, "images.mode").currentValue).toBe("off");
     expect(itemById(items, "icons.enabled").currentValue).toBe("off");
     expect(itemById(items, "viewer.minimap").currentValue).toBe("braille");
-    expect(itemById(items, "viewer.minimapWidth").currentValue).toBe("6");
+    expect(itemById(items, "viewer.minimapWidth").currentValue).toBe("7");
     // A missing layout section falls back to the registry default.
     expect(itemById(items, "layout.default").currentValue).toBe("files-git-viewer");
   });

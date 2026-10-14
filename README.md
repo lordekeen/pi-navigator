@@ -154,9 +154,11 @@ Esc precedence in one line: filter, then search, then close. Search mode adds `�
 
 ### Minimap
 
-A narrow column on the viewer's right edge maps the open file: braille by default (a dot grid where the file has ink, so indentation and line length read as shape), positioned bars if you prefer `viewer.minimap: bars`, or off. The whole file always fits vertically — however many lines it has, they fold into the rows the pane has — and the viewport band marks what you are looking at now. Diffs colour by status (added, removed, hunk, meta); `viewer.minimapColors: syntax` colours each row by its dominant syntax colour instead.
+A narrow column on the viewer's right edge maps the open file: braille by default (a dot grid where the file has ink, so indentation and line length read as shape), positioned bars if you prefer `viewer.minimap: bars`, or off. The whole file always fits vertically — however many lines it has, they fold into the rows the pane has — and the viewport band marks what you are looking at now. Diffs colour by status (added, removed, hunk, meta); `viewer.minimapColors: syntax` colours each row by its dominant syntax colour instead. A `│` divider in the frame tone separates the map from the content, the same separator the line-number gutter uses.
 
-The map appears only when the file actually scrolls (a short file shows nothing), hides itself when the pane would be left under 36 content columns, and takes its columns from the viewer's text width — so the visible text is narrower by `viewer.minimapWidth` columns (6 by default, 4–12) while the map is on. `v` toggles it for the session; `viewer.minimap`, `viewer.minimapColors` and `viewer.minimapWidth` set the start.
+While the map is on it is the viewer's only position cue: the right border's proportional thumb is suppressed, so the two can never disagree about where you are. Turn the map off (or let it auto-hide) and the thumb is back.
+
+The map appears only when the file actually scrolls (a short file shows nothing), hides itself when the pane would be left under 36 content columns, and takes its columns from the viewer's text width — so the visible text is narrower by `viewer.minimapWidth` columns plus the divider (7 by default, 4–12) while the map is on. `v` toggles it for the session; `viewer.minimap`, `viewer.minimapColors` and `viewer.minimapWidth` set the start.
 
 One honest limit: the map's appearance test is the file's **source line count**, not its rendered height. A file with few source lines that overflows only because its lines wrap, or a small markdown file that expands when rendered, scrolls without a map. The exact test would mean rendering markdown twice per pass, which the viewer does not do.
 

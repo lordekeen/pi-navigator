@@ -1196,6 +1196,10 @@ describe("E-style chrome (Issue #137)", () => {
       getTerminalRows: () => rows,
       requestRender: () => undefined,
       onClose: () => undefined,
+      // The border thumb and the minimap's band are alternative indicators
+      // (Issue #165): while a map shows, the thumb is suppressed, so the
+      // border-scrollbar contract these harnesses pin is the map-off surface.
+      initialMinimap: "off",
       loadFile: async (relPath: string): Promise<ViewerFile> => {
         if (kind === "text") {
           return { kind, relPath, sizeBytes: 4096, lineCount: lines.length, lines: [...lines] };
@@ -1412,6 +1416,24 @@ describe("viewer minimap carve (Issue #165)", () => {
         expectWidthSafe(harness.overlay, width);
       }
     }
+  });
+
+  it("drops the frame's border thumb while the map's band is the cue (Issue #165)", async () => {
+    const harness = makeHarness(36, false, undefined, longFile());
+    await harness.overlay.openRelPath("src/big.ts");
+    harness.overlay.handleInput(KEYS.tab); // files -> git
+    harness.overlay.handleInput(KEYS.tab); // git -> viewer
+    // The map is on (the file overflows), so the border column is a plain
+    // border: the band inside the pane is the only position cue.
+    const rows = harness.overlay.render(120);
+    expect(rows.some((line) => /[\u2800-\u28FF]/.test(line))).toBe(true);
+    expect(rows.some((line) => line.trimEnd().endsWith("\u2588"))).toBe(false);
+
+    harness.overlay.handleInput("v"); // session toggle: map off
+    const off = harness.overlay.render(120);
+    expect(off.some((line) => /[\u2800-\u28FF]/.test(line))).toBe(false);
+    // ...and the proportional thumb comes back, so the two are never both on.
+    expect(off.some((line) => line.trimEnd().endsWith("\u2588"))).toBe(true);
   });
 
   it("keeps the map stable while the viewer body really scrolls", async () => {

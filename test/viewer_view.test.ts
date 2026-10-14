@@ -628,6 +628,52 @@ describe("viewer minimap composition (Issue #165)", () => {
     expect(body.map((line) => line.includes(BAND))).toEqual([false, true, true, false, false, false]);
   });
 
+  it("puts a frame-tone divider between the content and the map, once per line", () => {
+    // The divider is the same `│` the line-number gutter uses (frame tone), so
+    // the map reads as a second margin. Display rows therefore carry two —
+    // the gutter's and the map's — while rendered markdown, which has no
+    // gutter, carries exactly one.
+    const toneTheme = makeNavigatorTheme({
+      fg: (color: string, t: string) => `fg:${color}(${t})`,
+      bg: (_c: string, t: string) => t,
+      bold: (t: string) => t,
+      underline: (t: string) => t,
+      inverse: (t: string) => t,
+    } as never);
+    const FRAME_DIVIDER = "fg:borderMuted(\u2502)";
+    const count = (line: string): number => line.split(FRAME_DIVIDER).length - 1;
+
+    const file = displayFile(10);
+    const display = renderViewerPane(
+      paneView({
+        theme: toneTheme,
+        file,
+        content: { kind: "display", rows: computeRows(file, 30, false, 0) },
+        digits: 2,
+        minimap: { sketch: sketch(6), width: 6 },
+      }),
+      40,
+      6,
+    );
+    for (const line of display.slice(1, 7)) expect(count(line)).toBe(2);
+    expect(count(display[0]!)).toBe(0); // the header keeps the full width (D7)
+
+    const md = viewerFile({ relPath: "README.md", rawText: "# hi", lines: ["# hi"] });
+    const markdown = renderViewerPane(
+      paneView({
+        theme: toneTheme,
+        file: md,
+        renderMarkdown: true,
+        content: { kind: "markdown", rows: Array.from({ length: 6 }, (_, i) => `row ${i}`) },
+        digits: 0,
+        minimap: { sketch: sketch(6), width: 6 },
+      }),
+      40,
+      6,
+    );
+    for (const line of markdown.slice(1, 7)) expect(count(line)).toBe(1);
+  });
+
   it("widens the content back when the map is off", () => {
     const file = displayFile(10);
     const rows = computeRows(file, 40, false, 0);

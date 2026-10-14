@@ -3390,6 +3390,20 @@ describe("viewer minimap (Issue #165)", () => {
     expect(lines.some((line) => BRAILLE.test(line))).toBe(false);
   });
 
+  it("hides itself when the map plus its divider would leave under 36 columns", async () => {
+    // At 80 columns with a 3-digit gutter the viewer has 45 content columns:
+    // width 8 (carve 9) leaves exactly 36 and shows, width 9 (carve 10) leaves
+    // 35 and hides. The divider counts against the floor like the map does,
+    // which is what keeps this a one-column question.
+    const shown = makeMapHarness({ width: 8, rows: 24 });
+    await shown.overlay.openRelPath("src/big.ts");
+    expect(shown.overlay.render(80).some((line) => BRAILLE.test(line))).toBe(true);
+
+    const hidden = makeMapHarness({ width: 9, rows: 24 });
+    await hidden.overlay.openRelPath("src/big.ts");
+    expect(hidden.overlay.render(80).some((line) => BRAILLE.test(line))).toBe(false);
+  });
+
   it("honours viewer.minimap: off", async () => {
     const harness = makeMapHarness({ minimap: "off" });
     await harness.overlay.openRelPath("src/big.ts");

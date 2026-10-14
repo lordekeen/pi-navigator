@@ -206,10 +206,10 @@ export const NAVIGATOR_CONFIG_FIELDS: readonly NavigatorConfigField[] = [
     section: "Viewer",
     label: "Minimap width",
     description:
-      "Minimap width in columns (4-12); the map hides itself when the remaining content width would drop under 36.",
+      "Minimap width in columns (4-12), plus its one-column divider; the map hides itself when the remaining content width would drop under 36.",
     min: 4,
     max: 12,
-    default: 6,
+    default: 7,
     live: false,
   },
   {

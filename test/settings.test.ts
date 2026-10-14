@@ -76,7 +76,7 @@ function fullSettings(overrides: Partial<{
       markdown: "code",
       minimap: "braille",
       minimapColors: "mono",
-      minimapWidth: 6,
+      minimapWidth: 7,
       ...overrides.viewer,
     },
     tree: overrides.tree ?? { showHidden: false, respectGitignore: true },
@@ -102,7 +102,7 @@ function cloneDefaultsLike(): {
     version: 1,
     images: { mode: "off" },
     icons: { enabled: false },
-    viewer: { wrap: false, markdown: "code", minimap: "braille", minimapColors: "mono", minimapWidth: 6 },
+    viewer: { wrap: false, markdown: "code", minimap: "braille", minimapColors: "mono", minimapWidth: 7 },
     tree: { showHidden: false, respectGitignore: true },
     layout: { default: "files-git-viewer" },
   };
@@ -238,7 +238,7 @@ describe("normalizeNavigatorSettings", () => {
       version: 1,
       images: { mode: "off" },
       icons: { enabled: false },
-      viewer: { wrap: false, markdown: "code", minimap: "braille", minimapColors: "mono", minimapWidth: 6 },
+      viewer: { wrap: false, markdown: "code", minimap: "braille", minimapColors: "mono", minimapWidth: 7 },
       tree: { showHidden: false, respectGitignore: true },
       layout: { default: "files-git-viewer" },
     });
@@ -338,7 +338,7 @@ describe("normalizeNavigatorSettings", () => {
       version: 1,
       images: { mode: "off" },
       icons: { enabled: true },
-      viewer: { wrap: true, markdown: "rendered", minimap: "braille", minimapColors: "mono", minimapWidth: 6 },
+      viewer: { wrap: true, markdown: "rendered", minimap: "braille", minimapColors: "mono", minimapWidth: 7 },
       tree: { showHidden: true, respectGitignore: true },
       layout: { default: "git-viewer" },
     });
@@ -480,14 +480,14 @@ describe("serializeNavigatorSettings", () => {
       version: 1,
       images: { mode: "off" },
       icons: { enabled: false },
-      viewer: { wrap: false, markdown: "code", minimap: "braille", minimapColors: "mono", minimapWidth: 6 },
+      viewer: { wrap: false, markdown: "code", minimap: "braille", minimapColors: "mono", minimapWidth: 7 },
       tree: { showHidden: false, respectGitignore: true },
       layout: { default: "files-git-viewer" },
     });
     // Key order is part of the persistence contract: the writer (and thus
     // versions of the file on disk) stays byte-identical across formats.
     expect(JSON.stringify(serializeNavigatorSettings(DEFAULT_NAVIGATOR_SETTINGS))).toBe(
-      '{"version":1,"images":{"mode":"off"},"icons":{"enabled":false},"viewer":{"wrap":false,"markdown":"code","minimap":"braille","minimapColors":"mono","minimapWidth":6},"tree":{"showHidden":false,"respectGitignore":true},"layout":{"default":"files-git-viewer"}}',
+      '{"version":1,"images":{"mode":"off"},"icons":{"enabled":false},"viewer":{"wrap":false,"markdown":"code","minimap":"braille","minimapColors":"mono","minimapWidth":7},"tree":{"showHidden":false,"respectGitignore":true},"layout":{"default":"files-git-viewer"}}',
     );
     expect(
       serializeNavigatorSettings(
@@ -503,7 +503,7 @@ describe("serializeNavigatorSettings", () => {
       version: 1,
       images: { mode: "chafa" },
       icons: { enabled: true },
-      viewer: { wrap: true, markdown: "rendered", minimap: "braille", minimapColors: "mono", minimapWidth: 6 },
+      viewer: { wrap: true, markdown: "rendered", minimap: "braille", minimapColors: "mono", minimapWidth: 7 },
       tree: { showHidden: true, respectGitignore: false },
       layout: { default: "git-viewer" },
     });
@@ -926,7 +926,7 @@ describe("writeNavigatorSettings", () => {
       version: 1,
       images: { mode: "chafa" },
       icons: { enabled: true },
-      viewer: { wrap: false, markdown: "code", minimap: "braille", minimapColors: "mono", minimapWidth: 6 },
+      viewer: { wrap: false, markdown: "code", minimap: "braille", minimapColors: "mono", minimapWidth: 7 },
       tree: { showHidden: false, respectGitignore: true },
       layout: { default: "git-viewer" },
     });
@@ -952,7 +952,7 @@ describe("writeNavigatorSettings", () => {
       version: 1,
       images: { mode: "chafa" },
       icons: { enabled: false },
-      viewer: { wrap: false, markdown: "code", minimap: "braille", minimapColors: "mono", minimapWidth: 6 },
+      viewer: { wrap: false, markdown: "code", minimap: "braille", minimapColors: "mono", minimapWidth: 7 },
       tree: { showHidden: false, respectGitignore: true },
       layout: { default: "files-viewer" },
     });
@@ -1234,7 +1234,7 @@ describe("NAVIGATOR_CONFIG_FIELDS", () => {
       label: "Minimap width",
       min: 4,
       max: 12,
-      default: 6,
+      default: 7,
       live: false,
     });
     expect(fieldById("tree.showHidden")).toMatchObject({

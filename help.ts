@@ -104,7 +104,7 @@ export const KEY_BINDINGS: readonly KeyBinding[] = [
   { id: "copy", keys: "y", description: "copy the selected path", help: true },
   { id: "refresh", keys: "r", description: "refresh tree and git", help: true },
   { id: "help", keys: "?", description: "this help", help: true, footer: { keys: "?", label: "help" } },
-  { id: "minimap", keys: "v", description: "toggle the viewer minimap", help: true },
+  { id: "minimap", keys: "v", description: "toggle the viewer minimap", help: true, footer: { keys: "v", label: "map" } },
   { id: "close", keys: "q Esc", description: "close (Esc clears filter or search first)", help: true, footer: { keys: "q Esc", label: "close" } },
   // Contextual entries the modal never shows (Issue #148). Each carries the
   // footer form its mode advertises; `keys` is the same spelling the footer
@@ -204,6 +204,7 @@ export const FOCUS_BINDINGS: Record<Focus, readonly HintRef[]> = {
     { id: "half-page" },
     { id: "wrap" },
     { id: "markdown" },
+    { id: "minimap" },
     { id: "filter-search", label: "search" },
     { id: "help" },
     { id: "close" },

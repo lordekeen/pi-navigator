@@ -216,6 +216,15 @@ export const MIN_OVERLAY_HEIGHT = 13;
 /** Half-page scroll fraction for ctrl+d / ctrl+u. */
 export const HALF_PAGE_DIVISOR = 2;
 
+/**
+ * The divider column between the minimap and the viewer's content (Issue
+ * #165): the map owns `viewer.minimapWidth` columns plus this one, so a
+ * `│` in the frame tone separates the two — the same separator the
+ * line-number gutter uses, which is what makes the map read as a second
+ * margin rather than as trailing content.
+ */
+export const MINIMAP_DIVIDER_WIDTH = 1;
+
 /** Below this content width the viewer minimap hides itself (Issue #165). */
 export const MINIMAP_MIN_CONTENT_WIDTH = 36;
 /**

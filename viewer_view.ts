@@ -261,16 +261,22 @@ export function renderViewerPane(view: ViewerPaneView, width: number, area: numb
 
   const body = view.content;
   // Issue #165: the minimap owns the pane's rightmost columns on the body
-  // rows; the content is composed at `bodyWidth` and the map's row appended,
-  // so the column is continuous. The header and the notice rows keep the
-  // pane's full width (D7).
+  // rows, with a frame-tone divider between it and the content — the same `│`
+  // the line-number gutter uses, so the map reads as a second margin rather
+  // than as trailing content. The content is composed at `bodyWidth`, then the
+  // divider, then the map's row, so the columns are continuous. The header and
+  // the notice rows keep the pane's full width (D7).
   const mapWidth = view.minimap?.width ?? 0;
-  const bodyWidth = Math.max(0, width - mapWidth);
+  const dividerW = mapWidth > 0 ? 1 : 0;
+  const divider = dividerW > 0 ? T.frame("\u2502") : "";
+  const bodyWidth = Math.max(0, width - mapWidth - dividerW);
   const mapRows = view.minimap
     ? renderMinimap(view.minimap.sketch, view.viewScroll, contentArea, T)
     : null;
   const withMap = (row: string, i: number): string =>
-    mapRows ? padTo(row, bodyWidth) + (mapRows[i] ?? " ".repeat(mapWidth)) : padTo(row, width);
+    mapRows
+      ? padTo(row, bodyWidth) + divider + (mapRows[i] ?? " ".repeat(mapWidth))
+      : padTo(row, width);
 
   if (body.kind === "markdown") {
     for (let i = 0; i < contentArea; i++) {

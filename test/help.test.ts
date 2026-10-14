@@ -297,6 +297,7 @@ describe("one binding table (Issue #148)", () => {
         { keys: "Ctrl+d/u PgUp/PgDn", label: "page" },
         { keys: "w", label: "wrap" },
         { keys: "m", label: "mode" },
+        { keys: "v", label: "map" },
         { keys: "/", label: "search" },
         { keys: "?", label: "help" },
         { keys: "q Esc", label: "close" },

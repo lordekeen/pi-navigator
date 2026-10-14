@@ -28,6 +28,7 @@ import {
   IMAGE_CELLS_MIN,
   IMAGE_EXTENSIONS,
   IMAGE_ROWS_MIN,
+  MINIMAP_DIVIDER_WIDTH,
   MINIMAP_MIN_CONTENT_WIDTH,
   MIN_OVERLAY_HEIGHT,
   MIN_OVERLAY_WIDTH,
@@ -286,6 +287,8 @@ export class NavigatorOverlay implements Focusable {
   private viewMinimapColors: NavigatorMinimapPalette = "mono";
   private viewMinimapWidth = 6;
   private viewMinimapOn = true;
+  /** True when the last pass rendered a map (drives the border-thumb rule). */
+  private viewerMapActive = false;
   private mapTextsCache: {
     file: ViewerFile;
     width: number;
@@ -1444,7 +1447,11 @@ export class NavigatorOverlay implements Focusable {
     // scrollbar while the text-like content overflows — hidden while the help
     // modal is open (it composes over the body). The window was recorded by
     // buildRightRows above, so the thumb cannot drift from the clamp.
-    const scrollWindow = this.mode === "help" ? null : this.viewerScrollWindow;
+    // Issue #165: the minimap's band is the viewer's position cue while it is
+    // shown, so the border thumb is dropped rather than duplicated (the
+    // thumb remains the only cue whenever the map is off or auto-hidden).
+    const scrollWindow =
+      this.mode === "help" || this.viewerMapActive ? null : this.viewerScrollWindow;
 
     // While filtering, the footer row area carries the filter bar instead of
     // the plain hints (plan section 3.6 item 6).
@@ -1647,10 +1654,14 @@ export class NavigatorOverlay implements Focusable {
       file &&
       this.viewMinimap !== "off" &&
       this.viewMinimapOn &&
-      contentW - this.viewMinimapWidth >= MINIMAP_MIN_CONTENT_WIDTH &&
+      contentW - this.viewMinimapWidth - MINIMAP_DIVIDER_WIDTH >= MINIMAP_MIN_CONTENT_WIDTH &&
       (file.lines.length > contentArea || (this.viewWrap && !useRendered))
     ) {
-      const texts = this.minimapTexts(file, contentW - this.viewMinimapWidth, useRendered);
+      const texts = this.minimapTexts(
+        file,
+        contentW - this.viewMinimapWidth - MINIMAP_DIVIDER_WIDTH,
+        useRendered,
+      );
       if (texts.length > contentArea) {
         const sketch = this.viewerSketch(texts, contentArea, this.viewMinimapWidth, file.kind === "diff");
         if (sketch) {
@@ -1659,7 +1670,13 @@ export class NavigatorOverlay implements Focusable {
         }
       }
     }
-    const rowsW = contentW - mapW;
+    // The divider is carved with the map (one column), so the visible text
+    // width is the pane's content width minus the map's footprint.
+    const rowsW = contentW - (mapW > 0 ? mapW + MINIMAP_DIVIDER_WIDTH : 0);
+    // The map's band IS the viewer's position indicator while it shows
+    // (Issue #165): the frame's border thumb is suppressed in render()
+    // so two cues cannot drift apart over the same window.
+    this.viewerMapActive = minimap !== null;
 
     const mdLines = useRendered && file ? this.getRenderedMarkdownLines(file, rowsW) : null;
     if (mdLines) {
