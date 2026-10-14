@@ -215,3 +215,13 @@ export const MIN_OVERLAY_HEIGHT = 13;
 
 /** Half-page scroll fraction for ctrl+d / ctrl+u. */
 export const HALF_PAGE_DIVISOR = 2;
+
+/** Below this content width the viewer minimap hides itself (Issue #165). */
+export const MINIMAP_MIN_CONTENT_WIDTH = 36;
+/**
+ * Horizontal-extent cap for the viewer minimap, in source columns
+ * (Issue #165). Borrowed from minimap.vim's min(max_line_width, override):
+ * without it one pathological long line compresses every other row's ink into
+ * a single dot column.
+ */
+export const MINIMAP_MAX_COLUMNS = 400;

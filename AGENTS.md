@@ -44,11 +44,11 @@ The overlay is a pure TUI component; it never touches the filesystem or git dire
   ```bash
   npm run typecheck      # tsc --noEmit, strict
   ```
-- **Tests:** Vitest, 22 suites (`viewer`, `tree`, `git`, `navigator`, `render`, `icons`, `settings`, `settings_menu`, `help`, `images`, `diff`, `theme`, `env`, `index`, `session`, `frame`, `layout`, `files_view`, `git_view`, `viewer_view`, `help_view`, `docs`).
+- **Tests:** Vitest, 23 suites (`viewer`, `tree`, `git`, `navigator`, `render`, `icons`, `settings`, `settings_menu`, `help`, `images`, `diff`, `theme`, `env`, `index`, `session`, `frame`, `layout`, `files_view`, `git_view`, `viewer_view`, `help_view`, `minimap_view`, `docs`).
   ```bash
   npm test               # vitest run — full suite
   npx vitest run -t "CRLF"   # focus one test by name
-  // Run the whole suite (22 files) with `npm test`.
+  // Run the whole suite (23 files) with `npm test`.
   ```
 - **Before claiming work is done**, both `npm run typecheck` and `npm test` must be green. The render suite enforces width-safety at multiple terminal sizes (120×36, 100×28, 80×24, and narrow widths) — keep it that way when adding UI.
 - **Add or update tests for the code you change, even if nobody asked.** Width-safety regressions and ANSI/escape-sequence bugs are exactly the class this suite exists to catch.
