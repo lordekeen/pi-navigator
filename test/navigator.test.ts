@@ -22,6 +22,8 @@ import { buildTree } from "../tree";
 import { entriesFromPaths, findNode } from "./tree_fixtures";
 import { NAVIGATOR_LAYOUTS, type GitState, type NavigatorLayout, type ViewerFile } from "../types";
 import type { LoadFileOptions } from "../viewer";
+import { targetOf } from "../viewer";
+import * as minimapView from "../minimap_view";
 import type { NavigatorMinimapEncoding, NavigatorMinimapPalette } from "../settings";
 import { imageCardHints } from "../viewer_view";
 
@@ -3458,15 +3460,118 @@ describe("viewer minimap (Issue #165)", () => {
     expect(harness.overlay.render(120).some((line) => BRAILLE.test(line))).toBe(false);
   });
 
+  /** Counts real folds through the module export the overlay actually calls. */
+  function countFolds(): () => number {
+    const spy = vi.spyOn(minimapView, "buildMinimap");
+    return () => spy.mock.calls.length;
+  }
+
+  it("folds into the CONTENT area, so a noticed file keeps its tail (#165 H1)", async () => {
+    // A diff (or truncated, or disk-changed) file carries a notice row: the pane
+    // draws `contentArea` map rows, so the fold's H must be the content area.
+    // Folding into the pane's outer area instead drops the bottom block(s) — the
+    // file's tail — and paints the end-of-file band onto an invisible row.
+    const diff: ViewerFile = {
+      ...longFile("commit:abc"),
+      kind: "diff",
+      notice: "commit abc \u00b7 2 files \u00b7 +3 \u22121",
+    };
+    const harness = makeMapHarness({ file: diff });
+    const spy = vi.spyOn(minimapView, "buildMinimap");
+    await harness.overlay.openRelPath("commit:abc");
+    const lines = harness.overlay.render(120);
+    const drawnRows = lines.filter((line) => BRAILLE.test(line)).length;
+    expect(drawnRows).toBeGreaterThan(0);
+    // The invariant: what the pane draws is exactly what the fold was asked to
+    // fill. Reading `area` off the input record (not off a second argument —
+    // `buildMinimap` takes one) is what gives this assertion its teeth.
+    const foldedAreas = spy.mock.calls.map(([input]) => input.area);
+    expect(foldedAreas.length).toBeGreaterThan(0);
+    for (const foldedArea of foldedAreas) expect(foldedArea).toBe(drawnRows);
+  });
+
+  it("folds once per content change — never per scroll or hscroll", async () => {
+    const harness = makeMapHarness();
+    const folds = countFolds();
+    await harness.overlay.openRelPath("src/big.ts");
+    focusViewer(harness.overlay);
+    harness.overlay.render(120);
+    const before = folds();
+    expect(before).toBeGreaterThan(0);
+    for (const key of ["j", "j", "j", "\x1b[6~", "\x1b[5~", "G", "g", "l", "l", "h", "k"]) {
+      harness.overlay.handleInput(key);
+      harness.overlay.render(120);
+    }
+    expect(folds()).toBe(before);
+  });
+
+  it("re-folds when the content changes: wrap, markdown, theme, file and disk (#165 §4.7)", async () => {
+    const md: ViewerFile = {
+      kind: "text",
+      relPath: "README.md",
+      rawText: "# heading\n\nbody text here\n".repeat(60),
+      lineCount: 200,
+      lines: Array.from({ length: 200 }, (_, i) => `line ${i}`),
+      mtimeMs: 1000,
+    };
+    const harness = makeMapHarness({ file: md });
+    const folds = countFolds();
+    await harness.overlay.openRelPath("README.md");
+    focusViewer(harness.overlay);
+    harness.overlay.render(120);
+
+    // `w` wrap: the map measures unwrapped lines, then unwrapped chunks.
+    let last = folds();
+    harness.overlay.handleInput("w");
+    harness.overlay.render(120);
+    const afterWrap = folds();
+    expect(afterWrap).toBeGreaterThan(last);
+
+    // `m` rendered markdown: a different row source entirely.
+    harness.overlay.handleInput("m");
+    harness.overlay.render(120);
+    const afterMd = folds();
+    expect(afterMd).toBeGreaterThan(afterWrap);
+
+    // Theme switch lands through invalidate() — the baked art must not survive.
+    harness.overlay.invalidate();
+    harness.overlay.render(120);
+    const afterTheme = folds();
+    expect(afterTheme).toBeGreaterThan(afterMd);
+
+    // A stat failure means "changed": a notice row joins the pane, which shifts
+    // every block, so the sketch must rebuild (§4.7).
+    const target = targetOf(md);
+    expect(target).not.toBeNull();
+    expect(harness.overlay.checkOpenTarget(target!, null)).toBe(true);
+    harness.overlay.render(120);
+    expect(folds()).toBeGreaterThan(afterTheme);
+
+    // File switch: a different line array is a different fold.
+    const switched = makeMapHarness({ file: null });
+    const swFolds = countFolds();
+    await switched.overlay.openRelPath("src/big.ts");
+    switched.overlay.render(120);
+    const beforeSwitch = swFolds();
+    await switched.overlay.openRelPath("src/small.ts");
+    switched.overlay.render(120);
+    expect(swFolds()).toBeGreaterThan(beforeSwitch);
+  });
+
   it("repaints the band without rebuilding the map when the file scrolls", async () => {
     const harness = makeMapHarness();
+    const folds = countFolds();
     await harness.overlay.openRelPath("src/big.ts");
     focusViewer(harness.overlay);
     const mapOf = (lines: string[]): string[] =>
       lines.map((line) => (line.match(/[\u2800-\u28FF]+/g) ?? []).join(""));
     const before = mapOf(harness.overlay.render(120));
+    const folded = folds();
     harness.overlay.handleInput("\x1b[6~"); // PgDn
     const after = mapOf(harness.overlay.render(120));
     expect(after).toEqual(before);
+    // Glyph equality alone cannot tell a repaint from a deterministic re-fold;
+    // the fold count can, and it must not move.
+    expect(folds()).toBe(folded);
   });
 });

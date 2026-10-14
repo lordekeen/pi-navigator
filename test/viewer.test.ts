@@ -896,6 +896,13 @@ describe("inkRuns (Issue #165)", () => {
   it("carries a mid-sequence colour set in one SGR list", () => {
     expect(inkRuns("\x1b[1;38;5;42mab")).toEqual([{ text: "ab", color: "38;5;42" }]);
   });
+
+  it("treats an empty parameter list as a reset (\x1b[m IS SGR 0)", () => {
+    expect(inkRuns("\x1b[38;5;9mx\x1b[my")).toEqual([
+      { text: "x", color: "38;5;9" },
+      { text: "y", color: null },
+    ]);
+  });
 });
 
 describe("minimap source invariants (Issue #165)", () => {

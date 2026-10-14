@@ -1148,6 +1148,23 @@ describe("field rule parity (Issue #145)", () => {
       (NAVIGATOR_CONFIG_FIELDS as unknown as NavigatorConfigField[]).pop();
     }
   });
+
+  it("clamps the shipped number field's out-of-range input instead of rejecting it", () => {
+    // viewer.minimapWidth is the first number field that ships, so the clamp
+    // rule is pinned on the real row and not only on a synthetic one.
+    const high = applyFieldEdit(DEFAULT_NAVIGATOR_SETTINGS, "viewer.minimapWidth", "99");
+    expect(high.ok).toBe(true);
+    if (high.ok) expect(high.settings.viewer.minimapWidth).toBe(12);
+    const low = applyFieldEdit(DEFAULT_NAVIGATOR_SETTINGS, "viewer.minimapWidth", "0");
+    expect(low.ok).toBe(true);
+    if (low.ok) expect(low.settings.viewer.minimapWidth).toBe(4);
+    const junk = applyFieldEdit(DEFAULT_NAVIGATOR_SETTINGS, "viewer.minimapWidth", "wide");
+    expect(junk.ok).toBe(false);
+    // A 2FA-grade value is still written when it is in range.
+    const ok = applyFieldEdit(DEFAULT_NAVIGATOR_SETTINGS, "viewer.minimapWidth", "8");
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ok.settings.viewer.minimapWidth).toBe(8);
+  });
 });
 
 // ── NAVIGATOR_CONFIG_FIELDS sync guard (overseer pattern) ──

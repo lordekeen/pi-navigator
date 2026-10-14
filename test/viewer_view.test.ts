@@ -14,6 +14,7 @@ import { makeNavigatorTheme } from "../theme";
 import type { DisplayRow } from "../viewer";
 import { computeRows } from "../viewer";
 import type { ImageVerdict, ViewerFile } from "../types";
+import { buildMinimap } from "../minimap_view";
 import type { MinimapSketch } from "../minimap_view";
 import {
   buildInputBar,
@@ -582,6 +583,49 @@ describe("viewer minimap composition (Issue #165)", () => {
       6,
     );
     expect(withMap[0]).toBe(without[0]);
+  });
+
+  it("bands exactly the map rows beside the visible content (mid-file window, §9)", () => {
+    // The real engine, a real fold: 40 display rows into 6 map rows. Viewed from
+    // row 10, the window [10, 16) intersects blocks 1 (rows 6-12) and 2 (13-19),
+    // so exactly those two map rows carry the band — and the content rows beside
+    // them are display rows 10-15.
+    const BAND = "\x1b[48;5;9m";
+    const banded = makeNavigatorTheme({
+      fg: (_c: string, t: string) => t,
+      bg: (_c: string, t: string) => `${BAND}${t}\x1b[49m`,
+      bold: (t: string) => t,
+      underline: (t: string) => t,
+      inverse: (t: string) => t,
+    } as never);
+    const file = displayFile(40);
+    const texts = file.lines;
+    const sketch = buildMinimap({
+      texts,
+      area: 6,
+      width: 6,
+      encoding: "braille",
+      palette: "mono",
+      diff: false,
+      theme: banded,
+    });
+    expect(sketch).not.toBeNull();
+    const lines = renderViewerPane(
+      paneView({
+        theme: banded,
+        file,
+        content: { kind: "display", rows: computeRows(file, 30, false, 0) },
+        digits: 2,
+        viewScroll: 10,
+        minimap: { sketch: sketch!, width: 6 },
+      }),
+      40,
+      6,
+    );
+    const body = lines.slice(1, 7);
+    // The content beside the map really is the window the band describes.
+    for (let i = 0; i < 6; i += 1) expect(body[i]).toContain(`line ${10 + i}`);
+    expect(body.map((line) => line.includes(BAND))).toEqual([false, true, true, false, false, false]);
   });
 
   it("widens the content back when the map is off", () => {

@@ -1414,15 +1414,29 @@ describe("viewer minimap carve (Issue #165)", () => {
     }
   });
 
-  it("keeps the map stable across a scroll and moves only the band", async () => {
+  it("keeps the map stable while the viewer body really scrolls", async () => {
     const harness = makeHarness(36, false, undefined, longFile());
     await harness.overlay.openRelPath("src/big.ts");
+    // Focus matters: `openRelPath` leaves the cursor on the files pane, where
+    // PgDn scrolls the tree and the map's stability would be vacuous.
+    harness.overlay.handleInput(KEYS.tab); // files -> git
+    harness.overlay.handleInput(KEYS.tab); // git -> viewer
     const before = harness.overlay.render(120);
     harness.overlay.handleInput("\x1b[6~"); // PgDn
     const after = harness.overlay.render(120);
+    // The chrome suite's stripAnsi helper is scoped to its own describe.
+    const plain = (lines: string[]): string =>
+      lines.join("\n").replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
+    const readout = (lines: string[]): string =>
+      (plain(lines).match(/showing [^\n]*/) ?? [""])[0] ?? "";
+    expect(readout(before)).toContain("showing 1");
+    expect(readout(after)).not.toBe(readout(before));
+    // The fold is height-based, so the glyphs are unchanged. (Glyph equality
+    // cannot tell a repaint from a deterministic re-fold, which is why the
+    // fold count itself is pinned in test/navigator.test.ts; the band's
+    // position is pinned in test/viewer_view.test.ts.)
     const mapOf = (lines: string[]): string[] =>
       lines.map((line) => (line.match(/[\u2800-\u28FF]+/g) ?? []).join(""));
-    // Same glyphs (no rebuild changed them); the band's background moved.
     expect(mapOf(after)).toEqual(mapOf(before));
   });
 });

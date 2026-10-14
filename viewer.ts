@@ -140,7 +140,9 @@ export interface InkRun {
  * text's foreground.
  */
 function nextForeground(current: string | null, params: string): string | null {
-  const tokens = params.split(";");
+  // An empty parameter list IS SGR 0 (ECMA-48), so `\x1b[m` resets exactly
+  // like `\x1b[0m` — a real code, not the malformed one it resembles.
+  const tokens = params === "" ? ["0"] : params.split(";");
   let value = current;
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i] ?? "";
@@ -179,7 +181,9 @@ export function inkRuns(styled: string): InkRun[] {
       const seq = esc[0];
       i += seq.length;
       // CSI sequences end in a letter; only "m" (SGR) carries styling.
-      if (seq.startsWith("\x1b[") && seq.endsWith("m") && seq.length > 3) {
+      // `\x1b[m` is the shortest of them (empty parameter list = reset),
+      // so there is no length floor beyond the two introducer bytes.
+      if (seq.startsWith("\x1b[") && seq.endsWith("m")) {
         const next = nextForeground(color, seq.slice(2, -1));
         if (next !== color) {
           flush();

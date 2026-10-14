@@ -1623,15 +1623,24 @@ export class NavigatorOverlay implements Focusable {
     const { contentW, digits } = paneContentWidth(file, useRendered, rightW);
 
     const area = paneArea(body);
+    // Issue #165: the map's row domain is the CONTENT area — the body rows
+    // the text actually occupies — not the pane's outer area. A notice row
+    // (truncated head, commit diff, disk change) shifts every block and must
+    // rebuild the sketch (§4.7), so the content area is computed once here and
+    // used for the fold, the gate and the band alike.
+    const { noticeRows, contentArea } = file
+        ? paneContentArea(area, file, this.diskChanged)
+        : { noticeRows: 0, contentArea: area };
     // Issue #165: decide the map before any body computation, so the row width
     // is settled once and the decision never costs a second render of the same
     // content (the #054 guarantee: markdown renders once per pass).
     //
-    // The test is the file's own line count, which is exact when wrap is off
-    // (`n` IS the line count) and a sound enough signal otherwise: a file whose
+    // The gate is the file's own line count, which is exact when wrap is off
+    // (`n` IS the line count) and a sound-enough signal otherwise: a file whose
     // wrapped or rendered rows exceed the pane almost always has more source
-    // lines than the pane has rows. Small files that only overflow because of
-    // wrapping get no map — recorded in the spec's risks.
+    // lines than the pane has rows. Small files that overflow only because of
+    // wrapping or of markdown expanding get no map — §11 'Risks' records the
+    // trade-off and why the exact test costs a second markdown render.
     let mapW = 0;
     let minimap: { sketch: MinimapSketch; width: number } | null = null;
     if (
@@ -1639,11 +1648,11 @@ export class NavigatorOverlay implements Focusable {
       this.viewMinimap !== "off" &&
       this.viewMinimapOn &&
       contentW - this.viewMinimapWidth >= MINIMAP_MIN_CONTENT_WIDTH &&
-      (file.lines.length > area || (this.viewWrap && !useRendered))
+      (file.lines.length > contentArea || (this.viewWrap && !useRendered))
     ) {
       const texts = this.minimapTexts(file, contentW - this.viewMinimapWidth, useRendered);
-      if (texts.length > area) {
-        const sketch = this.viewerSketch(texts, area, this.viewMinimapWidth, file.kind === "diff");
+      if (texts.length > contentArea) {
+        const sketch = this.viewerSketch(texts, contentArea, this.viewMinimapWidth, file.kind === "diff");
         if (sketch) {
           mapW = this.viewMinimapWidth;
           minimap = { sketch, width: mapW };
@@ -1708,8 +1717,6 @@ export class NavigatorOverlay implements Focusable {
         this.viewerScrollWindow = viewerWin.scrollWindow;
         content = { kind: "image-lines", lines: verdict.lines };
       } else if (!isCard) {
-        const { noticeRows, contentArea } = paneContentArea(area, file, this.diskChanged);
-
         if (useRendered && mdLines) {
           if (this.searchJump && this.searchMatches.length > 0) {
             const currentMatch = this.searchMatches[this.searchIndex];
