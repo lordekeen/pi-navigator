@@ -34,6 +34,13 @@ export interface NavigatorTheme {
   diffRemoved(t: string): string;
   /** Diff context line. */
   diffContext(t: string): string;
+  /**
+   * Re-emit a captured SGR foreground code (Issue #165). The one styling path
+   * that is not a theme-token lookup: `code` came from this theme's own syntax
+   * tokens via `highlightCode`, captured by `inkRuns`, so the minimap can paint
+   * a row in the colour the pane already showed without inventing one.
+   */
+  syntax(code: string, text: string): string;
 }
 
 export function makeNavigatorTheme(theme: Theme): NavigatorTheme {
@@ -67,6 +74,10 @@ export function makeNavigatorTheme(theme: Theme): NavigatorTheme {
     diffAdded: (t) => theme.fg("toolDiffAdded", t),
     diffRemoved: (t) => theme.fg("toolDiffRemoved", t),
     diffContext: (t) => theme.fg("toolDiffContext", t),
+    // Pass-through, not a lookup: the code was captured from this theme's own
+    // syntax tokens, so re-emitting it verbatim IS following the theme. The fg
+    // reset keeps an enclosing background (the map's viewport band) intact.
+    syntax: (code, t) => `\x1b[${code}m${t}\x1b[39m`,
   };
 }
 

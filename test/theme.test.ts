@@ -53,14 +53,31 @@ const TOKEN_MAP: Record<keyof NavigatorTheme, string> = {
   diffAdded: "fg:toolDiffAdded(<x>)",
   diffRemoved: "fg:toolDiffRemoved(<x>)",
   diffContext: "fg:toolDiffContext(<x>)",
+  // The one non-delegating token: a verbatim SGR re-emission (Issue #165).
+  // Asserted by its own case below, since it takes two arguments.
+  syntax: "\x1b[<x>m<y>\x1b[39m",
 };
 
+/** Every delegating token, i.e. all but the two-argument `syntax`. */
+const SINGLE_ARG_TOKENS = Object.entries(TOKEN_MAP).filter(([token]) => token !== "syntax");
+
+/** The delegating tokens' call shape: one text argument. */
+type SingleArgToken = (text: string) => string;
+
 describe("makeNavigatorTheme token mapping", () => {
-  it.each(Object.entries(TOKEN_MAP))(
+  it("re-emits a captured SGR foreground verbatim and resets only the fg", () => {
+    const nav = makeNavigatorTheme(makeFakeTheme() as never);
+    expect(nav.syntax("38;5;240", "ab")).toBe("\x1b[38;5;240mab\x1b[39m");
+    expect(nav.syntax("38;2;1;2;3", "x")).toBe("\x1b[38;2;1;2;3mx\x1b[39m");
+    // The reset is fg-only (39), so an enclosing background survives.
+    expect(nav.syntax("38;5;2", `bg`)).toBe("\x1b[38;5;2mbg\x1b[39m");
+  });
+
+  it.each(SINGLE_ARG_TOKENS)(
     "token %s composes the expected underlying pi theme token(s)",
     (token, expected) => {
       const nav = makeNavigatorTheme(makeFakeTheme() as never);
-      expect(nav[token as keyof NavigatorTheme]("<x>")).toBe(expected);
+      expect((nav[token as keyof NavigatorTheme] as SingleArgToken)("<x>")).toBe(expected);
     },
   );
 
@@ -127,9 +144,11 @@ describe("makeNavigatorTheme composition discipline", () => {
   it("tokens pass content through unchanged, including the empty string", () => {
     const nav = makeNavigatorTheme(makeFakeTheme() as never);
     for (const token of Object.keys(TOKEN_MAP) as (keyof NavigatorTheme)[]) {
-      if (token === "searchMatch" || token === "searchCurrent") continue;
-      expect(nav[token]("")).toBe(TOKEN_MAP[token].replace("<x>", ""));
+      if (token === "searchMatch" || token === "searchCurrent" || token === "syntax") continue;
+      expect((nav[token] as SingleArgToken)("")).toBe(TOKEN_MAP[token].replace("<x>", ""));
     }
+    // The two-argument pass-through: both inputs flow through unchanged.
+    expect(nav.syntax("38;5;240", "")).toBe("\x1b[38;5;240m\x1b[39m");
   });
 });
 

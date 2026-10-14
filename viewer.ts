@@ -120,6 +120,81 @@ export function visibleTextWidth(text: string): number {
 // allocating a suffix copy per character (Issue #083).
 const ANSI_ESCAPE_RE = /\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x1b\x07]*(?:\x1b\\|\x07))/y;
 
+/**
+ * One visible run of styled text with the SGR foreground code active over it
+ * (Issue #165). `color` is the raw parameter string a re-emitter can paste
+ * back into `\x1b[<color>m` ("38;5;240", "38;2;1;2;3"), or null for the
+ * theme's default foreground. The viewer minimap measures ink and colour from
+ * these runs, so the ANSI grammar stays in one module.
+ */
+export interface InkRun {
+  text: string;
+  color: string | null;
+}
+
+/**
+ * Advance the active foreground over one SGR parameter list. Handles the two
+ * colour introducers (38;5;N and 38;2;R;G;B), the two resets (0 and 39), and
+ * leaves the colour untouched for every other code — including 48;* (a
+ * background) and 58;* (the pretty-print underline colour), which are not the
+ * text's foreground.
+ */
+function nextForeground(current: string | null, params: string): string | null {
+  const tokens = params.split(";");
+  let value = current;
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i] ?? "";
+    if (token === "0" || token === "39") {
+      value = null;
+      continue;
+    }
+    if (token !== "38") continue;
+    const kind = tokens[i + 1];
+    if (kind === "5" && tokens[i + 2] !== undefined) {
+      value = `38;5;${tokens[i + 2]}`;
+      i += 2;
+      continue;
+    }
+    if (kind === "2" && tokens[i + 4] !== undefined) {
+      value = `38;2;${tokens[i + 2]};${tokens[i + 3]};${tokens[i + 4]}`;
+      i += 4;
+    }
+  }
+  return value;
+}
+
+export function inkRuns(styled: string): InkRun[] {
+  const runs: InkRun[] = [];
+  let text = "";
+  let color: string | null = null;
+  const flush = (): void => {
+    if (text.length > 0) runs.push({ text, color });
+    text = "";
+  };
+  let i = 0;
+  while (i < styled.length) {
+    ANSI_ESCAPE_RE.lastIndex = i;
+    const esc = ANSI_ESCAPE_RE.exec(styled);
+    if (esc) {
+      const seq = esc[0];
+      i += seq.length;
+      // CSI sequences end in a letter; only "m" (SGR) carries styling.
+      if (seq.startsWith("\x1b[") && seq.endsWith("m") && seq.length > 3) {
+        const next = nextForeground(color, seq.slice(2, -1));
+        if (next !== color) {
+          flush();
+          color = next;
+        }
+      }
+      continue;
+    }
+    text += styled[i] ?? "";
+    i += 1;
+  }
+  flush();
+  return runs;
+}
+
 export function sliceStyled(styled: string, start: number, end: number): string {
   let out = "";
   let column = 0;

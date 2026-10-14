@@ -22,6 +22,7 @@ import {
   extOf,
   formatSize,
   hardTruncate,
+  inkRuns,
   imageDimensions,
   isMarkdownPath,
   loadFile,
@@ -860,5 +861,39 @@ describe("style retention and restyleViewerFile (Issue #136)", () => {
     expect(out.mtimeMs).toBe(42);
     expect(out.styleKey).toBe("key-B");
     expect(out.lines).not.toEqual(["<stale>"]);
+  });
+});
+
+describe("inkRuns (Issue #165)", () => {
+  it("returns one run with no colour for plain text", () => {
+    expect(inkRuns("plain text")).toEqual([{ text: "plain text", color: null }]);
+  });
+
+  it("tags runs with the active indexed foreground and resets on 39", () => {
+    expect(inkRuns("\x1b[38;5;240mfoo\x1b[39mbar")).toEqual([
+      { text: "foo", color: "38;5;240" },
+      { text: "bar", color: null },
+    ]);
+  });
+
+  it("keeps the foreground across bold and resets it on 0", () => {
+    expect(inkRuns("\x1b[1m\x1b[38;2;1;2;3mabc\x1b[0m\x1b[1mde")).toEqual([
+      { text: "abc", color: "38;2;1;2;3" },
+      { text: "de", color: null },
+    ]);
+  });
+
+  it("ignores backgrounds and non-colour codes", () => {
+    // A background change does not touch the foreground, so the run continues.
+    expect(inkRuns("\x1b[48;5;9mx\x1b[49my")).toEqual([{ text: "xy", color: null }]);
+    expect(inkRuns("\x1b[7;4mz")).toEqual([{ text: "z", color: null }]);
+  });
+
+  it("strips non-SGR escapes without treating them as colour", () => {
+    expect(inkRuns("\x1b]8;;http://x\x07link\x1b]8;;\x07")).toEqual([{ text: "link", color: null }]);
+  });
+
+  it("carries a mid-sequence colour set in one SGR list", () => {
+    expect(inkRuns("\x1b[1;38;5;42mab")).toEqual([{ text: "ab", color: "38;5;42" }]);
   });
 });
