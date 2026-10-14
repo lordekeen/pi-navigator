@@ -3491,18 +3491,39 @@ describe("viewer minimap (Issue #165)", () => {
   });
 
   it("folds once per content change — never per scroll or hscroll", async () => {
-    const harness = makeMapHarness();
+    // Three phases, because the two caches protect different paths: with wrap
+    // off the map's texts ARE `file.lines` (identity-stable on their own, so
+    // this phase guards the sketch cache only), while wrap-on and rendered
+    // markdown allocate a fresh row array on every pass — those phases are what
+    // makes `mapTextsCache` load-bearing.
+    const md: ViewerFile = {
+      kind: "text",
+      relPath: "README.md",
+      rawText: "# heading\n\nbody text here\n".repeat(60),
+      lineCount: 200,
+      lines: Array.from({ length: 200 }, (_, i) => `line ${i}`),
+    };
+    const harness = makeMapHarness({ file: md });
     const folds = countFolds();
-    await harness.overlay.openRelPath("src/big.ts");
+    await harness.overlay.openRelPath("README.md");
     focusViewer(harness.overlay);
     harness.overlay.render(120);
-    const before = folds();
-    expect(before).toBeGreaterThan(0);
-    for (const key of ["j", "j", "j", "\x1b[6~", "\x1b[5~", "G", "g", "l", "l", "h", "k"]) {
-      harness.overlay.handleInput(key);
-      harness.overlay.render(120);
-    }
-    expect(folds()).toBe(before);
+    const flatAcrossScrolls = (): void => {
+      const before = folds();
+      expect(before).toBeGreaterThan(0);
+      for (const key of ["j", "j", "j", "\x1b[6~", "\x1b[5~", "G", "g", "l", "l", "h", "k"]) {
+        harness.overlay.handleInput(key);
+        harness.overlay.render(120);
+      }
+      expect(folds()).toBe(before);
+    };
+    flatAcrossScrolls(); // wrap off: texts are file.lines
+    harness.overlay.handleInput("w"); // wrap on: computeRows allocates per pass
+    harness.overlay.render(120);
+    flatAcrossScrolls();
+    harness.overlay.handleInput("m"); // rendered markdown: rows allocate per pass
+    harness.overlay.render(120);
+    flatAcrossScrolls();
   });
 
   it("re-folds when the content changes: wrap, markdown, theme, file and disk (#165 §4.7)", async () => {
