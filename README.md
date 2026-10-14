@@ -147,9 +147,19 @@ Layout: the left column holds the files tree and the git panel (`files-git-viewe
 | Viewer | `w` | Toggle word wrap |
 | Viewer | `m` | Toggle markdown rendered / code view |
 | Viewer | `i` | Toggle image rendering / metadata card (native or chafa) |
+| Viewer | `v` | Toggle the minimap (this session; `viewer.minimap` sets the start) |
 | Viewer | `h` `l` / arrows | Horizontal scroll when wrap is off |
 
 Esc precedence in one line: filter, then search, then close. Search mode adds `↑` `↓` / `Ctrl+n` `Ctrl+p` to cycle matches and `Enter` to apply; the `?` modal lists the full set including these aliases.
+
+### Minimap
+
+A narrow column on the viewer's right edge maps the open file: braille by default (a dot grid where the file has ink, so indentation and line length read as shape), positioned bars if you prefer `viewer.minimap: bars`, or off. The whole file always fits vertically — many file rows fold into one map row — and the viewport band marks what you are looking at now. Diffs colour by status (added, removed, hunk, meta); `viewer.minimapColors: syntax` colours each row by its dominant syntax colour instead.
+
+The map appears only when the file actually scrolls (a short file shows nothing), hides itself when the pane would be left under 36 content columns, and takes its columns from the viewer's text width — so long lines wrap six columns earlier while it is visible. `v` toggles it for the session; `viewer.minimap`, `viewer.minimapColors` and `viewer.minimapWidth` set the start.
+
+<!-- Screenshot placeholder (Issue #165): drop assets/viewer-minimap.png in and
+     replace this comment with the image when the owner captures one. -->
 
 ## Behavior notes
 
