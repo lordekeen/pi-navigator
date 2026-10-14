@@ -470,6 +470,12 @@ async function runNavigator(
         initialShowHidden: loaded.settings.tree.showHidden,
         initialWrap: loaded.settings.viewer.wrap,
         initialRenderMarkdown: loaded.settings.viewer.markdown === "rendered",
+        // Issue #165: the minimap's three settings, read once at open like the
+        // rest of this block — the `v` key then toggles the session state
+        // without ever writing them back.
+        initialMinimap: loaded.settings.viewer.minimap,
+        initialMinimapColors: loaded.settings.viewer.minimapColors,
+        initialMinimapWidth: loaded.settings.viewer.minimapWidth,
         // Issue #119: a layout subcommand opens its own layout for this one
         // session; bare /navigator resolves the layout.default setting (env
         // already applied inside loadNavigatorSettings).

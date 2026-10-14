@@ -212,7 +212,7 @@ describe("single-source derivations (Issue #063 finding 5)", () => {
 
   it("HELP_ROWS is the keybinding table projected to [keys, description], in the original order", () => {
     expect(HELP_ROWS).toEqual(NAVIGATOR_KEYBINDINGS.map((row) => [row.keys, row.description]));
-    expect(HELP_ROWS).toHaveLength(19);
+    expect(HELP_ROWS).toHaveLength(20);
     expect(HELP_ROWS[0]).toEqual(["Tab / Shift+Tab", "cycle pane focus (visible panes)"]);
     expect(HELP_ROWS[HELP_ROWS.length - 1]).toEqual(["q Esc", "close (Esc clears filter or search first)"]);
   });
@@ -232,7 +232,7 @@ describe("one binding table (Issue #148)", () => {
     expect(NAVIGATOR_KEYBINDINGS).toEqual(
       KEY_BINDINGS.filter((row) => row.help).map(({ id, keys, description }) => ({ id, keys, description })),
     );
-    expect(NAVIGATOR_KEYBINDINGS).toHaveLength(19);
+    expect(NAVIGATOR_KEYBINDINGS).toHaveLength(20);
     expect(NAVIGATOR_KEYBINDINGS[0]).toEqual({
       id: "cycle-focus",
       keys: "Tab / Shift+Tab",

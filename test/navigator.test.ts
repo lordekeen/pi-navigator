@@ -3408,6 +3408,7 @@ describe("viewer minimap (Issue #165)", () => {
   it("keeps the map's glyphs unmarked by search (the unmarked-twin rule)", async () => {
     const harness = makeMapHarness();
     await harness.overlay.openRelPath("src/big.ts");
+    focusViewer(harness.overlay);
     const before = harness.overlay.render(120);
     harness.overlay.handleInput("/");
     for (const ch of "compute") harness.overlay.handleInput(ch);
@@ -3417,9 +3418,50 @@ describe("viewer minimap (Issue #165)", () => {
     expect(mapOf(after)).toEqual(mapOf(before));
   });
 
+  /** Focus the viewer through the real key path (files -> git -> viewer). */
+  function focusViewer(overlay: NavigatorOverlay): void {
+    overlay.handleInput("\t");
+    overlay.handleInput("\t");
+  }
+
+  it("toggles the map with v, in both directions", async () => {
+    const harness = makeMapHarness();
+    await harness.overlay.openRelPath("src/big.ts");
+    focusViewer(harness.overlay);
+    expect(harness.overlay.render(120).some((line) => BRAILLE.test(line))).toBe(true);
+    harness.overlay.handleInput("v");
+    expect(harness.overlay.render(120).some((line) => BRAILLE.test(line))).toBe(false);
+    // The content widens back: every row is still exactly the pane width.
+    for (const line of harness.overlay.render(120)) expect(visibleWidth(line)).toBeLessThanOrEqual(120);
+    harness.overlay.handleInput("v");
+    expect(harness.overlay.render(120).some((line) => BRAILLE.test(line))).toBe(true);
+  });
+
+  it("never writes settings from v (the overlay owns no settings writer)", async () => {
+    // The session toggle's contract: only the initial* options carry settings;
+    // `v` is state. The harness asserts no reload and no settings write path —
+    // the overlay has none at all.
+    const harness = makeMapHarness();
+    await harness.overlay.openRelPath("src/big.ts");
+    focusViewer(harness.overlay);
+    harness.overlay.handleInput("v");
+    expect(harness.loads.length).toBe(1); // no reload was triggered either
+  });
+
+  it("ignores v on a rendered image", async () => {
+    const harness = makeMapHarness({
+      file: { kind: "image", relPath: "img.png", sizeBytes: 1024, lines: [] } as ViewerFile,
+    });
+    await harness.overlay.openRelPath("img.png");
+    focusViewer(harness.overlay);
+    harness.overlay.handleInput("v");
+    expect(harness.overlay.render(120).some((line) => BRAILLE.test(line))).toBe(false);
+  });
+
   it("repaints the band without rebuilding the map when the file scrolls", async () => {
     const harness = makeMapHarness();
     await harness.overlay.openRelPath("src/big.ts");
+    focusViewer(harness.overlay);
     const mapOf = (lines: string[]): string[] =>
       lines.map((line) => (line.match(/[\u2800-\u28FF]+/g) ?? []).join(""));
     const before = mapOf(harness.overlay.render(120));

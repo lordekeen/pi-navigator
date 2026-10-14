@@ -1132,6 +1132,16 @@ export class NavigatorOverlay implements Focusable {
       }
       this.viewWrap = !this.viewWrap;
       this.viewHscroll = 0;
+    } else if (data === "v") {
+      // Issue #165: the session toggle, like `w`/`m` — never writes settings.
+      // Inert on a rendered image (its content is not mapped) and while the
+      // map is auto-hidden the toggle still flips, so widening the pane later
+      // shows the map again.
+      if (renderedImage) return;
+      this.viewMinimapOn = !this.viewMinimapOn;
+      this.sketchCache = null;
+      this.touch();
+      return;
     } else if (data === "m") {
       if (canRenderMarkdown(this.viewFile)) {
         this.viewRenderMarkdown = !this.viewRenderMarkdown;
