@@ -26,7 +26,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 import { MINIMAP_MAX_COLUMNS } from "./constants";
 import type { NavigatorTheme } from "./theme";
-import { stripAnsi } from "./viewer";
+import { inkRuns, stripAnsi } from "./viewer";
 
 export type MinimapEncoding = "braille" | "bars";
 export type MinimapPalette = "mono" | "syntax";
@@ -136,34 +136,112 @@ function markInk(
   }
 }
 
-function barRow(first: number, last: number, columns: number, width: number, theme: NavigatorTheme): string {
-  if (first > last) return theme.scrollbarThumb(" ".repeat(width));
+function barArt(first: number, last: number, columns: number, width: number): string {
+  if (first > last) return " ".repeat(width);
   const from = bucketOf(first, columns, width);
   const to = bucketOf(last, columns, width);
-  const art = " ".repeat(from) + BAR.repeat(to - from + 1) + " ".repeat(width - to - 1);
-  return theme.scrollbarThumb(art);
+  return " ".repeat(from) + BAR.repeat(to - from + 1) + " ".repeat(width - to - 1);
 }
 
-function brailleRow(
-  grid: boolean[][],
-  columns: number,
-  width: number,
-  theme: NavigatorTheme,
-): string {
-  const dots = width * 2;
+function brailleArt(grid: boolean[][], width: number): string {
   let art = "";
   for (let glyph = 0; glyph < width; glyph += 1) {
     let bits = 0;
     for (let r = 0; r < 4; r += 1) {
       for (let side = 0; side < 2; side += 1) {
         const dot = glyph * 2 + side;
-        if (dot < dots && grid[r]?.[dot]) bits |= DOTBIT[r]?.[side] ?? 0;
+        if (grid[r]?.[dot]) bits |= DOTBIT[r]?.[side] ?? 0;
       }
     }
     art += bits === 0 ? BLANK_BRAILLE : String.fromCharCode(0x2800 + bits);
   }
-  void columns;
-  return theme.scrollbarThumb(art);
+  return art;
+}
+
+/** Ink characters in one row's plain text. */
+function inkCount(plain: string): number {
+  let count = 0;
+  for (const ch of plain) if (ch !== " ") count += 1;
+  return count;
+}
+
+/**
+ * The block's representative row: the one with the most ink, ties to the
+ * first. Everything a row encodes beyond ink (its colour) is decided from this
+ * single row, so a folded block reads as "what this band mostly is".
+ */
+function representative(block: MinimapBlock, plain: readonly string[]): number {
+  let best = block.start;
+  let bestInk = -1;
+  for (let j = block.start; j < block.end; j += 1) {
+    const ink = inkCount(plain[j] ?? "");
+    if (ink > bestInk) {
+      bestInk = ink;
+      best = j;
+    }
+  }
+  return best;
+}
+
+/** The colour with the most ink characters in one styled row, ties to the first. */
+function dominantColor(styled: string): string | null {
+  const counts = new Map<string, number>();
+  for (const run of inkRuns(styled)) {
+    if (run.color === null) continue;
+    counts.set(run.color, (counts.get(run.color) ?? 0) + inkCount(run.text));
+  }
+  let best: string | null = null;
+  let bestCount = 0;
+  for (const [color, count] of counts) {
+    if (count > bestCount) {
+      best = color;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+/**
+ * The diff-status tone for one row, mirroring `styleDiffLines` (diff.ts): the
+ * file/meta prefixes and the `+++`/`---` markers are muted, a hunk header is
+ * the accent, and the rest follow their +/- prefix. The commit-message head and
+ * the blank separator carry no prefix and therefore read as context — a
+ * deliberate simplification (a six-column map cannot show message structure).
+ */
+function diffTone(plain: string, theme: NavigatorTheme): (text: string) => string {
+  if (plain.startsWith("+++ ") || plain.startsWith("--- ")) return theme.muted;
+  if (plain.startsWith("@@")) return theme.accent;
+  if (plain.startsWith("+")) return theme.diffAdded;
+  if (plain.startsWith("-")) return theme.diffRemoved;
+  if (
+    plain.startsWith("diff ") ||
+    plain.startsWith("index ") ||
+    plain.startsWith("new file") ||
+    plain.startsWith("deleted file") ||
+    plain.startsWith("Binary files")
+  ) {
+    return theme.muted;
+  }
+  return theme.diffContext;
+}
+
+/**
+ * The painter for one block's row: syntax mode uses the representative row's
+ * dominant captured colour (re-emitted verbatim), falling back to the diff
+ * mirror on a diff and then to the plain ink tone.
+ */
+function rowPainter(
+  palette: MinimapPalette,
+  diff: boolean,
+  representativeRow: { plain: string; styled: string },
+  theme: NavigatorTheme,
+): (text: string) => string {
+  if (palette === "syntax") {
+    const color = dominantColor(representativeRow.styled);
+    if (color !== null) return (text) => theme.syntax(color, text);
+  }
+  if (diff) return diffTone(representativeRow.plain, theme);
+  return theme.scrollbarThumb;
 }
 
 /**
@@ -183,6 +261,11 @@ export function buildMinimap(input: MinimapInput): MinimapSketch | null {
   const rows: string[] = [];
 
   for (const block of blocks) {
+    const rep = representative(block, plain);
+    const paint = rowPainter(input.palette, input.diff, {
+      plain: plain[rep] ?? "",
+      styled: texts[rep] ?? "",
+    }, theme);
     if (input.encoding === "braille") {
       const dots = width * 2;
       const grid: boolean[][] = Array.from({ length: 4 }, () => new Array<boolean>(dots).fill(false));
@@ -195,14 +278,14 @@ export function buildMinimap(input: MinimapInput): MinimapSketch | null {
           row[bucket] = true;
         }, { first: Number.MAX_SAFE_INTEGER, last: -1 });
       }
-      rows.push(fitWidth(brailleRow(grid, columns, width, theme), width));
+      rows.push(fitWidth(paint(brailleArt(grid, width)), width));
       continue;
     }
     const range = { first: Number.MAX_SAFE_INTEGER, last: -1 };
     for (let j = block.start; j < block.end; j += 1) {
       markInk(plain[j] ?? "", columns, width, null, range);
     }
-    rows.push(fitWidth(barRow(range.first, range.last, columns, width, theme), width));
+    rows.push(fitWidth(paint(barArt(range.first, range.last, columns, width)), width));
   }
 
   return { blocks, rows };

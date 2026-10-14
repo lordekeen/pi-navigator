@@ -13,12 +13,17 @@ import { stripAnsi } from "../viewer";
 
 const INK = "\x1b[38;5;11m";
 const BAND = "\x1b[48;5;12m";
+const MUTED = "\x1b[38;5;8m";
+const ACCENT = "\x1b[38;5;6m";
+const ADD = "\x1b[38;5;9m";
+const REM = "\x1b[38;5;13m";
+const CTX = "\x1b[38;5;14m";
 
 function makeTheme(): NavigatorTheme {
   const plain = (t: string): string => t;
   return {
-    accent: plain,
-    muted: plain,
+    accent: (t) => `${ACCENT}${t}\x1b[39m`,
+    muted: (t) => `${MUTED}${t}\x1b[39m`,
     dim: plain,
     success: plain,
     warning: plain,
@@ -31,9 +36,9 @@ function makeTheme(): NavigatorTheme {
     frame: plain,
     scrollbarTrack: plain,
     scrollbarThumb: (t) => `${INK}${t}\x1b[39m`,
-    diffAdded: (t) => `\x1b[38;5;9m${t}\x1b[39m`,
-    diffRemoved: (t) => `\x1b[38;5;13m${t}\x1b[39m`,
-    diffContext: (t) => `\x1b[38;5;14m${t}\x1b[39m`,
+    diffAdded: (t) => `${ADD}${t}\x1b[39m`,
+    diffRemoved: (t) => `${REM}${t}\x1b[39m`,
+    diffContext: (t) => `${CTX}${t}\x1b[39m`,
     syntax: (code, t) => `\x1b[${code}m${t}\x1b[39m`,
   };
 }
@@ -167,5 +172,62 @@ describe("mono ink tone", () => {
   it("paints ink in the scrollbar thumb tone", () => {
     const sketch = buildMinimap(input({ texts: ["x", " "], area: 1, width: 3, encoding: "bars" }))!;
     expect(sketch.rows[0]!.startsWith(INK)).toBe(true);
+  });
+});
+
+describe("diff mirror (mono)", () => {
+  const cases: Array<[string, string]> = [
+    ["+++ b/x", MUTED],
+    ["--- a/x", MUTED],
+    ["diff --git a/x b/x", MUTED],
+    ["index 123..456 100644", MUTED],
+    ["new file mode 100644", MUTED],
+    ["deleted file mode 100644", MUTED],
+    ["Binary files a/x and b/x differ", MUTED],
+    ["@@ -1 +1 @@", ACCENT],
+    ["+added line", ADD],
+    ["-removed line", REM],
+    [" context line", CTX],
+    ["commit subject with no prefix", CTX],
+  ];
+
+  it.each(cases)("paints %j with its diff tone", (line, tone) => {
+    const sketch = buildMinimap(
+      input({ texts: [line, " "], area: 1, width: 2, encoding: "bars", diff: true }),
+    )!;
+    expect(sketch.rows[0]!.startsWith(tone)).toBe(true);
+  });
+});
+
+describe("syntax palette", () => {
+  it("votes the dominant colour by character count", () => {
+    const styled = "\x1b[38;5;1maa\x1b[39m\x1b[38;5;2mbcd\x1b[39m";
+    const sketch = buildMinimap(
+      input({ texts: [styled, " "], area: 1, width: 2, encoding: "bars", palette: "syntax" }),
+    )!;
+    expect(sketch.rows[0]!.startsWith("\x1b[38;5;2m")).toBe(true);
+  });
+
+  it("takes the block's max-ink row as the representative", () => {
+    const long = `\x1b[38;5;3m${"y".repeat(40)}\x1b[39m`;
+    const short = "\x1b[38;5;4mzz\x1b[39m";
+    const sketch = buildMinimap(
+      input({ texts: [short, long], area: 1, width: 2, encoding: "bars", palette: "syntax" }),
+    )!;
+    expect(sketch.rows[0]!.startsWith("\x1b[38;5;3m")).toBe(true);
+  });
+
+  it("falls back to the ink tone when the row has no colour", () => {
+    const sketch = buildMinimap(
+      input({ texts: ["plain", " "], area: 1, width: 2, encoding: "bars", palette: "syntax" }),
+    )!;
+    expect(sketch.rows[0]!.startsWith(INK)).toBe(true);
+  });
+
+  it("falls back to the diff mirror for an uncoloured diff row", () => {
+    const sketch = buildMinimap(
+      input({ texts: ["+x", " "], area: 1, width: 2, encoding: "bars", palette: "syntax", diff: true }),
+    )!;
+    expect(sketch.rows[0]!.startsWith(ADD)).toBe(true);
   });
 });
