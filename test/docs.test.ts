@@ -17,6 +17,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { NAVIGATOR_CONFIG_FIELDS } from "../settings";
+
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const readme = readFileSync(join(repoRoot, "README.md"), "utf8");
 const agents = readFileSync(join(repoRoot, "AGENTS.md"), "utf8");
@@ -60,6 +62,16 @@ describe("documentation guards (Issue #115)", () => {
     // npm will not find.
     for (const entry of pkg.files) {
       expect(existsSync(join(repoRoot, entry)), `package.json "files" entry "${entry}" does not exist on disk`).toBe(true);
+    }
+  });
+
+  it("documents every settings field id in both living docs (Issue #164)", () => {
+    // A setting that ships without a line in either doc cannot be discovered
+    // or changed by reading them (the `tree.respectGitignore` drift of #158).
+    for (const field of NAVIGATOR_CONFIG_FIELDS) {
+      expect(agents, `${field.id} is missing from AGENTS.md`).toContain(field.id);
+      // README's settings table must carry the field as its own row.
+      expect(readme, `${field.id} is missing from README.md`).toContain(`| \`${field.id}\` |`);
     }
   });
 
