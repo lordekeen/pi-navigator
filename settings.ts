@@ -42,6 +42,9 @@ export interface NavigatorIconSettings {
 export interface NavigatorViewerSettings {
   readonly wrap: boolean;
   readonly markdown: "code" | "rendered";
+  readonly minimap: NavigatorMinimapEncoding;
+  readonly minimapColors: NavigatorMinimapPalette;
+  readonly minimapWidth: number;
 }
 
 export interface NavigatorTreeSettings {
@@ -65,6 +68,15 @@ export interface NavigatorSettings {
 const SETTINGS_VERSION = 1;
 const IMAGE_MODES = ["off", "chafa", "native", "auto"] as const;
 const VIEWER_MODES = ["code", "rendered"] as const;
+/**
+ * Minimap value sets (Issue #165), declared here rather than imported from
+ * `minimap_view.ts`: the settings terrain stays engine-free, and the overlay
+ * narrows `"off"` away at the one call site that builds a map.
+ */
+export type NavigatorMinimapEncoding = "off" | "braille" | "bars";
+export type NavigatorMinimapPalette = "mono" | "syntax";
+const MINIMAP_MODES = ["off", "braille", "bars"] as const;
+const MINIMAP_PALETTES = ["mono", "syntax"] as const;
 
 export interface NavigatorConfigField {
   readonly id: string;
@@ -161,6 +173,43 @@ export const NAVIGATOR_CONFIG_FIELDS: readonly NavigatorConfigField[] = [
     description: "Open Markdown files as rendered text or plain code; the `m` key still toggles it per session.",
     options: [...VIEWER_MODES],
     default: "code",
+    live: false,
+  },
+  {
+    id: "viewer.minimap",
+    path: ["viewer", "minimap"],
+    kind: "enum",
+    section: "Viewer",
+    label: "Viewer minimap",
+    description:
+      "Show a minimap column in the viewer: `braille` dots, positioned `bars`, or `off`; the `v` key toggles it per session.",
+    options: [...MINIMAP_MODES],
+    default: "braille",
+    live: false,
+  },
+  {
+    id: "viewer.minimapColors",
+    path: ["viewer", "minimapColors"],
+    kind: "enum",
+    section: "Viewer",
+    label: "Minimap palette",
+    description:
+      "Minimap palette: `mono` (scrollbar tone, diff-status colours) or `syntax` (each row takes its dominant syntax colour).",
+    options: [...MINIMAP_PALETTES],
+    default: "mono",
+    live: false,
+  },
+  {
+    id: "viewer.minimapWidth",
+    path: ["viewer", "minimapWidth"],
+    kind: "number",
+    section: "Viewer",
+    label: "Minimap width",
+    description:
+      "Minimap width in columns (4-12); the map hides itself when the remaining content width would drop under 36.",
+    min: 4,
+    max: 12,
+    default: 6,
     live: false,
   },
   {

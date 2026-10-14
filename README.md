@@ -42,6 +42,9 @@ Settings live in `~/.pi/agent/pi-navigator.json`. All fields are optional; missi
 | `icons.enabled` | `false` | `true`, `false` | Show a Nerd Font filetype icon column in the file tree (requires a Nerd Font terminal) |
 | `viewer.wrap` | `false` | `true`, `false` | Start files with word wrap enabled; the `w` key still toggles it per session |
 | `viewer.markdown` | `code` | `code`, `rendered` | Open Markdown files as rendered text or plain code; the `m` key still toggles it per session |
+| `viewer.minimap` | `braille` | `off`, `braille`, `bars` | Show a minimap column in the viewer: `braille` dots, positioned `bars`, or `off`; the `v` key toggles it per session |
+| `viewer.minimapColors` | `mono` | `mono`, `syntax` | Minimap palette: `mono` (scrollbar tone, diff-status colours) or `syntax` (each row takes its dominant syntax colour) |
+| `viewer.minimapWidth` | `6` | 4–12 | Minimap width in columns (4–12); the map hides itself when the remaining content width would drop under 36 |
 | `tree.showHidden` | `false` | `true`, `false` | Start with hidden files visible; the `.` key still toggles it per session |
 | `tree.respectGitignore` | `true` | `true`, `false` | Hide untracked files and directories ignored by Git in the tree (git's full ignore stack; requires a git repository). Tracked files always show; without git the filesystem walk keeps its static ignore list, so the setting is a no-op there |
 | `layout.default` | `files-git-viewer` | `files-git-viewer`, `files-viewer`, `git-viewer` | Layout opened by bare `/navigator`; `/navigator all`, `/navigator files`, and `/navigator git` always open their own layout for one session |

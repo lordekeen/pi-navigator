@@ -1008,7 +1008,7 @@ describe("settings menu integration via runSettings (Issues #121, #133)", () => 
       version: 1,
       images: { mode: "chafa" },
       icons: { enabled: true },
-      viewer: { wrap: true, markdown: "rendered" },
+      viewer: { wrap: true, markdown: "rendered", minimap: "bars", minimapColors: "syntax", minimapWidth: 8 },
       tree: { showHidden: true, respectGitignore: true },
       layout: { default: "git-viewer" },
     };
@@ -1045,7 +1045,7 @@ describe("settings menu integration via runSettings (Issues #121, #133)", () => 
       version: 1,
       images: { mode: "off" },
       icons: { enabled: false },
-      viewer: { wrap: false, markdown: "code" },
+      viewer: { wrap: false, markdown: "code", minimap: "braille", minimapColors: "mono", minimapWidth: 6 },
       tree: { showHidden: false, respectGitignore: true },
       layout: { default: "files-git-viewer" },
     };

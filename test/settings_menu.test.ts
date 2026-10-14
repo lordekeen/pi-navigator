@@ -19,6 +19,7 @@ import {
   countChangedFields,
   navigatorFieldNotes,
   openSettingsMenu,
+  type SettingItemData,
   type SettingsMenuDeps,
   type SettingsMenuOutcome,
   type SettingsMenuTheme,
@@ -37,7 +38,7 @@ function fullSettings(): NavigatorSettings {
     version: 1,
     images: { mode: "off" },
     icons: { enabled: false },
-    viewer: { wrap: false, markdown: "code" },
+    viewer: { wrap: false, markdown: "code", minimap: "braille", minimapColors: "mono", minimapWidth: 6 },
     tree: { showHidden: false, respectGitignore: true },
     layout: { default: "files-git-viewer" },
   };
@@ -48,10 +49,17 @@ function markedUpSettings(): NavigatorSettings {
     version: 1,
     images: { mode: "chafa" },
     icons: { enabled: true },
-    viewer: { wrap: true, markdown: "rendered" },
+    viewer: { wrap: true, markdown: "rendered", minimap: "bars", minimapColors: "syntax", minimapWidth: 8 },
     tree: { showHidden: true, respectGitignore: false },
     layout: { default: "git-viewer" },
   };
+}
+
+/** Positional indexing is a drift trap: look rows up by id. */
+function itemById(items: readonly SettingItemData[], id: string): SettingItemData {
+  const item = items.find((candidate) => candidate.id === id);
+  if (item === undefined) throw new Error(`no settings row "${id}"`);
+  return item;
 }
 
 type CommitResult = { ok: true; settings: NavigatorSettings } | { ok: false; error: string };
@@ -117,19 +125,34 @@ describe("buildSettingItems", () => {
       "icons.enabled",
       "viewer.wrap",
       "viewer.markdown",
+      "viewer.minimap",
+      "viewer.minimapColors",
+      "viewer.minimapWidth",
       "tree.showHidden",
       "tree.respectGitignore",
       "layout.default",
     ]);
-    expect(items[0]).toMatchObject({ label: "Image rendering", currentValue: "off", values: ["off", "chafa", "native", "auto"] });
-    expect(items[1]).toMatchObject({ label: "Nerd Font icons", currentValue: "off", values: ["on", "off"] });
-    expect(items[2]).toMatchObject({ label: "Word wrap", currentValue: "off", values: ["on", "off"] });
-    expect(items[3]).toMatchObject({ label: "Markdown view", currentValue: "code", values: ["code", "rendered"] });
-    expect(items[4]).toMatchObject({ label: "Hidden files", currentValue: "off", values: ["on", "off"] });
+    expect(itemById(items, "images.mode")).toMatchObject({ label: "Image rendering", currentValue: "off", values: ["off", "chafa", "native", "auto"] });
+    expect(itemById(items, "icons.enabled")).toMatchObject({ label: "Nerd Font icons", currentValue: "off", values: ["on", "off"] });
+    expect(itemById(items, "viewer.wrap")).toMatchObject({ label: "Word wrap", currentValue: "off", values: ["on", "off"] });
+    expect(itemById(items, "viewer.markdown")).toMatchObject({ label: "Markdown view", currentValue: "code", values: ["code", "rendered"] });
+    // Issue #165: the minimap rows sit in the Viewer section, default on.
+    expect(itemById(items, "viewer.minimap")).toMatchObject({
+      label: "Viewer minimap",
+      currentValue: "braille",
+      values: ["off", "braille", "bars"],
+    });
+    expect(itemById(items, "viewer.minimapColors")).toMatchObject({
+      label: "Minimap palette",
+      currentValue: "mono",
+      values: ["mono", "syntax"],
+    });
+    expect(itemById(items, "viewer.minimapWidth")).toMatchObject({ label: "Minimap width", currentValue: "6" });
+    expect(itemById(items, "tree.showHidden")).toMatchObject({ label: "Hidden files", currentValue: "off", values: ["on", "off"] });
     // Issue #158: the gitignore toggle sits in the Tree section, default on.
-    expect(items[5]).toMatchObject({ label: "Respect .gitignore", currentValue: "on", values: ["on", "off"] });
+    expect(itemById(items, "tree.respectGitignore")).toMatchObject({ label: "Respect .gitignore", currentValue: "on", values: ["on", "off"] });
     // Issue #119: the Layout section row exposes the three layouts.
-    expect(items[6]).toMatchObject({
+    expect(itemById(items, "layout.default")).toMatchObject({
       label: "Default layout",
       currentValue: "files-git-viewer",
       values: ["files-git-viewer", "files-viewer", "git-viewer"],
@@ -138,13 +161,16 @@ describe("buildSettingItems", () => {
 
   it("reads current values from the settings object for booleans and enums", () => {
     const items = buildSettingItems(markedUpSettings(), {});
-    expect(items[0]?.currentValue).toBe("chafa");
-    expect(items[1]?.currentValue).toBe("on");
-    expect(items[2]?.currentValue).toBe("on");
-    expect(items[3]?.currentValue).toBe("rendered");
-    expect(items[4]?.currentValue).toBe("on");
-    expect(items[5]?.currentValue).toBe("off");
-    expect(items[6]?.currentValue).toBe("git-viewer");
+    expect(itemById(items, "images.mode").currentValue).toBe("chafa");
+    expect(itemById(items, "icons.enabled").currentValue).toBe("on");
+    expect(itemById(items, "viewer.wrap").currentValue).toBe("on");
+    expect(itemById(items, "viewer.markdown").currentValue).toBe("rendered");
+    expect(itemById(items, "viewer.minimap").currentValue).toBe("bars");
+    expect(itemById(items, "viewer.minimapColors").currentValue).toBe("syntax");
+    expect(itemById(items, "viewer.minimapWidth").currentValue).toBe("8");
+    expect(itemById(items, "tree.showHidden").currentValue).toBe("on");
+    expect(itemById(items, "tree.respectGitignore").currentValue).toBe("off");
+    expect(itemById(items, "layout.default").currentValue).toBe("git-viewer");
   });
 
   it("annotates env-shadowed rows with the env var name", () => {
@@ -153,13 +179,13 @@ describe("buildSettingItems", () => {
       "icons.enabled": "PI_NAV_ICONS",
       "layout.default": "PI_NAV_LAYOUT",
     });
-    expect(items[0]?.description).toContain("\u2014 overridden by PI_NAV_IMAGES (env wins)");
-    expect(items[1]?.description).toContain("\u2014 overridden by PI_NAV_ICONS (env wins)");
+    expect(itemById(items, "images.mode").description).toContain("\u2014 overridden by PI_NAV_IMAGES (env wins)");
+    expect(itemById(items, "icons.enabled").description).toContain("\u2014 overridden by PI_NAV_ICONS (env wins)");
     // Issue #119: the layout row annotates the same way.
-    expect(items[6]?.description).toContain("\u2014 overridden by PI_NAV_LAYOUT (env wins)");
-    expect(items[0]?.description.startsWith("Render images as native terminal graphics")).toBe(true);
-    expect(items[2]?.description).not.toContain("overridden");
-    expect(items[4]?.description).not.toContain("overridden");
+    expect(itemById(items, "layout.default").description).toContain("\u2014 overridden by PI_NAV_LAYOUT (env wins)");
+    expect(itemById(items, "images.mode").description.startsWith("Render images as native terminal graphics")).toBe(true);
+    expect(itemById(items, "viewer.wrap").description).not.toContain("overridden");
+    expect(itemById(items, "tree.showHidden").description).not.toContain("overridden");
   });
 
   it("keeps descriptions annotation-free when nothing is shadowed", () => {
@@ -185,11 +211,13 @@ describe("buildSettingItems", () => {
   it("safely handles partial or empty settings without throwing TypeError", () => {
     expect(() => buildSettingItems({} as any, {})).not.toThrow();
     const items = buildSettingItems({} as any, {});
-    expect(items).toHaveLength(7);
-    expect(items[0]?.currentValue).toBe("off");
-    expect(items[1]?.currentValue).toBe("off");
+    expect(items).toHaveLength(10);
+    expect(itemById(items, "images.mode").currentValue).toBe("off");
+    expect(itemById(items, "icons.enabled").currentValue).toBe("off");
+    expect(itemById(items, "viewer.minimap").currentValue).toBe("braille");
+    expect(itemById(items, "viewer.minimapWidth").currentValue).toBe("6");
     // A missing layout section falls back to the registry default.
-    expect(items[6]?.currentValue).toBe("files-git-viewer");
+    expect(itemById(items, "layout.default").currentValue).toBe("files-git-viewer");
   });
 
   it("supports numeric fields with submenu and text input", () => {
@@ -397,8 +425,8 @@ describe("settings menu integration (real SettingsList)", () => {
       const onWarning = vi.fn();
       const { component, closed, outcome } = await openMenu({ settings: fullSettings(), overrides: {}, commit, onWarning });
 
-      // Rows: 7 registry fields + the pushed number field (no synthetic row, #159).
-      for (let i = 0; i < 7; i++) component.handleInput?.(KEYS.down); // to the number row
+      // Rows: the registry fields plus the pushed number field (no synthetic row, #159).
+      for (let i = 0; i < NAVIGATOR_CONFIG_FIELDS.length - 1; i++) component.handleInput?.(KEYS.down); // to the number row
       component.handleInput?.(KEYS.enter); // open the number input submenu
       for (const ch of "abc") component.handleInput?.(ch);
       component.handleInput?.(KEYS.enter); // submit the invalid value
@@ -576,7 +604,7 @@ describe("settings menu integration (real SettingsList)", () => {
 
 describe("countChangedFields (Issue #121 draft accounting)", () => {
   it("counts exactly the registry fields whose values differ", () => {
-    expect(countChangedFields(fullSettings(), markedUpSettings())).toBe(7);
+    expect(countChangedFields(fullSettings(), markedUpSettings())).toBe(10);
     expect(countChangedFields(fullSettings(), fullSettings())).toBe(0);
   });
 

@@ -27,7 +27,12 @@ import {
   writeNavigatorSettings,
 } from "../settings";
 
-import type { NavigatorConfigField, NavigatorImageMode } from "../settings";
+import type {
+  NavigatorConfigField,
+  NavigatorImageMode,
+  NavigatorMinimapEncoding,
+  NavigatorMinimapPalette,
+} from "../settings";
 import { ICONS_ENV } from "../icons";
 import {
   NAVIGATOR_IMAGES_ENV,
@@ -48,11 +53,17 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-/** A complete settings object with the canonical shape (all five sections). */
+/** A complete settings object with the canonical shape (all six sections). */
 function fullSettings(overrides: Partial<{
   images: { mode: NavigatorImageMode };
   icons: { enabled: boolean };
-  viewer: { wrap: boolean; markdown: "code" | "rendered" };
+  viewer: Partial<{
+    wrap: boolean;
+    markdown: "code" | "rendered";
+    minimap: NavigatorMinimapEncoding;
+    minimapColors: NavigatorMinimapPalette;
+    minimapWidth: number;
+  }>;
   tree: { showHidden: boolean; respectGitignore: boolean };
   layout: { default: (typeof NAVIGATOR_LAYOUTS)[number] };
 }> = {}): ReturnType<typeof cloneDefaultsLike> {
@@ -60,7 +71,14 @@ function fullSettings(overrides: Partial<{
     version: 1,
     images: overrides.images ?? { mode: "off" },
     icons: overrides.icons ?? { enabled: false },
-    viewer: overrides.viewer ?? { wrap: false, markdown: "code" },
+    viewer: {
+      wrap: false,
+      markdown: "code",
+      minimap: "braille",
+      minimapColors: "mono",
+      minimapWidth: 6,
+      ...overrides.viewer,
+    },
     tree: overrides.tree ?? { showHidden: false, respectGitignore: true },
     layout: overrides.layout ?? { default: "files-git-viewer" },
   };
@@ -70,7 +88,13 @@ function cloneDefaultsLike(): {
   version: 1;
   images: { mode: NavigatorImageMode };
   icons: { enabled: boolean };
-  viewer: { wrap: boolean; markdown: "code" | "rendered" };
+  viewer: {
+    wrap: boolean;
+    markdown: "code" | "rendered";
+    minimap: NavigatorMinimapEncoding;
+    minimapColors: NavigatorMinimapPalette;
+    minimapWidth: number;
+  };
   tree: { showHidden: boolean; respectGitignore: boolean };
   layout: { default: (typeof NAVIGATOR_LAYOUTS)[number] };
 } {
@@ -78,7 +102,7 @@ function cloneDefaultsLike(): {
     version: 1,
     images: { mode: "off" },
     icons: { enabled: false },
-    viewer: { wrap: false, markdown: "code" },
+    viewer: { wrap: false, markdown: "code", minimap: "braille", minimapColors: "mono", minimapWidth: 6 },
     tree: { showHidden: false, respectGitignore: true },
     layout: { default: "files-git-viewer" },
   };
@@ -209,12 +233,12 @@ describe("normalizeNavigatorSettings", () => {
     expect(result.warnings).toEqual([]);
   });
 
-  it("expanded defaults cover all five sections", () => {
+  it("expanded defaults cover all six sections", () => {
     expect(DEFAULT_NAVIGATOR_SETTINGS).toEqual({
       version: 1,
       images: { mode: "off" },
       icons: { enabled: false },
-      viewer: { wrap: false, markdown: "code" },
+      viewer: { wrap: false, markdown: "code", minimap: "braille", minimapColors: "mono", minimapWidth: 6 },
       tree: { showHidden: false, respectGitignore: true },
       layout: { default: "files-git-viewer" },
     });
@@ -314,7 +338,7 @@ describe("normalizeNavigatorSettings", () => {
       version: 1,
       images: { mode: "off" },
       icons: { enabled: true },
-      viewer: { wrap: true, markdown: "rendered" },
+      viewer: { wrap: true, markdown: "rendered", minimap: "braille", minimapColors: "mono", minimapWidth: 6 },
       tree: { showHidden: true, respectGitignore: true },
       layout: { default: "git-viewer" },
     });
@@ -451,19 +475,19 @@ describe("normalizeNavigatorSettings", () => {
 // ── serializeNavigatorSettings (§5.2) ──
 
 describe("serializeNavigatorSettings", () => {
-  it("emits the canonical nested shape with all five sections", () => {
+  it("emits the canonical nested shape with all six sections", () => {
     expect(serializeNavigatorSettings(DEFAULT_NAVIGATOR_SETTINGS)).toEqual({
       version: 1,
       images: { mode: "off" },
       icons: { enabled: false },
-      viewer: { wrap: false, markdown: "code" },
+      viewer: { wrap: false, markdown: "code", minimap: "braille", minimapColors: "mono", minimapWidth: 6 },
       tree: { showHidden: false, respectGitignore: true },
       layout: { default: "files-git-viewer" },
     });
     // Key order is part of the persistence contract: the writer (and thus
     // versions of the file on disk) stays byte-identical across formats.
     expect(JSON.stringify(serializeNavigatorSettings(DEFAULT_NAVIGATOR_SETTINGS))).toBe(
-      '{"version":1,"images":{"mode":"off"},"icons":{"enabled":false},"viewer":{"wrap":false,"markdown":"code"},"tree":{"showHidden":false,"respectGitignore":true},"layout":{"default":"files-git-viewer"}}',
+      '{"version":1,"images":{"mode":"off"},"icons":{"enabled":false},"viewer":{"wrap":false,"markdown":"code","minimap":"braille","minimapColors":"mono","minimapWidth":6},"tree":{"showHidden":false,"respectGitignore":true},"layout":{"default":"files-git-viewer"}}',
     );
     expect(
       serializeNavigatorSettings(
@@ -479,7 +503,7 @@ describe("serializeNavigatorSettings", () => {
       version: 1,
       images: { mode: "chafa" },
       icons: { enabled: true },
-      viewer: { wrap: true, markdown: "rendered" },
+      viewer: { wrap: true, markdown: "rendered", minimap: "braille", minimapColors: "mono", minimapWidth: 6 },
       tree: { showHidden: true, respectGitignore: false },
       layout: { default: "git-viewer" },
     });
@@ -902,7 +926,7 @@ describe("writeNavigatorSettings", () => {
       version: 1,
       images: { mode: "chafa" },
       icons: { enabled: true },
-      viewer: { wrap: false, markdown: "code" },
+      viewer: { wrap: false, markdown: "code", minimap: "braille", minimapColors: "mono", minimapWidth: 6 },
       tree: { showHidden: false, respectGitignore: true },
       layout: { default: "git-viewer" },
     });
@@ -928,7 +952,7 @@ describe("writeNavigatorSettings", () => {
       version: 1,
       images: { mode: "chafa" },
       icons: { enabled: false },
-      viewer: { wrap: false, markdown: "code" },
+      viewer: { wrap: false, markdown: "code", minimap: "braille", minimapColors: "mono", minimapWidth: 6 },
       tree: { showHidden: false, respectGitignore: true },
       layout: { default: "files-viewer" },
     });
@@ -1129,8 +1153,8 @@ describe("field rule parity (Issue #145)", () => {
 // ── NAVIGATOR_CONFIG_FIELDS sync guard (overseer pattern) ──
 
 describe("NAVIGATOR_CONFIG_FIELDS", () => {
-  it("has exactly seven entries matching the spec table", () => {
-    expect(NAVIGATOR_CONFIG_FIELDS).toHaveLength(7);
+  it("has exactly ten entries matching the spec table", () => {
+    expect(NAVIGATOR_CONFIG_FIELDS).toHaveLength(10);
     expect(fieldById("images.mode")).toMatchObject({
       id: "images.mode",
       path: ["images", "mode"],
@@ -1163,6 +1187,37 @@ describe("NAVIGATOR_CONFIG_FIELDS", () => {
       section: "Viewer",
       label: "Markdown view",
       options: ["code", "rendered"],
+      live: false,
+    });
+    expect(fieldById("viewer.minimap")).toMatchObject({
+      id: "viewer.minimap",
+      path: ["viewer", "minimap"],
+      kind: "enum",
+      section: "Viewer",
+      label: "Viewer minimap",
+      options: ["off", "braille", "bars"],
+      default: "braille",
+      live: false,
+    });
+    expect(fieldById("viewer.minimapColors")).toMatchObject({
+      id: "viewer.minimapColors",
+      path: ["viewer", "minimapColors"],
+      kind: "enum",
+      section: "Viewer",
+      label: "Minimap palette",
+      options: ["mono", "syntax"],
+      default: "mono",
+      live: false,
+    });
+    expect(fieldById("viewer.minimapWidth")).toMatchObject({
+      id: "viewer.minimapWidth",
+      path: ["viewer", "minimapWidth"],
+      kind: "number",
+      section: "Viewer",
+      label: "Minimap width",
+      min: 4,
+      max: 12,
+      default: 6,
       live: false,
     });
     expect(fieldById("tree.showHidden")).toMatchObject({
@@ -1238,7 +1293,15 @@ describe("NAVIGATOR_CONFIG_FIELDS", () => {
       parse: expect.any(Function),
     });
     // File-only rows carry no startup layer at all.
-    for (const id of ["viewer.wrap", "viewer.markdown", "tree.showHidden", "tree.respectGitignore"]) {
+    for (const id of [
+      "viewer.wrap",
+      "viewer.markdown",
+      "viewer.minimap",
+      "viewer.minimapColors",
+      "viewer.minimapWidth",
+      "tree.showHidden",
+      "tree.respectGitignore",
+    ]) {
       expect(fieldById(id).override, id).toBeUndefined();
     }
   });
@@ -1287,7 +1350,13 @@ describe("NAVIGATOR_CONFIG_FIELDS", () => {
 
   it("applyFieldEdit round-trips every registry field through the normalizer", () => {
     for (const field of NAVIGATOR_CONFIG_FIELDS) {
-      const edited = applyFieldEdit(DEFAULT_NAVIGATOR_SETTINGS, field.id, field.kind === "boolean" ? "on" : field.options?.[0] ?? "");
+      const raw =
+        field.kind === "boolean"
+          ? "on"
+          : field.kind === "number"
+            ? String(field.min ?? 1)
+            : field.options?.[0] ?? "";
+      const edited = applyFieldEdit(DEFAULT_NAVIGATOR_SETTINGS, field.id, raw);
       expect(edited.ok, field.id).toBe(true);
       if (edited.ok) {
         const reloaded = normalizeNavigatorSettings(serializeNavigatorSettings(edited.settings));
