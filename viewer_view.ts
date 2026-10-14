@@ -15,6 +15,7 @@ import { isNativelyRenderable, type ImageSupport } from "./images";
 import type { NavigatorTheme } from "./theme";
 import type { Focus, SearchMatch, ViewerFile, ViewerScrollWindow } from "./types";
 import { formatSize, hardTruncate, isMarkdownPath, sliceStyled, type DisplayRow } from "./viewer";
+import { renderMinimap, type MinimapSketch } from "./minimap_view";
 import { FRAME_CORNERS, isImageLine, joinLeftRight, padTo, shortPath, truncateAndWidth } from "./frame";
 import { MODE_HINTS, plainHint } from "./help";
 
@@ -176,6 +177,10 @@ export interface ViewerPaneView {
   imageSupport: ImageSupport;
   /** Current pane geometry for chafa (null when never laid out). */
   imageGeometry: { cols: number; rows: number } | null;
+  /** Viewer minimap (Issue #165): the cached sketch and the columns it owns,
+   *  or null when the map is off, the setting is `off`, nothing scrolls, or
+   *  the pane is too narrow. Text-like branches only. */
+  minimap: { sketch: MinimapSketch; width: number } | null;
   /** Search query for the search bar counter. */
   searchQuery: string;
   /** Active search matches for the bar counter. */
@@ -255,23 +260,35 @@ export function renderViewerPane(view: ViewerPaneView, width: number, area: numb
   }
 
   const body = view.content;
+  // Issue #165: the minimap owns the pane's rightmost columns on the body
+  // rows; the content is composed at `bodyWidth` and the map's row appended,
+  // so the column is continuous. The header and the notice rows keep the
+  // pane's full width (D7).
+  const mapWidth = view.minimap?.width ?? 0;
+  const bodyWidth = Math.max(0, width - mapWidth);
+  const mapRows = view.minimap
+    ? renderMinimap(view.minimap.sketch, view.viewScroll, contentArea, T)
+    : null;
+  const withMap = (row: string, i: number): string =>
+    mapRows ? padTo(row, bodyWidth) + (mapRows[i] ?? " ".repeat(mapWidth)) : padTo(row, width);
+
   if (body.kind === "markdown") {
     for (let i = 0; i < contentArea; i++) {
       const row = body.rows[i];
-      rows.push(row === null ? padTo("", width) : padTo(" " + row, width));
+      rows.push(withMap(row === null ? "" : " " + row, i));
     }
   } else if (body.kind === "display") {
-    const { contentW } = paneContentWidth(file, false, width);
+    const { contentW } = paneContentWidth(file, false, bodyWidth);
     for (let i = 0; i < contentArea; i++) {
       const row = body.rows[view.viewScroll + i];
       if (!row) {
-        rows.push(padTo("", width));
+        rows.push(withMap("", i));
         continue;
       }
       const gutter = row.line === null ? " ".repeat(view.digits) + " " : String(row.line + 1).padStart(view.digits) + " ";
       const text = view.wrap ? row.text : sliceStyled(row.text, view.hscroll, view.hscroll + contentW);
       const line = " " + T.dim(gutter) + T.frame("\u2502") + " " + text;
-      rows.push(padTo(line, width));
+      rows.push(withMap(line, i));
     }
   }
 

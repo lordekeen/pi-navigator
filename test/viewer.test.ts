@@ -897,3 +897,33 @@ describe("inkRuns (Issue #165)", () => {
     expect(inkRuns("\x1b[1;38;5;42mab")).toEqual([{ text: "ab", color: "38;5;42" }]);
   });
 });
+
+describe("minimap source invariants (Issue #165)", () => {
+  it("markMatches changes no visible text and chunk counts match the unmarked twin", () => {
+    const file: ViewerFile = {
+      kind: "text",
+      relPath: "a.ts",
+      lines: [
+        "const compute = (x) => x + 1; // compute twice: compute",
+        "short",
+        "a very long line that wraps once the pane narrows below its width, compute",
+      ],
+    };
+    const marked = {
+      ...file,
+      lines: file.lines.map((line) => markMatches(line, "compute", (t) => `\x1b[7m${t}\x1b[0m`, (t) => `\x1b[7m\x1b[4m${t}\x1b[0m`, 0)),
+    };
+    for (const width of [10, 20, 40]) {
+      const plain = computeRows(file, width, true, 0);
+      const styled = computeRows(marked, width, true, 0);
+      // Same rows, same source-line mapping: the band aligns either way.
+      expect(styled.length).toBe(plain.length);
+      expect(styled.map((row) => row.line)).toEqual(plain.map((row) => row.line));
+      // A boundary SPACE can land on either side of a chunk when a match style
+      // wraps it (`wrapTextWithAnsi` keeps the escape), so the ink — not the
+      // whitespace — is what must match. The map's ink rule ignores whitespace.
+      const inkOnly = (text: string): string => text.replace(/\s+/g, "");
+      expect(styled.map((row) => inkOnly(stripAnsi(row.text)))).toEqual(plain.map((row) => inkOnly(row.text)));
+    }
+  });
+});

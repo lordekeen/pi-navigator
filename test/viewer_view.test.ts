@@ -12,7 +12,9 @@ import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import { DEFAULT_PI_CHAFA_SUBSET, type ImageSupport } from "../images";
 import { makeNavigatorTheme } from "../theme";
 import type { DisplayRow } from "../viewer";
+import { computeRows } from "../viewer";
 import type { ImageVerdict, ViewerFile } from "../types";
+import type { MinimapSketch } from "../minimap_view";
 import {
   buildInputBar,
   buildSearchBar,
@@ -98,6 +100,7 @@ function paneView(partial: Partial<ViewerPaneView> = {}): ViewerPaneView {
     hscroll: 0,
     imageSupport: activeSupport(),
     imageGeometry: { cols: 40, rows: 12 },
+    minimap: null,
     searchQuery: "",
     searchMatches: [],
     searchIndex: 0,
@@ -524,5 +527,72 @@ describe("viewerWindow (Issue #147)", () => {
     expect(win.viewScroll).toBe(0);
     expect(win.hscroll).toBe(4);
     expect(win.scrollWindow).toBeNull();
+  });
+});
+
+describe("viewer minimap composition (Issue #165)", () => {
+  /** A tiny sketch stand-in: the pane only reads `blocks` and `rows`. */
+  function sketch(n: number): MinimapSketch {
+    return {
+      blocks: Array.from({ length: n }, (_, i) => ({ start: i, end: i + 1 })),
+      rows: Array.from({ length: n }, (_, i) => `<map${i}>`),
+    };
+  }
+
+  function displayFile(count: number): ViewerFile {
+    return {
+      kind: "text",
+      relPath: "a.ts",
+      lineCount: count,
+      lines: Array.from({ length: count }, (_, i) => `line ${i}`),
+    };
+  }
+
+  it("carves the map columns on the body rows and appends one map row each", () => {
+    const file = displayFile(10);
+    const rows = computeRows(file, 30, false, 0);
+    const lines = renderViewerPane(
+      paneView({
+        file,
+        content: { kind: "display", rows },
+        digits: 2,
+        minimap: { sketch: sketch(6), width: 6 },
+      }),
+      40,
+      6,
+    );
+    // Header + six body rows, each exactly the pane width.
+    expect(lines).toHaveLength(7);
+    for (const line of lines) expect(visibleWidth(line)).toBe(40);
+    // Every body row ends with its map glyphs; the header does not.
+    for (let i = 1; i <= 6; i += 1) expect(lines[i]).toContain(`<map${i - 1}>`);
+    expect(lines[0]).not.toContain("<map");
+  });
+
+  it("keeps the header full width when the map owns columns (D7)", () => {
+    const file = displayFile(10);
+    const withMap = renderViewerPane(
+      paneView({ file, content: { kind: "display", rows: computeRows(file, 34, false, 0) }, digits: 2, minimap: { sketch: sketch(6), width: 6 } }),
+      40,
+      6,
+    );
+    const without = renderViewerPane(
+      paneView({ file, content: { kind: "display", rows: computeRows(file, 40, false, 0) }, digits: 2 }),
+      40,
+      6,
+    );
+    expect(withMap[0]).toBe(without[0]);
+  });
+
+  it("widens the content back when the map is off", () => {
+    const file = displayFile(10);
+    const rows = computeRows(file, 40, false, 0);
+    const lines = renderViewerPane(
+      paneView({ file, content: { kind: "display", rows }, digits: 2, minimap: null }),
+      40,
+      3,
+    );
+    for (const line of lines) expect(visibleWidth(line)).toBe(40);
+    expect(lines.join("\n")).not.toContain("<map");
   });
 });

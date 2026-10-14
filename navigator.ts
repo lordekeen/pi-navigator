@@ -28,10 +28,18 @@ import {
   IMAGE_CELLS_MIN,
   IMAGE_EXTENSIONS,
   IMAGE_ROWS_MIN,
+  MINIMAP_MIN_CONTENT_WIDTH,
   MIN_OVERLAY_HEIGHT,
   MIN_OVERLAY_WIDTH,
 } from "./constants";
 import { restyleDiffViewerFile } from "./diff";
+import {
+  buildMinimap,
+  type MinimapEncoding,
+  type MinimapPalette,
+  type MinimapSketch,
+} from "./minimap_view";
+import type { NavigatorMinimapEncoding, NavigatorMinimapPalette } from "./settings";
 import { NAVIGATOR_KEYBINDINGS } from "./help";
 import { buildFilesHeader, buildFileRow, buildFilesRows, filesEmptyRow } from "./files_view";
 import { buildCompactFrame, buildFooterRow, composeFrame, padTo } from "./frame";
@@ -135,6 +143,12 @@ export interface NavigatorOptions {
   initialWrap?: boolean;
   /** Start with Markdown files rendered (Issue #061; settings). Defaults to false. */
   initialRenderMarkdown?: boolean;
+  /** Minimap encoding (Issue #165; settings). Defaults to "braille". */
+  initialMinimap?: NavigatorMinimapEncoding;
+  /** Minimap palette (Issue #165; settings). Defaults to "mono". */
+  initialMinimapColors?: NavigatorMinimapPalette;
+  /** Minimap width in columns (Issue #165; settings). Defaults to 6. */
+  initialMinimapWidth?: number;
   /** The layout the overlay opens with (Issue #119; settings or subcommand).
    *  Defaults to "files-git-viewer". Fixed for the overlay's lifetime. */
   initialLayout?: NavigatorLayout;
@@ -261,6 +275,36 @@ export class NavigatorOverlay implements Focusable {
     null;
   private mdRenderer: Markdown | null = null;
   private mdCache: { file: ViewerFile; width: number; lines: string[] } | null = null;
+  /**
+   * Viewer minimap (Issue #165). `viewMinimapOn` is the session toggle (`v`),
+   * seeded from the setting like `viewWrap`; the setting's `off` beats it. The
+   * text cache mirrors `rowsCache`/`mdCache`: one entry, keyed on the file
+   * reference plus the width/wrap/mode that produced it, so the sketch below
+   * keys on a stable array identity and a scroll never rebuilds anything.
+   */
+  private viewMinimap: NavigatorMinimapEncoding = "braille";
+  private viewMinimapColors: NavigatorMinimapPalette = "mono";
+  private viewMinimapWidth = 6;
+  private viewMinimapOn = true;
+  private mapTextsCache: {
+    file: ViewerFile;
+    width: number;
+    wrap: boolean;
+    renderMarkdown: boolean;
+    texts: string[];
+  } | null = null;
+  /** One sketch, keyed by exactly the inputs that shape it (the texts array's
+   *  identity covers reload, the `m` toggle and a restyle). */
+  private sketchCache: {
+    texts: readonly string[];
+    area: number;
+    width: number;
+    encoding: MinimapEncoding;
+    palette: MinimapPalette;
+    diff: boolean;
+    themeKey: string;
+    sketch: MinimapSketch | null;
+  } | null = null;
   // Row-model memos. Each is keyed on exactly the inputs that affect its
   // output (object references + primitives), so a single render pass that
   // calls filesRows()/gitRows()/gitNavRows() several times builds each array
@@ -328,6 +372,10 @@ export class NavigatorOverlay implements Focusable {
     this.showHidden = options.initialShowHidden ?? false;
     this.viewWrap = options.initialWrap ?? false;
     this.viewRenderMarkdown = options.initialRenderMarkdown ?? false;
+    this.viewMinimap = options.initialMinimap ?? "braille";
+    this.viewMinimapColors = options.initialMinimapColors ?? "mono";
+    this.viewMinimapWidth = options.initialMinimapWidth ?? 6;
+    this.viewMinimapOn = this.viewMinimap !== "off";
     // Layout-landed initial state (Issue #119, D6/D8): the layout fixes the
     // pane set, the initial focus, and the render geometry for this overlay.
     this.layout = options.initialLayout ?? "files-git-viewer";
@@ -641,6 +689,8 @@ export class NavigatorOverlay implements Focusable {
     this.markedCache = null;
     this.mdCache = null;
     this.mdRenderer = null;
+    this.mapTextsCache = null;
+    this.sketchCache = null;
     this.searchMatches = [];
     this.searchMatchLines.clear();
     this.searchDirty = true;
@@ -1562,14 +1612,43 @@ export class NavigatorOverlay implements Focusable {
 
     const { contentW, digits } = paneContentWidth(file, useRendered, rightW);
 
-    const mdLines = useRendered && file ? this.getRenderedMarkdownLines(file, contentW) : null;
+    const area = paneArea(body);
+    // Issue #165: decide the map before any body computation, so the row width
+    // is settled once and the decision never costs a second render of the same
+    // content (the #054 guarantee: markdown renders once per pass).
+    //
+    // The test is the file's own line count, which is exact when wrap is off
+    // (`n` IS the line count) and a sound enough signal otherwise: a file whose
+    // wrapped or rendered rows exceed the pane almost always has more source
+    // lines than the pane has rows. Small files that only overflow because of
+    // wrapping get no map — recorded in the spec's risks.
+    let mapW = 0;
+    let minimap: { sketch: MinimapSketch; width: number } | null = null;
+    if (
+      file &&
+      this.viewMinimap !== "off" &&
+      this.viewMinimapOn &&
+      contentW - this.viewMinimapWidth >= MINIMAP_MIN_CONTENT_WIDTH &&
+      (file.lines.length > area || (this.viewWrap && !useRendered))
+    ) {
+      const texts = this.minimapTexts(file, contentW - this.viewMinimapWidth, useRendered);
+      if (texts.length > area) {
+        const sketch = this.viewerSketch(texts, area, this.viewMinimapWidth, file.kind === "diff");
+        if (sketch) {
+          mapW = this.viewMinimapWidth;
+          minimap = { sketch, width: mapW };
+        }
+      }
+    }
+    const rowsW = contentW - mapW;
+
+    const mdLines = useRendered && file ? this.getRenderedMarkdownLines(file, rowsW) : null;
     if (mdLines) {
       this.recomputeSearchIfNeeded(mdLines);
     } else {
       this.recomputeSearchIfNeeded();
     }
 
-    const area = paneArea(body);
     // Pane snapshot for chafa geometry. The chafa branch has no gutter, so
     // the pane is the full right panel width (rev. 2 amendment 3). Pure
     // bookkeeping — no user-visible state is touched during render (Issue
@@ -1680,8 +1759,8 @@ export class NavigatorOverlay implements Focusable {
           // not read the hscroll offset (the cache key omits it and styled
           // text is sliced at render time), so computing them before the
           // window's hscroll clamp is byte-identical to clamping first.
-          const maxH = Math.max(0, this.cachedMaxLineWidth(file) - contentW);
-          const rows = this.cachedComputeRows(marked, contentW, this.viewWrap);
+          const maxH = Math.max(0, this.cachedMaxLineWidth(file) - rowsW);
+          const rows = this.cachedComputeRows(marked, rowsW, this.viewWrap);
           if (this.searchJump && this.searchMatches.length > 0) {
             const currentMatch = this.searchMatches[this.searchIndex];
             const target = rows.findIndex((row) => row.line === currentMatch?.line);
@@ -1753,6 +1832,7 @@ export class NavigatorOverlay implements Focusable {
       hscroll: viewerWin.hscroll,
       imageSupport: this.imageSupport,
       imageGeometry: this.currentImageGeometry(),
+      minimap,
       searchQuery: this.searchQuery,
       searchMatches: this.searchMatches,
       searchIndex: this.searchIndex,
@@ -1816,6 +1896,64 @@ export class NavigatorOverlay implements Focusable {
     const value = maxLineWidth(file);
     this.maxLineWidthCache = { file, value };
     return value;
+  }
+
+  /**
+   * The map's row texts for one width (Issue #165): the **unmarked** twin of
+   * the body rows, memoised so the sketch can key on a stable array identity
+   * (a fresh array per render would rebuild the sketch on every scroll).
+   * `file.lines` is the wrap-off source and is already stable per file.
+   */
+  private minimapTexts(file: ViewerFile, width: number, renderMarkdown: boolean): string[] {
+    const c = this.mapTextsCache;
+    if (
+      c &&
+      c.file === file &&
+      c.width === width &&
+      c.wrap === this.viewWrap &&
+      c.renderMarkdown === renderMarkdown
+    ) {
+      return c.texts;
+    }
+    let texts: string[];
+    if (renderMarkdown) texts = this.getRenderedMarkdownLines(file, width);
+    else if (this.viewWrap) texts = computeRows(file, width, true, 0).map((row) => row.text);
+    else texts = file.lines;
+    this.mapTextsCache = { file, width, wrap: this.viewWrap, renderMarkdown, texts };
+    return texts;
+  }
+
+  /**
+   * One sketch for the current texts, size, palette and theme (Issue #165).
+   * The texts array's identity already covers a reload, the `m` toggle and a
+   * restyle; the other components cover resize, the `v`/setting toggles and a
+   * theme switch (through the same style key the file is restyled under).
+   */
+  private viewerSketch(
+    texts: readonly string[],
+    area: number,
+    width: number,
+    diff: boolean,
+  ): MinimapSketch | null {
+    const encoding: MinimapEncoding = this.viewMinimap === "bars" ? "bars" : "braille";
+    const palette: MinimapPalette = this.viewMinimapColors;
+    const themeKey = this.styleKey();
+    const c = this.sketchCache;
+    if (
+      c &&
+      c.texts === texts &&
+      c.area === area &&
+      c.width === width &&
+      c.encoding === encoding &&
+      c.palette === palette &&
+      c.diff === diff &&
+      c.themeKey === themeKey
+    ) {
+      return c.sketch;
+    }
+    const sketch = buildMinimap({ texts, area, width, encoding, palette, diff, theme: this.T });
+    this.sketchCache = { texts, area, width, encoding, palette, diff, themeKey, sketch };
+    return sketch;
   }
 
   private cachedComputeRows(

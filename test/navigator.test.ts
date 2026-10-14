@@ -22,6 +22,7 @@ import { buildTree } from "../tree";
 import { entriesFromPaths, findNode } from "./tree_fixtures";
 import { NAVIGATOR_LAYOUTS, type GitState, type NavigatorLayout, type ViewerFile } from "../types";
 import type { LoadFileOptions } from "../viewer";
+import type { NavigatorMinimapEncoding, NavigatorMinimapPalette } from "../settings";
 import { imageCardHints } from "../viewer_view";
 
 const { copyToClipboard } = vi.hoisted(() => ({ copyToClipboard: vi.fn() }));
@@ -3308,5 +3309,122 @@ describe("dispatch liveness (Issue #148): every advertised normal-mode key acts"
       expectAdvertisedKeyLives(harness, pair, before, "viewer");
       harness.overlay.dispose();
     }
+  });
+});
+
+describe("viewer minimap (Issue #165)", () => {
+  const BRAILLE = /[\u2800-\u28FF]/;
+  const BAR = /\u2588/;
+
+  function longFile(relPath: string, count = 200): ViewerFile {
+    return {
+      kind: "text",
+      relPath,
+      sizeBytes: 4096,
+      lineCount: count,
+      lines: Array.from({ length: count }, (_, i) => `const value${i} = compute(${i});`),
+    };
+  }
+
+  interface MapHarness {
+    overlay: NavigatorOverlay;
+    state: { renders: number };
+    loads: Array<{ relPath: string; opts?: LoadFileOptions }>;
+  }
+
+  function makeMapHarness(
+    opts: { file?: ViewerFile | null; minimap?: NavigatorMinimapEncoding; colors?: NavigatorMinimapPalette; width?: number; rows?: number; styleKey?: () => string } = {},
+  ): MapHarness {
+    const state = { renders: 0 };
+    const loads: Array<{ relPath: string; opts?: LoadFileOptions }> = [];
+    const theme = makeNavigatorTheme({
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+      underline: (text: string) => text,
+      inverse: (text: string) => text,
+    } as never);
+    const file = opts.file === undefined ? longFile("src/big.ts") : opts.file;
+    const overlay = new NavigatorOverlay({
+      cwd: "/work",
+      theme,
+      getTerminalRows: () => opts.rows ?? 36,
+      requestRender: () => {
+        state.renders += 1;
+      },
+      onClose: () => undefined,
+      loadFile: async (relPath: string, o?: LoadFileOptions): Promise<ViewerFile> => {
+        loads.push({ relPath, opts: o });
+        return file ?? longFile(relPath);
+      },
+      refresh: () => undefined,
+      initialMinimap: opts.minimap ?? "braille",
+      initialMinimapColors: opts.colors ?? "mono",
+      initialMinimapWidth: opts.width ?? 6,
+      ...(opts.styleKey ? { styleKey: opts.styleKey } : {}),
+    });
+    overlay.setTree(
+      buildTree("/work", entriesFromPaths(["src/big.ts", "src/small.ts"]), new Map()),
+      "git",
+    );
+    return { overlay, state, loads };
+  }
+
+  it("shows a braille map for a scrolling file and none for one that fits", async () => {
+    const big = makeMapHarness();
+    await big.overlay.openRelPath("src/big.ts");
+    expect(big.overlay.render(120).some((line) => BRAILLE.test(line))).toBe(true);
+
+    const small = makeMapHarness({ file: { kind: "text", relPath: "src/small.ts", lines: ["a", "b", "c"] } });
+    await small.overlay.openRelPath("src/small.ts");
+    expect(small.overlay.render(120).some((line) => BRAILLE.test(line))).toBe(false);
+  });
+
+  it("draws positioned bars when the setting says bars", async () => {
+    const harness = makeMapHarness({ minimap: "bars" });
+    await harness.overlay.openRelPath("src/big.ts");
+    const lines = harness.overlay.render(120);
+    expect(lines.some((line) => BAR.test(line))).toBe(true);
+    expect(lines.some((line) => BRAILLE.test(line))).toBe(false);
+  });
+
+  it("honours viewer.minimap: off", async () => {
+    const harness = makeMapHarness({ minimap: "off" });
+    await harness.overlay.openRelPath("src/big.ts");
+    expect(harness.overlay.render(120).some((line) => BRAILLE.test(line))).toBe(false);
+  });
+
+  it("widens the carve with viewer.minimapWidth", async () => {
+    const glyphs = async (width: number): Promise<number> => {
+      const harness = makeMapHarness({ width });
+      await harness.overlay.openRelPath("src/big.ts");
+      const line = harness.overlay.render(120).find((candidate) => BRAILLE.test(candidate)) ?? "";
+      return (line.match(/[\u2800-\u28FF]/g) ?? []).length;
+    };
+    expect(await glyphs(4)).toBe(4);
+    expect(await glyphs(8)).toBe(8);
+  });
+
+  it("keeps the map's glyphs unmarked by search (the unmarked-twin rule)", async () => {
+    const harness = makeMapHarness();
+    await harness.overlay.openRelPath("src/big.ts");
+    const before = harness.overlay.render(120);
+    harness.overlay.handleInput("/");
+    for (const ch of "compute") harness.overlay.handleInput(ch);
+    const after = harness.overlay.render(120);
+    const mapOf = (lines: string[]): string[] =>
+      lines.map((line) => (line.match(/[\u2800-\u28FF]+/g) ?? []).join(""));
+    expect(mapOf(after)).toEqual(mapOf(before));
+  });
+
+  it("repaints the band without rebuilding the map when the file scrolls", async () => {
+    const harness = makeMapHarness();
+    await harness.overlay.openRelPath("src/big.ts");
+    const mapOf = (lines: string[]): string[] =>
+      lines.map((line) => (line.match(/[\u2800-\u28FF]+/g) ?? []).join(""));
+    const before = mapOf(harness.overlay.render(120));
+    harness.overlay.handleInput("\x1b[6~"); // PgDn
+    const after = mapOf(harness.overlay.render(120));
+    expect(after).toEqual(before);
   });
 });

@@ -66,7 +66,12 @@ interface Harness {
   rows: number;
 }
 
-function makeHarness(rows: number, enableIcons = false, initialLayout?: NavigatorLayout): Harness {
+function makeHarness(
+  rows: number,
+  enableIcons = false,
+  initialLayout?: NavigatorLayout,
+  loadedFile?: ViewerFile,
+): Harness {
   const theme = makeNavigatorTheme({
     fg: (_color: string, text: string) => text,
     bg: (_color: string, text: string) => text,
@@ -83,7 +88,7 @@ function makeHarness(rows: number, enableIcons = false, initialLayout?: Navigato
     onClose: () => undefined,
     enableIcons,
     ...(initialLayout !== undefined ? { initialLayout } : {}),
-    loadFile: async (relPath: string): Promise<ViewerFile> => ({
+    loadFile: async (relPath: string): Promise<ViewerFile> => loadedFile ?? ({
       kind: "text",
       relPath,
       sizeBytes: 2048,
@@ -1362,5 +1367,62 @@ describe("E-style chrome (Issue #137)", () => {
     for (const width of [120, 100, 80]) expectWidthSafe(overlay, width);
     const refusal = chromeOverlay(MIN_OVERLAY_HEIGHT - 1);
     for (const width of [120, MIN_OVERLAY_WIDTH - 1]) expectWidthSafe(refusal, width);
+  });
+});
+
+describe("viewer minimap carve (Issue #165)", () => {
+  /** A file that scrolls the pane at every suite size, with a 3-digit gutter. */
+  function longFile(): ViewerFile {
+    return {
+      kind: "text",
+      relPath: "src/big.ts",
+      sizeBytes: 4096,
+      lineCount: 200,
+      tokens: 2048,
+      lines: Array.from({ length: 200 }, (_, i) => `const value${i} = compute(${i});`),
+    };
+  }
+
+  it("shows the map exactly where the size matrix says", async () => {
+    const cases: Array<[width: number, rows: number, map: boolean]> = [
+      [120, 36, true],
+      [100, 28, true],
+      [80, 24, true], // 3-digit gutter: 45 - 6 = 39 >= the 36 floor
+      [44, 20, false], // left column hidden: 34 - 6 < 36
+    ];
+    for (const [width, rows, expected] of cases) {
+      const harness = makeHarness(rows, false, undefined, longFile());
+      await harness.overlay.openRelPath("src/big.ts");
+      const lines = expectWidthSafe(harness.overlay, width);
+      const hasMap = lines.some((line) => /[\u2800-\u28FF]/.test(line));
+      expect(hasMap, `map at ${width}x${rows}`).toBe(expected);
+    }
+  });
+
+  it("stays width-safe with the map on in every layout", async () => {
+    for (const layout of ["files-git-viewer", "files-viewer", "git-viewer"] as const) {
+      for (const [width, rows] of [
+        [120, 36],
+        [100, 28],
+        [80, 24],
+        [44, 20],
+      ] as Array<[number, number]>) {
+        const harness = makeHarness(rows, false, layout, longFile());
+        await harness.overlay.openRelPath("src/big.ts");
+        expectWidthSafe(harness.overlay, width);
+      }
+    }
+  });
+
+  it("keeps the map stable across a scroll and moves only the band", async () => {
+    const harness = makeHarness(36, false, undefined, longFile());
+    await harness.overlay.openRelPath("src/big.ts");
+    const before = harness.overlay.render(120);
+    harness.overlay.handleInput("\x1b[6~"); // PgDn
+    const after = harness.overlay.render(120);
+    const mapOf = (lines: string[]): string[] =>
+      lines.map((line) => (line.match(/[\u2800-\u28FF]+/g) ?? []).join(""));
+    // Same glyphs (no rebuild changed them); the band's background moved.
+    expect(mapOf(after)).toEqual(mapOf(before));
   });
 });
