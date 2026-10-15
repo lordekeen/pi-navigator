@@ -191,6 +191,13 @@ describe("buildFilesHeader", () => {
     expect(buildFilesHeader(30, 0, ctx({ filterQuery: "zzz" }))).toContain("0 matches");
   });
 
+  it("pluralizes the match counter (Issue #195)", () => {
+    const one = buildFilesHeader(30, 1, ctx({ filterQuery: "u" }));
+    expect(one).toContain("1 match");
+    expect(one).not.toContain("1 matches");
+    expect(buildFilesHeader(30, 2, ctx({ filterQuery: "u" }))).toContain("2 matches");
+  });
+
   it("shows a position counter while browsing and a match counter while filtering", () => {
     const browsing = buildFilesHeader(30, 3, ctx({ filesCursor: 0 }));
     expect(browsing).toContain("1/3");
@@ -266,6 +273,28 @@ describe("buildFileRow", () => {
     // identity theme keeps the (highlighted) name intact so the full file name is rendered
     expect(row).toContain("util.ts");
     expect(visibleWidth(row)).toBeLessThanOrEqual(60); // row stays width-safe
+  });
+
+  it("styles the hit at the folded-to-original index (Issue #195)", () => {
+    // "İ".toLowerCase() is two code units, so the folded index (2) is not the
+    // original index (1); slicing the original name by the folded index used
+    // to style "is.t" instead of "dris".
+    const name = "\u0130dris.ts";
+    const folded = name.toLowerCase();
+    const hitNode = node({
+      name,
+      lowerName: folded,
+      path: `/work/${name}`,
+      relPath: name,
+      lowerRelPath: folded,
+    });
+    const root = node({ name: "", isDir: true, relPath: "", children: [hitNode] });
+    const rows = buildFilesRows(root, "dris", false);
+    const match = rows.find((row) => row.kind === "match");
+    if (match?.kind !== "match") throw new Error("expected a match row");
+    const row = buildFileRow(match, false, 40, ctx({ filterQuery: "dris", theme: toneTheme }));
+    expect(row).toContain("warning:dris");
+    expect(row).not.toContain("warning:is.t");
   });
 
   it("marks a changed directory with a rollup • twin and leaves an unchanged one bare", () => {

@@ -39,7 +39,7 @@ export function buildFilesHeader(leftW: number, total: number, ctx: FilesViewCon
   const label = " " + (ctx.focus === "files" ? T.accent(T.bold("FILES")) : T.dim("FILES"));
   let info: string;
   if (ctx.filterQuery) {
-    info = T.warning(`${total} matches`) + " ";
+    info = T.warning(total === 1 ? "1 match" : `${total} matches`) + " ";
   } else if (total > 0) {
     info = T.dim(`${Math.min(ctx.filesCursor + 1, total)}/${total}`) + " ";
   } else {

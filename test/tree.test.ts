@@ -666,6 +666,16 @@ describe("filterRows", () => {
     expect(filterRows(tree, "readme", true).map((r) => r.node.relPath)).toEqual(["README.md"]);
   });
 
+  it("maps a folded-name match back to the original string's index (Issue #195)", () => {
+    // "İ".toLowerCase() is two code units ("i" + combining dot), so the
+    // folded index of "dris" is 2 while its original index is 1.
+    const tree = buildTree(CWD, entries(["\u0130dris.ts"]), new Map());
+    const rows = filterRows(tree, "dris", false);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.node.name).toBe("\u0130dris.ts");
+    expect(rows[0]?.nameIndex).toBe(1);
+  });
+
   it("returns nothing for an empty query and respects showHidden", () => {
     const tree = buildTree(CWD, entries([".env", "app.ts"]), new Map());
     expect(filterRows(tree, "", true)).toEqual([]);

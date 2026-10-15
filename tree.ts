@@ -516,6 +516,25 @@ export function flattenVisible(root: FileNode, showHidden: boolean): TreeRow[] {
 }
 
 /**
+ * Map a `lowerName` hit index back to the ORIGINAL name's index (Issue #195):
+ * `toLowerCase()` can change a code point's length (U+0130 folds to two code
+ * units), so slicing the original name with a folded index styles the wrong
+ * span. Returns -1 when the folded index lies past the name.
+ */
+function originalIndexOf(name: string, foldedIndex: number): number {
+  if (foldedIndex <= 0) return foldedIndex;
+  let folded = 0;
+  let original = 0;
+  for (const ch of name) {
+    const next = folded + ch.toLowerCase().length;
+    if (next > foldedIndex) return original;
+    folded = next;
+    original += ch.length;
+  }
+  return -1;
+}
+
+/**
  * Flat fuzzy-ish filter over file paths. Name matches rank above path matches,
  * and the dimmed parent prefix is preserved so results keep context.
  */
@@ -540,7 +559,7 @@ export function filterRows(root: FileNode, query: string, showHidden: boolean): 
         kind: "match",
         node: child,
         prefix: child.relPath.slice(0, child.relPath.length - child.name.length),
-        nameIndex: child.lowerName.indexOf(q),
+        nameIndex: originalIndexOf(child.name, child.lowerName.indexOf(q)),
       });
     }
   };
