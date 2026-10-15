@@ -135,9 +135,19 @@ export interface HelpKeyRow {
   description: string;
 }
 
-export const NAVIGATOR_KEYBINDINGS: readonly HelpKeyRow[] = KEY_BINDINGS.filter(
-  (row): row is KeyBinding & { description: string } => row.help,
-).map(({ id, keys, description }) => ({ id, keys, description }));
+/**
+ * The modal projection's row predicate (Issue #191): a `help: true` row is
+ * only projectable when it actually carries a `description`, because the type
+ * predicate asserts one. Testing `help` alone would let a future row without
+ * one render the literal `undefined` in the modal / HELP_ROWS.
+ */
+export function isHelpRow(row: KeyBinding): row is KeyBinding & { description: string } {
+  return row.help === true && row.description !== undefined;
+}
+
+export const NAVIGATOR_KEYBINDINGS: readonly HelpKeyRow[] = KEY_BINDINGS.filter(isHelpRow).map(
+  ({ id, keys, description }) => ({ id, keys, description }),
+);
 
 /**
  * One context's ordered reference to a binding row (Issue #148): the row owns

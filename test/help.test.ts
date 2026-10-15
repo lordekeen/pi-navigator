@@ -47,6 +47,7 @@ import {
   NAVIGATOR_CMD_PREFIX,
   NAVIGATOR_KEYBINDINGS,
   NAVIGATOR_SUBCOMMANDS,
+  isHelpRow,
   plainHint,
   resolveBindings,
   type HintPair,
@@ -220,6 +221,14 @@ describe("single-source derivations (Issue #063 finding 5)", () => {
   it("keybinding ids are unique", () => {
     const ids = NAVIGATOR_KEYBINDINGS.map((row) => row.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("projects only help rows that carry a description (Issue #191)", () => {
+    // The predicate asserts `description: string`; testing `help` alone would
+    // let a future `help: true` row without one render the literal `undefined`.
+    expect(isHelpRow({ id: "a", keys: "a", help: true, description: "do a" })).toBe(true);
+    expect(isHelpRow({ id: "b", keys: "b", help: true })).toBe(false);
+    expect(isHelpRow({ id: "c", keys: "c", help: false, description: "hidden" })).toBe(false);
   });
 });
 
