@@ -112,7 +112,10 @@ export async function collectDirEntries(
   } catch {
     // Unreachable root: the per-directory walk failures handle it.
   }
-  await walk(join(cwd, relDir), relDir, segments - 1, entries, visited, walkBudget, skip);
+  // Seed at the directory's TREE depth (a root child is 1, not 0): the depth
+  // cap must match a root walk's, or the probe returns entries one level
+  // deeper than the tree can ever reach (Issue #192).
+  await walk(join(cwd, relDir), relDir, segments, entries, visited, walkBudget, skip);
   return entries;
 }
 

@@ -191,6 +191,20 @@ describe("collectFsEntries", () => {
     expect(out.find((e) => e.relPath === "src")?.isDir).toBe(true);
   });
 
+  it("seeds the partial walk at the directory's tree depth, matching the root walk (Issue #192)", async () => {
+    const root = await collectFsEntries(dir);
+    const rootPaths = new Set(root.entries.map((entry) => entry.relPath));
+    const partial = await collectDirEntries(dir, "deep1/deep2");
+    // Everything the probe walk sees must exist for the root walk too: the
+    // depth cap belongs to the tree, not to the probe's start-relative depth.
+    for (const entry of partial) {
+      expect(rootPaths, `${entry.relPath} is deeper than the root walk allows`).toContain(entry.relPath);
+    }
+    expect(partial.map((entry) => entry.relPath)).not.toContain(
+      "deep1/deep2/deep3/deep4/deep5/deep6/deep7/leaf.txt",
+    );
+  });
+
   it("skips IGNORED_NAMES directories entirely", async () => {
     await mkdir(join(dir, "node_modules/pkg"), { recursive: true });
     await writeFile(join(dir, "node_modules/pkg/index.js"), "x\n");
