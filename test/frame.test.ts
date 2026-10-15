@@ -112,6 +112,17 @@ describe("joinLeftRight", () => {
     expect(joinLeftRight("left", iterm2, 40)).toBe(iterm2);
     expect(joinLeftRight(iterm2, "right", 40)).toBe(iterm2);
   });
+  it("truncates an over-wide right segment deliberately, with no leading gap (Issue #189)", () => {
+    // The right side alone fills the pane: it is the priority, so it keeps its
+    // start and the composer's gap is skipped. The old gap+padTo path pushed
+    // it right by one cell and cut its tail.
+    const exact = "1234567890";
+    expect(joinLeftRight("hint", exact, 10)).toBe(exact);
+
+    const out = joinLeftRight("hint", "branch-name-that-is-far-too-long", 10);
+    expect(visibleWidth(out)).toBe(10);
+    expect(out.replace("\x1b[0m", "")).toBe("branch-nam");
+  });
 });
 
 describe("leftBudget (Issue #147)", () => {
