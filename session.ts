@@ -675,10 +675,22 @@ export function createSession(deps: SessionDeps): NavigatorSession {
     }
   };
 
+  /**
+   * Repository detection is invariant for the overlay's lifetime (Issue
+   * #170): the first available `RepoInfo` is reused so an idle tick runs
+   * four `readGitState` commands, not a fifth `rev-parse`. A failed
+   * detection or porcelain read retires it, so a mid-session `git init`,
+   * repo move or git failure is re-detected on the next tick.
+   */
+  let repoInfo: RepoInfo | null = null;
+
   /** The git read half of a tick: repo detection plus the porcelain state. */
   const readGit = async (): Promise<{ repo: RepoInfo; git: GitState }> => {
-    const repo = await detectRepo(cwd);
+    const repo = repoInfo ?? (await detectRepo(cwd));
     const git = await readGitState(cwd, repo);
+    // `error` covers the #107 status failure, where the state stays usable
+    // (available: true) but the repo may have moved out from under the cache.
+    repoInfo = repo.available && git.available && git.error === undefined ? repo : null;
     return { repo, git };
   };
 

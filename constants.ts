@@ -29,6 +29,11 @@ export const MAX_LINE_COUNT_BYTES = 256 * 1024;
  * Maximum number of parsed ViewerFile entries kept in the per-file viewer
  * cache in `session.ts`. Re-opening a file whose mtime is unchanged reuses the
  * cached highlighted lines instead of re-running the loadFile pipeline.
+ *
+ * Deliberately entry-bounded, not byte-bounded (Issue #170): sixteen entries,
+ * each from a file capped by MAX_HIGHLIGHT_BYTES, with oversized native base64
+ * rows excluded by IMAGE_NATIVE_CACHE_MAX_CHARS. A byte budget would add
+ * eviction bookkeeping for no user-visible gain.
  */
 export const MAX_VIEWER_CACHE_ENTRIES = 16;
 

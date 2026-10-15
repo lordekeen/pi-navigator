@@ -45,6 +45,8 @@ const ctl = vi.hoisted(() => ({
   tracked: [] as string[],
   gitReads: 0,
   trackedReads: 0,
+  // git.ts (Issue #170): how many times the session asked for repo detection.
+  detectReads: 0,
   commitDiff: null as unknown,
   // git.ts (Issue #158)
   ignored: [] as TreeEntry[],
@@ -68,7 +70,10 @@ const ctl = vi.hoisted(() => ({
 }));
 
 vi.mock("../git", () => ({
-  detectRepo: (): Promise<RepoInfo> => Promise.resolve({ available: true, prefix: "" }),
+  detectRepo: (): Promise<RepoInfo> => {
+    ctl.detectReads += 1;
+    return Promise.resolve({ available: true, prefix: "" });
+  },
   readGitState: (_cwd: string, _repo: RepoInfo): Promise<GitState> => {
     ctl.gitReads += 1;
     return ctl.gitError ? Promise.reject(ctl.gitError) : Promise.resolve(ctl.gitState as GitState);
@@ -439,6 +444,7 @@ beforeEach(async () => {
   ctl.treeProbe = "";
   ctl.tracked = [];
   ctl.gitReads = 0;
+  ctl.detectReads = 0;
   ctl.trackedReads = 0;
   ctl.ignored = [];
   ctl.ignoredReads = 0;
@@ -491,6 +497,36 @@ describe("createSession: start + refresh data flow", () => {
     expect(sink.setGitState).toHaveBeenCalledWith(unavailable);
     expect(sink.setTree.mock.calls[0]?.[1]).toBe("fs");
     expect(ctl.trackedReads).toBe(0); // no tracked-file walk in fs mode
+  });
+
+  it("detects the repository once, retiring the cache on a git failure (Issue #170)", async () => {
+    ctl.gitState = makeGitState();
+    ctl.treeProbe = "probe-1";
+    ctl.tracked = ["src/a.ts"];
+    vi.useFakeTimers();
+    const timers = installTimerLog();
+    const { session } = makeSession();
+    session.start();
+    await flushTicks();
+    expect(ctl.detectReads).toBe(1);
+
+    // Second tick reuses the cached RepoInfo: detection stays at one.
+    await runUntil(dueAt(timer(timers, 0)));
+    expect(ctl.gitReads).toBe(2);
+    expect(ctl.detectReads).toBe(1);
+
+    // A status failure retires the cache (this tick still used it); the next
+    // tick re-detects, and a healthy read caches it again (#107 keeps such a
+    // state available: true, so the error field is the retirement signal).
+    ctl.gitState = makeGitState({ error: "git status failed" });
+    await runUntil(dueAt(timer(timers, 1)));
+    expect(ctl.detectReads).toBe(1);
+
+    ctl.gitState = makeGitState();
+    await runUntil(dueAt(timer(timers, 2)));
+    expect(ctl.detectReads).toBe(2);
+    await runUntil(dueAt(timer(timers, 3)));
+    expect(ctl.detectReads).toBe(2);
   });
 });
 
