@@ -24,6 +24,7 @@ import { NAVIGATOR_LAYOUTS, type GitState, type NavigatorLayout, type ViewerFile
 import type { LoadFileOptions } from "../viewer";
 import { targetOf } from "../viewer";
 import * as minimapView from "../minimap_view";
+import * as viewerModule from "../viewer";
 import type { NavigatorMinimapEncoding, NavigatorMinimapPalette } from "../settings";
 import { imageCardHints } from "../viewer_view";
 
@@ -2731,25 +2732,22 @@ describe("Issue #123: invalidate() clears theme-styled caches, keeps the data ca
     await Promise.resolve();
     harness.overlay.handleInput("/");
     harness.overlay.handleInput("a");
-    harness.overlay.render(120); // warms markedCache, rowsCache, maxLineWidthCache, searchMatchLines
+    harness.overlay.render(120); // warms plainRowsCache, maxLineWidthCache, searchMatchLines
 
     const caches = harness.overlay as unknown as {
-      rowsCache: unknown;
-      markedCache: unknown;
+      plainRowsCache: unknown;
       mdCache: unknown;
       maxLineWidthCache: unknown;
       searchMatchLines: Set<number>;
     };
-    expect(caches.rowsCache).not.toBeNull();
-    expect(caches.markedCache).not.toBeNull();
+    expect(caches.plainRowsCache).not.toBeNull();
     expect(caches.maxLineWidthCache).not.toBeNull();
     expect(caches.searchMatchLines.size).toBeGreaterThan(0);
 
     harness.overlay.invalidate();
 
     // The theme-derived render state is dropped wholesale...
-    expect(caches.rowsCache).toBeNull();
-    expect(caches.markedCache).toBeNull();
+    expect(caches.plainRowsCache).toBeNull();
     expect(caches.mdCache).toBeNull();
     expect(caches.searchMatchLines.size).toBe(0);
     // ...while the data-derived caches (raw visible widths) and the file
@@ -3335,7 +3333,7 @@ describe("viewer minimap (Issue #165)", () => {
   }
 
   function makeMapHarness(
-    opts: { file?: ViewerFile | null; minimap?: NavigatorMinimapEncoding; colors?: NavigatorMinimapPalette; width?: number; rows?: number; styleKey?: () => string } = {},
+    opts: { file?: ViewerFile | null; minimap?: NavigatorMinimapEncoding; colors?: NavigatorMinimapPalette; width?: number; rows?: number; styleKey?: () => string; wrap?: boolean } = {},
   ): MapHarness {
     const state = { renders: 0 };
     const loads: Array<{ relPath: string; opts?: LoadFileOptions }> = [];
@@ -3363,6 +3361,7 @@ describe("viewer minimap (Issue #165)", () => {
       initialMinimap: opts.minimap ?? "braille",
       initialMinimapColors: opts.colors ?? "mono",
       initialMinimapWidth: opts.width ?? 6,
+      initialWrap: opts.wrap ?? false,
       ...(opts.styleKey ? { styleKey: opts.styleKey } : {}),
     });
     overlay.setTree(
@@ -3388,6 +3387,42 @@ describe("viewer minimap (Issue #165)", () => {
     const lines = harness.overlay.render(120);
     expect(lines.some((line) => BAR.test(line))).toBe(true);
     expect(lines.some((line) => BRAILLE.test(line))).toBe(false);
+  });
+
+  it("wraps the file once per cache miss and never on a search keystroke (#168)", async () => {
+    const harness = makeMapHarness({ wrap: true });
+    await harness.overlay.openRelPath("src/big.ts");
+    focusViewer(harness.overlay);
+    const spy = vi.spyOn(viewerModule, "computeRows");
+    harness.overlay.render(120);
+    expect(spy).toHaveBeenCalledTimes(1); // map + body share the one plain wrap
+    harness.overlay.handleInput(KEYS.down);
+    harness.overlay.render(120);
+    expect(spy).toHaveBeenCalledTimes(1); // scrolled: cache hit
+    harness.overlay.handleInput("/");
+    for (const ch of "compute") harness.overlay.handleInput(ch);
+    harness.overlay.render(120);
+    expect(spy).toHaveBeenCalledTimes(1); // keystrokes re-wrap only matched lines
+  });
+
+  it("keeps a match spanning wrap boundaries highlighted on every chunk (#168)", async () => {
+    const line = "q".repeat(200);
+    const harness = makeHarness(
+      24,
+      async (p) => ({ kind: "text", relPath: p, sizeBytes: 1, lineCount: 1, lines: [line] }),
+      (color, text) => (color === "searchMatchText" ? `\x1b[7m${text}\x1b[0m` : text),
+    );
+    withTree(harness, ["a.ts"]);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+    harness.overlay.handleInput("w"); // wrap on
+    harness.overlay.handleInput("/");
+    harness.overlay.handleInput("q".repeat(150));
+    const marked = harness.overlay.render(120).filter((row) => row.includes("\x1b[7m"));
+    // A 150-char match can only survive here if the whole source line is
+    // marked and split at the plain wrap's boundaries: marking each chunk on
+    // its own would find no match in any of them.
+    expect(marked.length).toBeGreaterThanOrEqual(2);
   });
 
   it("hides itself when the map plus its divider would leave under 36 columns", async () => {

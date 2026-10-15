@@ -18,6 +18,7 @@ import {
   Key,
   Markdown,
   matchesKey,
+  wrapTextWithAnsi,
   type Focusable,
   type KeybindingsManager,
 } from "@earendil-works/pi-tui";
@@ -257,29 +258,39 @@ export class NavigatorOverlay implements Focusable {
   // Search matches are recomputed lazily: `searchDirty` is set when the open
   // file's content changes under an active query; `recomputeSearchIfNeeded`
   // then (and only then) reruns `searchLines`. `searchMatchLines` backs the
-  // O(1) per-line membership test in `markSearch` (was O(lines×matches)).
+  // O(1) per-line membership test in `markedWindow` (was O(lines×matches)).
   private searchDirty = false;
   private searchMatchLines: Set<number> = new Set();
-  // Bumped whenever the marked-lines output changes (matches or current
-  // match index), so the `marked` and `computeRows` caches can key off it.
+  // Bumped whenever the search results or the current match change, so the
+  // occurrence cache can key off it.
   private searchVersion = 0;
+  // The current match's occurrence on its own line (Issue #025), cached per
+  // searchVersion so the markdown path does not re-filter the match list on
+  // every render (Issue #168).
+  private occurrenceCache: { version: number; value: number } | null = null;
 
   // Viewer render caches. The top-level `render()` cache is wiped by every
   // `touch()` (every keystroke), so without these the viewer path re-derives
-  // the whole file's marked rows, max line width, and wrapped display rows on
-  // every keypress. Each cache is keyed on the stable `viewFile` reference
-  // (which only changes when a file is (re)opened) plus the inputs that
-  // actually affect its output.
-  private markedCache: { file: ViewerFile; version: number; marked: ViewerFile } | null = null;
+  // the whole file's max line width and wrapped display rows on every
+  // keypress. Each cache is keyed on the stable `viewFile` reference (which
+  // only changes when a file is (re)opened) plus the inputs that actually
+  // affect its output; search marking is applied per render to the visible
+  // window instead of being cached whole-file (Issue #168).
   private maxLineWidthCache: { file: ViewerFile; value: number } | null = null;
-  private rowsCache: { marked: ViewerFile; width: number; wrap: boolean; rows: DisplayRow[] } | null =
+  /**
+   * Issue #168: the unmarked wrap, keyed on the stable `file` reference,
+   * width and wrap flag. Shared by the body rows, the search-marking pass and
+   * the minimap texts, so the file is wrapped once per cache miss however
+   * many consumers read it.
+   */
+  private plainRowsCache: { file: ViewerFile; width: number; wrap: boolean; rows: DisplayRow[] } | null =
     null;
   private mdRenderer: Markdown | null = null;
   private mdCache: { file: ViewerFile; width: number; lines: string[] } | null = null;
   /**
    * Viewer minimap (Issue #165). `viewMinimapOn` is the session toggle (`v`),
    * seeded from the setting like `viewWrap`; the setting's `off` beats it. The
-   * text cache mirrors `rowsCache`/`mdCache`: one entry, keyed on the file
+   * text cache mirrors `plainRowsCache`/`mdCache`: one entry, keyed on the file
    * reference plus the width/wrap/mode that produced it, so the sketch below
    * keys on a stable array identity and a scroll never rebuilds anything.
    */
@@ -579,7 +590,7 @@ export class NavigatorOverlay implements Focusable {
       this.viewFile = file;
       this.mdCache = null;
       // New content: an active query must be re-scanned on next render. The
-      // marked/maxLineWidth/rows caches key on the `viewFile` reference, so
+      // plainRowsCache/maxLineWidth caches key on the `viewFile` reference, so
       // the new object invalidates them automatically.
       this.searchDirty = true;
       this.diskChanged = false;
@@ -664,8 +675,8 @@ export class NavigatorOverlay implements Focusable {
     // that bakes the theme in, so the next render re-derives it against the
     // theme now in force:
     //  - cachedLines/cachedWidth: the composed frame (styled strings);
-    //  - rowsCache/markedCache: DisplayRows over search-marked, theme-styled
-    //    lines, and the marked lines themselves;
+    //  - plainRowsCache: the wrapped theme-styled display rows (the marked
+    //    window is derived per render);
     //  - mdCache/mdRenderer: rendered markdown (the renderer captures the
     //    markdown theme at construction, so it must be rebuilt too);
     //  - searchMatches/searchMatchLines/searchDirty/searchVersion: search
@@ -688,8 +699,7 @@ export class NavigatorOverlay implements Focusable {
     this.restyleOpenFile();
     this.cachedWidth = undefined;
     this.cachedLines = undefined;
-    this.rowsCache = null;
-    this.markedCache = null;
+    this.plainRowsCache = null;
     this.mdCache = null;
     this.mdRenderer = null;
     this.mapTextsCache = null;
@@ -1151,8 +1161,7 @@ export class NavigatorOverlay implements Focusable {
         this.viewHscroll = 0; // rendered mode is wrap-only
 
         // Full cache invalidation protocol:
-        this.rowsCache = null;
-        this.markedCache = null;
+        this.plainRowsCache = null;
         this.mdCache = null;
         this.searchDirty = true;
         this.searchMatches = [];
@@ -1760,9 +1769,7 @@ export class NavigatorOverlay implements Focusable {
             this.searchMatches.length > 0
               ? this.searchMatches[Math.min(this.searchIndex, this.searchMatches.length - 1)]
               : undefined;
-          const currentOccurrenceOnLine = currentMatch
-            ? this.searchMatches.filter((m) => m.line === currentMatch.line && m.start < currentMatch.start).length
-            : -1;
+          const currentOccurrenceOnLine = this.currentOccurrenceIndex();
 
           // Pre-style the rendered-markdown content rows: per-line search
           // marking stays in the class (markRenderedLineMatches), the pure
@@ -1783,28 +1790,26 @@ export class NavigatorOverlay implements Focusable {
           }
           content = { kind: "markdown", rows };
         } else {
-          const marked = this.markSearch(file);
-
-          // `maxLineWidth` depends only on visible width, which search
+          // Issue #168: the plain wrap is cached once and shared with the
+          // minimap; search marking happens on the visible window after the
+          // clamp, so neither a scroll nor a search keystroke re-wraps the
+          // file. `maxLineWidth` depends only on visible width, which search
           // marking does not change, so it is cached on the stable `file`
-          // reference; `computeRows` is cached on the cached `marked`
-          // reference plus width/wrap, so vertical scrolling no longer
-          // re-wraps the whole file each keystroke. Issue #147: the rows do
-          // not read the hscroll offset (the cache key omits it and styled
-          // text is sliced at render time), so computing them before the
-          // window's hscroll clamp is byte-identical to clamping first.
+          // reference. Issue #147: the rows do not read the hscroll offset
+          // (styled text is sliced at render time), so computing them before
+          // the window's hscroll clamp is byte-identical to clamping first.
           const maxH = Math.max(0, this.cachedMaxLineWidth(file) - rowsW);
-          const rows = this.cachedComputeRows(marked, rowsW, this.viewWrap);
+          const plain = this.cachedPlainRows(file, rowsW, this.viewWrap);
           if (this.searchJump && this.searchMatches.length > 0) {
             const currentMatch = this.searchMatches[this.searchIndex];
-            const target = rows.findIndex((row) => row.line === currentMatch?.line);
+            const target = plain.findIndex((row) => row.line === currentMatch?.line);
             if (target >= 0) this.viewScroll = Math.max(0, target - Math.floor(contentArea / 2));
             this.searchJump = false;
           }
           viewerWin = viewerWindow({
             requestedScroll: this.viewScroll,
             requestedHscroll: this.viewHscroll,
-            total: rows.length,
+            total: plain.length,
             count: contentArea,
             maxHscroll: maxH,
             rowOffset: 1 + noticeRows,
@@ -1812,6 +1817,7 @@ export class NavigatorOverlay implements Focusable {
           this.viewScroll = viewerWin.viewScroll;
           this.viewHscroll = viewerWin.hscroll;
           this.viewerScrollWindow = viewerWin.scrollWindow;
+          const rows = this.markedWindow(file, plain, viewerWin.viewScroll, contentArea, rowsW, this.viewWrap);
           content = { kind: "display", rows };
         }
       } else {
@@ -1897,32 +1903,19 @@ export class NavigatorOverlay implements Focusable {
     }
   }
 
-  private markSearch(file: ViewerFile): ViewerFile {
-    if (!this.searchQuery || this.searchMatches.length === 0) return file;
-    // Cache the marked file: it only changes when the file content or the
-    // search version (matches / current index) changes.
-    if (this.markedCache && this.markedCache.file === file && this.markedCache.version === this.searchVersion) {
-      return this.markedCache.marked;
-    }
+  /**
+   * The current match's 0-based occurrence on its own line, so markMatches
+   * highlights the Nth occurrence rather than always the first (Issue #025).
+   * Cached per searchVersion (Issue #168).
+   */
+  private currentOccurrenceIndex(): number {
+    if (this.occurrenceCache?.version === this.searchVersion) return this.occurrenceCache.value;
     const currentMatch = this.searchMatches[Math.min(this.searchIndex, this.searchMatches.length - 1)];
-    const T = this.T;
-    const matchLines = this.searchMatchLines;
-    // Compute the per-line occurrence index of the current match so
-    // markMatches highlights the Nth occurrence on its line, not always
-    // the first (Issue #025).
-    const currentOccurrenceOnLine = currentMatch
-      ? this.searchMatches
-          .filter((m) => m.line === currentMatch.line && m.start < currentMatch.start)
-          .length
+    const value = currentMatch
+      ? this.searchMatches.filter((m) => m.line === currentMatch.line && m.start < currentMatch.start).length
       : -1;
-    const marked = file.lines.map((line, index) => {
-      if (!matchLines.has(index)) return line;
-      const occ = index === currentMatch?.line ? currentOccurrenceOnLine : -1;
-      return markMatches(line, this.searchQuery, T.searchMatch, T.searchCurrent, occ);
-    });
-    const result = { ...file, lines: marked };
-    this.markedCache = { file, version: this.searchVersion, marked: result };
-    return result;
+    this.occurrenceCache = { version: this.searchVersion, value };
+    return value;
   }
 
   private cachedMaxLineWidth(file: ViewerFile): number {
@@ -1936,7 +1929,9 @@ export class NavigatorOverlay implements Focusable {
    * The map's row texts for one width (Issue #165): the **unmarked** twin of
    * the body rows, memoised so the sketch can key on a stable array identity
    * (a fresh array per render would rebuild the sketch on every scroll).
-   * `file.lines` is the wrap-off source and is already stable per file.
+   * `file.lines` is the wrap-off source and is already stable per file. The
+   * wrapped source is the body's shared plain wrap (Issue #168), so the map
+   * never wraps the file a second time.
    */
   private minimapTexts(file: ViewerFile, width: number, renderMarkdown: boolean): string[] {
     const c = this.mapTextsCache;
@@ -1951,7 +1946,7 @@ export class NavigatorOverlay implements Focusable {
     }
     let texts: string[];
     if (renderMarkdown) texts = this.getRenderedMarkdownLines(file, width);
-    else if (this.viewWrap) texts = computeRows(file, width, true, 0).map((row) => row.text);
+    else if (this.viewWrap) texts = this.cachedPlainRows(file, width, true).map((row) => row.text);
     else texts = file.lines;
     this.mapTextsCache = { file, width, wrap: this.viewWrap, renderMarkdown, texts };
     return texts;
@@ -1990,25 +1985,77 @@ export class NavigatorOverlay implements Focusable {
     return sketch;
   }
 
-  private cachedComputeRows(
-    marked: ViewerFile,
-    width: number,
-    wrap: boolean,
-  ): DisplayRow[] {
-    const c = this.rowsCache;
-    if (c && c.marked === marked && c.width === width && c.wrap === wrap) return c.rows;
+  /**
+   * The unmarked wrap (Issue #168): one entry keyed on the stable `file`
+   * reference, width and wrap flag.
+   */
+  private cachedPlainRows(file: ViewerFile, width: number, wrap: boolean): DisplayRow[] {
+    const c = this.plainRowsCache;
+    if (c && c.file === file && c.width === width && c.wrap === wrap) return c.rows;
     let rows: DisplayRow[];
     if (wrap) {
-      rows = computeRows(marked, width, true, 0);
+      rows = computeRows(file, width, true, 0);
     } else {
       rows = [];
-      for (let i = 0; i < marked.lines.length; i++) {
-        const line = marked.lines[i];
+      for (let i = 0; i < file.lines.length; i++) {
+        const line = file.lines[i];
         if (line !== undefined) rows.push({ line: i, text: line });
       }
     }
-    this.rowsCache = { marked, width, wrap, rows };
+    this.plainRowsCache = { file, width, wrap, rows };
     return rows;
   }
 
+  /**
+   * The display rows to draw: the plain wrap with the rows visible in the
+   * window marked (Issue #168). Only the window's rows are marked — a
+   * keystroke never touches the rest of the file — while the returned array
+   * stays full-length so the pane's own windowing is unchanged. A whole
+   * source line is marked and split at the plain wrap's chunk boundaries, so
+   * a match spanning a boundary stays highlighted on both chunks.
+   */
+  private markedWindow(
+    file: ViewerFile,
+    plain: DisplayRow[],
+    start: number,
+    count: number,
+    width: number,
+    wrap: boolean,
+  ): DisplayRow[] {
+    if (!this.searchQuery || this.searchMatches.length === 0) return plain;
+    const rows = plain.slice();
+    const matchLines = this.searchMatchLines;
+    const currentMatch = this.searchMatches[Math.min(this.searchIndex, this.searchMatches.length - 1)];
+    const occurrence = this.currentOccurrenceIndex();
+    const end = Math.min(plain.length, start + Math.max(0, count));
+    let v = Math.max(0, start);
+    while (v < end) {
+      // A run is one source line: its first row and, when wrapped, its
+      // continuation rows. The run may start above the window, so walk back to
+      // find the chunk offset that maps a row to its marked chunk.
+      let runStart = v;
+      while (runStart > 0 && plain[runStart - 1]?.line === null) runStart -= 1;
+      const line = plain[runStart]?.line;
+      const marked =
+        line !== null && line !== undefined && matchLines.has(line)
+          ? markMatches(
+              file.lines[line] ?? "",
+              this.searchQuery,
+              this.T.searchMatch,
+              this.T.searchCurrent,
+              line === currentMatch?.line ? occurrence : -1,
+            )
+          : null;
+      const chunks = marked !== null && wrap ? wrapTextWithAnsi(marked, width) : null;
+      do {
+        const row = plain[v];
+        if (row !== undefined && marked !== null) {
+          const text = chunks ? (chunks[v - runStart] ?? row.text) : marked;
+          if (text !== row.text) rows[v] = { line: row.line, text };
+        }
+        v += 1;
+      } while (v < end && plain[v]?.line === null);
+    }
+    return rows;
+  }
 }
