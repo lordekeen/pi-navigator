@@ -1382,12 +1382,13 @@ export function makeImagePipeline(
     let failed: { renderer: ImageAttemptRenderer; reason: string } | null = null;
     for (const renderer of attempts) {
       try {
+        let out: { kind: "ok"; lines: string[] } | RendererFailure;
         if (renderer === "native") {
           if (support.nativeProtocol === null) {
             failed = { renderer, reason: "native rendering is not available" };
             continue;
           }
-          const out = await runNativeRender(absPath, geometry, {
+          out = await runNativeRender(absPath, geometry, {
             protocol: support.nativeProtocol,
             signal: ctx.signal,
             probeDecode: ctx.probeDecode,
@@ -1395,28 +1396,25 @@ export function makeImagePipeline(
             readBytes: ctx.readBytes,
             renderImage: ctx.renderImage,
           });
-          if (out.kind === "aborted") return { kind: "aborted" };
-          if (out.kind === "ok") {
-            return { kind: "ok", renderer, lines: out.lines, cols: geometry.cols, rows: geometry.rows };
-          }
-          failed = { renderer, reason: out.reason };
         } else {
           if (support.chafa.state !== "ok") {
             failed = { renderer, reason: "chafa is not available" };
             continue;
           }
-          const out = await runChafaRender(absPath, geometry, {
+          out = await runChafaRender(absPath, geometry, {
             binary: support.chafa.binary,
             config: support.config,
             signal: ctx.signal,
             exec: ctx.exec,
           });
-          if (out.kind === "aborted") return { kind: "aborted" };
-          if (out.kind === "ok") {
-            return { kind: "ok", renderer, lines: out.lines, cols: geometry.cols, rows: geometry.rows };
-          }
-          failed = { renderer, reason: out.reason };
         }
+        // One aborted/ok/failed mapping for every renderer (Issue #173):
+        // both resolve the same per-renderer outcome vocabulary.
+        if (out.kind === "aborted") return { kind: "aborted" };
+        if (out.kind === "ok") {
+          return { kind: "ok", renderer, lines: out.lines, cols: geometry.cols, rows: geometry.rows };
+        }
+        failed = { renderer, reason: out.reason };
       } catch (error) {
         return {
           kind: "failed",
