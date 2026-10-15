@@ -221,16 +221,16 @@ The tiers' design notes are local-only: `docs/specs/chafa-image-rendering.md` an
 
 ## Development
 
-Files: `index.ts` (entry, command routing, settings/env loading, session wiring), `session.ts` (the overlay's data lifecycle: poll/backoff, tree and git reads, viewer cache, image pipeline binding), `navigator.ts` (overlay component state, caches, input routing, render orchestration), `frame.ts` / `layout.ts` / `files_view.ts` / `git_view.ts` / `viewer_view.ts` / `help_view.ts` (extracted pure view-models — frame composition/assembly, overlay geometry, files rows, git rows, viewer pane, `?` modal), `tree.ts` (tree model, bounded fs walk/entry collection), `git.ts` (async git access and porcelain parsing), `viewer.ts` (load caps, highlighting, search, display rows, `hardTruncate`), `diff.ts` (v3 diff prefix styler + composer), `theme.ts` (token mapping), `types.ts`, `constants.ts`, `env.ts` (shared env truth table), `icons.ts` (Nerd Font glyph map + icon-mode parsing), `settings.ts` (pi-navigator settings terrain), `settings_menu.ts` (`/navigator settings` menu, rendered in the editor area above the input), `help.ts` (the one keybinding table + `/navigator help` entry layout), `images.ts` (pi-chafa detection, chafa probe/sanitize/geometry, native capability ladder + bounded pi-tui native renderer).
+Files: `index.ts` (entry, command routing, settings/env loading, session wiring), `session.ts` (the overlay's data lifecycle: poll/backoff, tree and git reads, viewer cache, image pipeline binding), `navigator.ts` (overlay component state, caches, input routing, render orchestration), `frame.ts` / `layout.ts` / `files_view.ts` / `git_view.ts` / `viewer_view.ts` / `help_view.ts` / `minimap_view.ts` (extracted pure view-models — frame composition/assembly, overlay geometry, files rows, git rows, viewer pane, `?` modal, the viewer minimap engine), `tree.ts` (tree model, bounded fs walk/entry collection), `git.ts` (async git access and porcelain parsing), `viewer.ts` (load caps, highlighting, search, display rows, `hardTruncate`), `diff.ts` (v3 diff prefix styler + composer), `theme.ts` (token mapping), `types.ts`, `constants.ts`, `env.ts` (shared env truth table), `icons.ts` (Nerd Font glyph map + icon-mode parsing), `settings.ts` (pi-navigator settings terrain), `settings_menu.ts` (`/navigator settings` menu, rendered in the editor area above the input), `help.ts` (the one keybinding table + `/navigator help` entry layout), `images.ts` (pi-chafa detection, chafa probe/sanitize/geometry, native capability ladder + bounded pi-tui native renderer).
 
 Planning documents and specs live in the local-only `docs/` tree (gitignored, never published) — `docs/plans/` (`ui-standards-report.md`, the superseded `pi-navigator-implementation-plan.md`, `qa-evidence.md`) and `docs/specs/`; the issue tracker lives on GitHub ([lordekeen/pi-navigator/issues](https://github.com/lordekeen/pi-navigator/issues)), where the local `docs/issues/` tracker was migrated. The throwaway visual mock is `mockups/navigator.html` (also local-only) — open it in a browser and drive it with the same keymap.
 
 ### Tooling (enabled — Linux, Node 26, git 2.56)
 
 Dev-only: `typescript`, `@types/node`, `vitest`, and `@earendil-works/pi-tui` +
-`@earendil-works/pi-coding-agent` at `^1.0.3`, tracking the host pi 1.0.3
-(Issue #157), so the suites exercise the real wrap/width/highlighting
-implementations. No runtime dependencies, ever — `node_modules` is dev-only.
+`@earendil-works/pi-coding-agent` at `^1.2.0`, tracking the host pi 1.2.0
+(Issues #157, #163 — see AGENTS.md for the drift history), so the suites
+exercise the real wrap/width/highlighting implementations. No runtime dependencies, ever — `node_modules` is dev-only.
 
 - `npm run typecheck` — `tsc --noEmit`. `moduleResolution: "bundler"` rather
   than the plan's original "NodeNext" because pi loads extensions through jiti,
@@ -248,7 +248,9 @@ implementations. No runtime dependencies, ever — `node_modules` is dev-only.
   (frame geometry, files/git row builders, viewer pane, `?` modal) plus the diff
   styler, theme token map and shared env parser, the notify-once factory, the session
   lifecycle (poll cadence/backoff, tree stamping, viewer-cache and abort ownership),
-  and render width-safety at 120x36, 100x28 and 80x24 — plus 60/50-column,
+  the minimap engine (Bresenham folding, the viewport band, braille/bars, the
+  diff mirror and the syntax-colour vote), and render width-safety at 120x36,
+  100x28, 80x24 and 44x20 — plus 60/50-column,
   settings-menu, chafa and native payload cases — including help/filter/search
   modes and the compact notice.
 

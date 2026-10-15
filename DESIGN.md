@@ -139,6 +139,15 @@ components:
     textColor: "{colors.accent}"
   card-body:
     textColor: "{colors.muted}"
+  # Viewer minimap (Issue #165): art in the scrollbar-thumb tone by default
+  # (or each row's captured syntax colour), a frame-tone divider, and the
+  # viewport band on the selection background. Illustrative defaults only.
+  viewer-minimap-divider:
+    textColor: "{colors.frame}"
+  viewer-minimap-art:
+    textColor: "{colors.muted}"
+  viewer-minimap-band:
+    backgroundColor: "{colors.selected-bg}"
 ---
 
 ## Overview
@@ -149,7 +158,7 @@ The visual identity follows the host **pi theme** (see `theme.ts`): no colors ar
 
 ## Colors
 
-All color is **semantic and theme-delegated**. The overlay calls `NavigatorTheme` methods (`T.accent`, `T.muted`, `T.dim`, `T.warning`, `T.success`, `T.error`, `T.text`, `T.bold`, `T.selectedBg`, `T.searchMatch`, `T.searchCurrent`, `T.frame`, `T.scrollbarTrack`, `T.scrollbarThumb`, `T.diffAdded`, `T.diffRemoved`, `T.diffContext`) which map onto the active pi `Theme`'s `fg`/`bg` tokens — `frame` onto the host's `borderMuted` role, and the diff trio onto its own `toolDiff*` roles (Issue #135 L6/L7). The hex values in the front matter are illustrative defaults for preview rendering only.
+All color is **semantic and theme-delegated**. The overlay calls `NavigatorTheme` methods (`T.accent`, `T.muted`, `T.dim`, `T.warning`, `T.success`, `T.error`, `T.text`, `T.bold`, `T.selectedBg`, `T.searchMatch`, `T.searchCurrent`, `T.frame`, `T.scrollbarTrack`, `T.scrollbarThumb`, `T.diffAdded`, `T.diffRemoved`, `T.diffContext`, `T.syntax`) which map onto the active pi `Theme`'s `fg`/`bg` tokens — `frame` onto the host's `borderMuted` role, and the diff trio onto its own `toolDiff*` roles (Issue #135 L6/L7). The hex values in the front matter are illustrative defaults for preview rendering only.
 
 - **accent (`#7AA2F7` default)** — primary interaction signal: the open file's row, the pane header for the focused pane, branch name, help-modal title, and the active footer pane label.
 - **muted (`#6C7278` default)** — secondary text: footer hint labels, the title-row path, the unfocused viewer header path, card body text, help descriptions, commit hashes, plain directory names, secondary path segments.
@@ -160,6 +169,7 @@ All color is **semantic and theme-delegated**. The overlay calls `NavigatorTheme
 - **text (`#C0CAF5` default)** — default file-row label, neutral selected-row text, git commit subjects (the row's primary content, with the short hash staying `muted` as secondary metadata — Issue #135 L5).
 - **selected-bg (`#2A2E3A` default)** — cursor row background (reverse-video equivalent).
 - **search-match-bg / search-match-text** — in-file search hit highlight; the current match additionally gets underline.
+- **syntax** — not a role but a pass-through: `T.syntax(code, text)` re-emits a foreground the overlay *captured from the theme's own output* (the viewer's highlighted rows), with a foreground-only reset so an enclosing background survives. It exists so the minimap's `syntax` palette can colour a row with the code's real colour while the "no hardcoded colors" rule stays literally true (Issue #165, § The minimap).
 
 An agent adding a new surface should reuse the closest semantic role (e.g. a new "notice" → `warning`; a new badge → match the existing git badge palette) rather than introducing a new token.
 
@@ -194,7 +204,7 @@ The overlay is a centered box bounded by `OVERLAY_OPTIONS` (width 90%, min 80, m
 1. **Top border** — `╭─╮` with the product name in an accent-bold pill (`╭── pi-navigator ──…╮`, Issue #137 §2)
 2. **Subtitle row** — cwd short path (left) · branch + ahead/behind + changed counters (right); the product name lives in the top-border pill
 3. **Separator** — `├─┤`
-4. **Body** (`overlayHeight - 5` rows) — in the default `files-git-viewer` layout, split into a left column (files + git, ~30% clamped 24–44) and a right column (viewer); the single-pane layouts (`files-viewer`, `git-viewer`) hand the left column one pane at full height (Issue #119). Below `LEFT_COLUMN_HIDE_BELOW` (72 inner cols) the left column is hidden and the viewer takes the full width.
+4. **Body** (`overlayHeight - 5` rows, floored at 4) — in the default `files-git-viewer` layout, split into a left column (files + git, ~30% clamped 24–44) and a right column (viewer); the single-pane layouts (`files-viewer`, `git-viewer`) hand the left column one pane at full height (Issue #119). Below `LEFT_COLUMN_HIDE_BELOW` (72 inner cols) the left column is hidden and the viewer takes the full width.
 5. **Footer** — context hint (left) as typed key/label pairs (`dim` keys, `muted` labels, ` · `-joined; the close pair advertises the default cancel key, `q Esc close`) · the layout's pane labels with the focused one accented (right) — `files git viewer` in the default layout, derived from `visiblePanes` (Issue #137 §1/§5)
 
 **Spacing** is cell-granular: `xs` (1px) for inline glyph separation, `sm` (2px) for the gutter/border gap, `md` (4px) for inter-pane separators. There is no large whitespace padding — density is the point. Below `MIN_OVERLAY_WIDTH` (40) or `MIN_OVERLAY_HEIGHT` (13) a compact "terminal too small" notice replaces the frame.
@@ -225,7 +235,10 @@ Corners are rounded on every bordered surface — `╭ ╮ ╰ ╯`, the only cu
 - **viewer-notice** — truncation / changed-on-disk banner, warning.
 - **diff-line-*** (v3) — commit-diff lines via the prefix styler (`styleDiffLines` in `diff.ts`): `+` diffAdded (`toolDiffAdded`), `-` diffRemoved, context diffContext; `@@` accent, meta muted. The diff summary notice above the content is **dim** (informational), not warning.
 - **search-match / search-current** — in-file hit highlights; current match adds underline.
-- **viewer-scrollbar** — the frame's right border column over the viewer's content rows: track `│` on `scrollbarTrack`, proportional thumb `█` on `scrollbarThumb`; overflow-only, display-only (Issue #137 §4).
+- **viewer-scrollbar** — the frame's right border column over the viewer's content rows: track `│` on `scrollbarTrack`, proportional thumb `█` on `scrollbarThumb`; overflow-only, display-only (Issue #137 §4). **Suppressed while the minimap is visible** — the band is the viewer's position cue then, and the two must not drift apart (Issue #165); the thumb returns whenever the map is off or auto-hidden.
+- **viewer-minimap** — the map's glyph column on the body rows (Issue #165): braille or positioned bars, one glyph cell per map row, in `scrollbarThumb` for the `mono` palette or the row's captured syntax colour via `T.syntax` for the `syntax` palette; diff files mirror `styleDiffLines`' prefix rules. Carved from the pane's right edge, `viewer.minimapWidth` columns wide.
+- **viewer-minimap-divider** — one `│` in `frame` between the content and the map, the same separator the viewer gutter draws; carved with the map, so the content is narrower by `viewer.minimapWidth + 1` while the map shows.
+- **viewer-minimap-band** — the map rows covering the current viewport, on `selectedBg`; recomputed per render from the same clamped window the body rows were drawn at, so it cannot disagree with the content beside it.
 - **help-modal-title / -keys / -desc** — accented title, accented key cell (width = longest key string + 1, Issue #132), muted description.
 - **card-title-binary / -error / -image** — card titles by kind; card-body is muted.
 
