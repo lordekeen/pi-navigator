@@ -519,12 +519,10 @@ export async function readCommitDiff(cwd: string, shortHash: string): Promise<Co
   // more than the viewer caps (same boundedness as loadFile).
   let body = bodyRes.status === "ok" ? bodyRes.stdout : "";
   let truncated = false;
-  // A binary diff body would render as garbage (control bytes); degrade to a
-  // notice instead (Issue #024 spirit).
-  if (body.includes("\0")) {
-    body = "";
-    truncated = false;
-  }
+  // A binary diff body would render as garbage (control bytes); emit a notice
+  // instead of an unexplained empty body (Issue #187; Issue #024 spirit).
+  const binary = body.includes("\0");
+  if (binary) body = "";
 
   body = body.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   // Byte-true cap (Issue #060 finding 5): `body.length` counts UTF-16 code
@@ -537,24 +535,29 @@ export async function readCommitDiff(cwd: string, shortHash: string): Promise<Co
   }
 
   let lines = body.split("\n");
-  if (lines.length > MAX_HIGHLIGHT_LINES) {
-    lines = lines.slice(0, MAX_HIGHLIGHT_LINES);
-    truncated = true;
-  }
   if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
 
-  // A message capped on BYTES or a body capped on LINES sets the flags
-  // above; extend the cap to the message LINE count too so the combined
-  // viewer array stays bounded by the same MAX_HIGHLIGHT_LINES budget.
+  // The composed array `composeDiffLines` builds is what MAX_HIGHLIGHT_LINES
+  // bounds: subject + message body + separator + diff body. Cap the message
+  // first, then the diff body to what remains (Issue #187 — capping each
+  // source independently allowed roughly twice the budget).
   if (commitMessage.body.length + 1 > MAX_HIGHLIGHT_LINES) {
     commitMessage.body = commitMessage.body.slice(0, MAX_HIGHLIGHT_LINES - 1);
     messageTruncated = true;
+  }
+  const messageLines = (commitMessage.subject === "" ? 0 : 1) + commitMessage.body.length;
+  const separator = messageLines > 0 && lines.length > 0 ? 1 : 0;
+  const bodyBudget = Math.max(0, MAX_HIGHLIGHT_LINES - messageLines - separator);
+  if (lines.length > bodyBudget) {
+    lines = lines.slice(0, bodyBudget);
+    truncated = true;
   }
 
   const filesLabel =
     filesChanged === 1 ? "1 file" : filesChanged === 0 ? "no files" : `${filesChanged} files`;
   let notice = `commit ${shortHash} \u00b7 ${filesLabel} \u00b7 +${insertions} \u2212${deletions}`;
   if (truncated || messageTruncated) notice += ` \u00b7 diff truncated (showing the head)`;
+  if (binary) notice += ` \u00b7 binary diff (not shown)`;
   return {
     shortHash,
     parents,

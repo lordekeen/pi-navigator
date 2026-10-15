@@ -13,7 +13,7 @@ import { promisify } from "node:util";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { MAX_HIGHLIGHT_BYTES } from "../constants";
+import { MAX_HIGHLIGHT_BYTES, MAX_HIGHLIGHT_LINES } from "../constants";
 import {
   detectRepo,
   gitCodeMap,
@@ -825,6 +825,72 @@ describe("git integration on a scratch repository", () => {
     const diff = await readCommitDiff(repo, state.history[0]!.shortHash);
     expect(diff.lines.length).toBeLessThanOrEqual(5000);
     expect(diff.notice).toContain("diff truncated");
+  });
+
+  it("shows a binary notice instead of an unexplained empty body (Issue #187)", async () => {
+    const spy = vi.spyOn(gitRunner, "execFile").mockImplementation((...args: any[]) => {
+      const gitArgs = args[1] as string[];
+      const cb = args[args.length - 1];
+      if (
+        gitArgs &&
+        gitArgs.includes("show") &&
+        gitArgs.includes("--first-parent") &&
+        !gitArgs.includes("--numstat")
+      ) {
+        cb(null, "diff --git a/logo.png b/logo.png\n\u0000binary junk\n", "");
+        return {} as any;
+      }
+      return childProcess.execFile(args[0], args[1], args[2], args[3]);
+    });
+    try {
+      await writeFile(join(repo, "base.txt"), "hello\n");
+      await commit(repo, "binary body");
+      const state = await readGitState(repo);
+      const diff = await readCommitDiff(repo, state.history[0]!.shortHash);
+      // The binary body is dropped, but the notice explains why.
+      expect(diff.lines).toEqual([]);
+      expect(diff.notice).toContain("binary diff (not shown)");
+      expect(diff.notice).not.toContain("truncated");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("bounds the composed message + diff array by MAX_HIGHLIGHT_LINES (Issue #187)", async () => {
+    const messageBody = Array.from({ length: 4000 }, () => "subject line").join("\n");
+    const diffBody = Array.from({ length: 4000 }, (_, i) => `+${i}`).join("\n");
+    const spy = vi.spyOn(gitRunner, "execFile").mockImplementation((...args: any[]) => {
+      const gitArgs = args[1] as string[];
+      const cb = args[args.length - 1];
+      if (gitArgs && gitArgs.includes("--pretty=format:%B")) {
+        cb(null, `${messageBody}\n`, "");
+        return {} as any;
+      }
+      if (
+        gitArgs &&
+        gitArgs.includes("show") &&
+        gitArgs.includes("--first-parent") &&
+        !gitArgs.includes("--numstat")
+      ) {
+        cb(null, `${diffBody}\n`, "");
+        return {} as any;
+      }
+      return childProcess.execFile(args[0], args[1], args[2], args[3]);
+    });
+    try {
+      await writeFile(join(repo, "base.txt"), "hello\n");
+      await commit(repo, "budget");
+      const state = await readGitState(repo);
+      const diff = await readCommitDiff(repo, state.history[0]!.shortHash);
+      // What composeDiffLines builds: subject + message body + separator + diff.
+      const subject = diff.message.subject === "" ? 0 : 1;
+      const separator = diff.message.body.length > 0 && diff.lines.length > 0 ? 1 : 0;
+      const composed = subject + diff.message.body.length + separator + diff.lines.length;
+      expect(composed).toBeLessThanOrEqual(MAX_HIGHLIGHT_LINES);
+      expect(diff.notice).toContain("diff truncated");
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("never throws on a bogus hash and degrades cleanly (v3)", async () => {
