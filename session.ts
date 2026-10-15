@@ -602,8 +602,11 @@ export function createSession(deps: SessionDeps): NavigatorSession {
       }
       // Retention/eviction policy lives in createViewerCache (#109, #112,
       // D7): cacheable gate, mtime requirement, native over-cap carve-out,
-      // and LRU eviction at capacity.
-      viewerCache.store(relPath, { cacheable, variant, file });
+      // and LRU eviction at capacity. Issue #184: a superseded load resolves
+      // to the failure-free card, which must not enter the cache — the overlay
+      // discards the result, but the entry would serve that card on a later
+      // reopen at the same mtime + variant.
+      if (!loadAbort.signal.aborted) viewerCache.store(relPath, { cacheable, variant, file });
       return file;
     } finally {
       if (inFlightImageTarget === inFlightTarget) inFlightImageTarget = null;

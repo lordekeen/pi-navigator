@@ -984,6 +984,54 @@ describe("createSession: viewer cache (Issue #020)", () => {
     expect(loadFile.mock.calls[1]?.[2]).toBeUndefined();
   });
 
+  it("does not retain a superseded image load's failure-free card (Issue #184)", async () => {
+    const path = join(dir, "img.png");
+    await writeFile(path, "png-bytes");
+    ctl.support = "chafa";
+
+    // Load A parks inside the loader and later resolves to the aborted
+    // (supersession) card; load B supersedes it and leaves no entry of its
+    // own (an error card has no mtime). Only A could poison the cache.
+    let releaseA!: () => void;
+    const gateA = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    let calls = 0;
+    const loadFile = vi.fn<LoadFn>(async (absPath, relPath) => {
+      calls += 1;
+      if (calls === 1) {
+        await gateA;
+        return {
+          kind: "image",
+          relPath,
+          lines: [],
+          sizeBytes: 16,
+          mtimeMs: (await stat(absPath)).mtimeMs,
+          imageVerdict: { kind: "card" },
+        };
+      }
+      return { kind: "error", relPath, lines: [], message: "superseded" };
+    });
+    const { session, sink } = makeSession({ loadFile });
+    session.refresh();
+    await vi.waitFor(() =>
+      expect(sink.setImageSupport).toHaveBeenCalledWith(expect.objectContaining({ tier: "chafa" })),
+    );
+
+    const a = session.loadFile("img.png", { image: IMAGE_REQ });
+    await vi.waitFor(() => expect(calls).toBe(1)); // A parked inside the loader
+    const b = session.loadFile("img.png", { image: IMAGE_REQ }); // aborts A
+    await b;
+    releaseA();
+    await a; // A's card resolves after the supersession
+
+    // Same mtime + variant: a retained card would be served here, hiding the
+    // reopened render.
+    await session.loadFile("img.png", { image: IMAGE_REQ });
+    expect(calls).toBe(3);
+    session.dispose();
+  });
+
   it("restyles a hit under a new style key without re-reading; a matching key is a no-op", async () => {
     const path = join(dir, "w.txt");
     await writeFile(path, "x\ny");
