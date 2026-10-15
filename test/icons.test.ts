@@ -76,6 +76,17 @@ describe("mapExtensionToIcon", () => {
     expect(mapExtensionToIcon(".env", false)).toBe(GENERIC_ICON);
   });
 
+  it("never resolves an Object.prototype member as a glyph (Issue #190)", () => {
+    // Plain object maps inherit `constructor` / `__proto__`; a file literally
+    // named so (or `x.constructor`) must get the generic glyph, not a
+    // function or prototype object.
+    expect(mapExtensionToIcon("constructor", false)).toBe(GENERIC_ICON);
+    expect(mapExtensionToIcon("__proto__", false)).toBe(GENERIC_ICON);
+    expect(mapExtensionToIcon("x.constructor", false)).toBe(GENERIC_ICON);
+    expect(mapExtensionToIcon("x.__proto__", false)).toBe(GENERIC_ICON);
+    expect(mapExtensionToIcon("nested/tostring", false)).toBe(GENERIC_ICON);
+  });
+
   it("does not impersonate another language's glyph for unmapped languages (Issue #031)", () => {
     // `sol` (Solidity) previously mapped to the TypeScript codepoint by
     // copy-paste; unmapped languages must fall back to the generic glyph

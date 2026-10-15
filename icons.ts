@@ -117,6 +117,15 @@ export const ICON_GLYPHS: readonly string[] = [
 ];
 
 /**
+ * Own-property lookup for the glyph maps (Issue #190): a plain object literal
+ * inherits `Object.prototype`, so a file named `constructor` or `__proto__`
+ * would resolve to a function/object instead of a glyph.
+ */
+function ownGlyph(map: Record<string, string>, key: string): string | undefined {
+  return Object.hasOwn(map, key) ? map[key] : undefined;
+}
+
+/**
  * Resolve the Nerd Font glyph for a tree entry. Directories always get the
  * folder glyph; exact filenames match first, then extension with a generic fallback.
  */
@@ -124,12 +133,12 @@ export function mapExtensionToIcon(relPath: string, isDir: boolean): string {
   if (isDir) return DIR_ICON;
   const slash = relPath.lastIndexOf("/");
   const basename = (slash >= 0 ? relPath.slice(slash + 1) : relPath).toLowerCase();
-  const fileIcon = FILENAME_ICONS[basename];
-  if (fileIcon) return fileIcon;
+  const fileIcon = ownGlyph(FILENAME_ICONS, basename);
+  if (fileIcon !== undefined) return fileIcon;
   const dot = basename.lastIndexOf(".");
   if (dot <= 0) return GENERIC_ICON;
   const ext = basename.slice(dot + 1);
-  return EXT_ICONS[ext] ?? GENERIC_ICON;
+  return ownGlyph(EXT_ICONS, ext) ?? GENERIC_ICON;
 }
 
 /**
