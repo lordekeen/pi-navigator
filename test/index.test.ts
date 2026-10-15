@@ -18,6 +18,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   getCapabilities,
+  getImageDimensions,
   KeybindingsManager,
   resetCapabilitiesCache,
   setCapabilities,
@@ -25,7 +26,7 @@ import {
 } from "@earendil-works/pi-tui";
 
 import { IMAGE_NATIVE_CACHE_MAX_CHARS, MAX_FS_ENTRIES } from "../constants";
-import { DEFAULT_PI_CHAFA_SUBSET, KITTY_PROBE_SAMPLE, makeImagePipeline, type ImageSupport, type KittyProbeVerdict } from "../images";
+import { buildKittyProbeQuery, makeDeferredImageSupport, makeImagePipeline, type ImageSupport, type KittyProbeVerdict } from "../images";
 import { NAVIGATOR_CONFIG_FIELDS, serializeNavigatorSettings, type NavigatorSettings } from "../settings";
 import type { ViewerFile } from "../types";
 import { loadFile } from "../viewer";
@@ -47,6 +48,19 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
   return { ...actual, getAgentDir: () => agentDir.dir };
 });
+
+/**
+ * The 1×1 PNG payload the kitty probe query carries (the production sample,
+ * Issue #180): tests derive it from `buildKittyProbeQuery` instead of
+ * importing the internalized base64 constant.
+ */
+function probeSampleBase64(): string {
+  const match =
+    /^\x1b_Ga=q,t=d,f=100,i=\d+;([A-Za-z0-9+/=]+)\x1b\\$/.exec(
+      buildKittyProbeQuery(1),
+    );
+  return match?.[1] ?? "";
+}
 
 function fakeUi() {
   const notify = vi.fn();
@@ -574,11 +588,11 @@ describe("makeTuiKittyDecodeProbe (Issue #101, #116)", () => {
     const probe = makeTuiKittyDecodeProbe(tui);
     const pending = probe();
     expect(writes).toHaveLength(1);
-    expect(writes[0]).toContain("a=q,t=d,f=100");
-    // Issue #116: always sends the PNG sample, never JPEG/WebP
-    expect(writes[0]).toContain(KITTY_PROBE_SAMPLE);
     const id = /i=(\d+)/.exec(writes[0] ?? "")?.[1];
     expect(id).toBeDefined();
+    // Issue #116: the written query is exactly the production builder's —
+    // a=q,t=d,f=100 plus the 1×1 PNG sample, never JPEG/WebP.
+    expect(writes[0]).toBe(buildKittyProbeQuery(Number(id)));
     const result = emit(`\x1b_Gi=${id};OK\x1b\\`);
     expect(result).toEqual({ consume: true });
     await expect(pending).resolves.toBe("ok");
@@ -588,10 +602,11 @@ describe("makeTuiKittyDecodeProbe (Issue #101, #116)", () => {
     const { tui, writes, emit } = fakeTui();
     const probe = makeTuiKittyDecodeProbe(tui);
     const pending = probe();
-    // Issue #116: always PNG sample — the old per-MIME JPEG/WebP probe was the
-    // root cause of the decode error because f=100 means PNG in the kitty spec.
-    expect(writes[0]).toContain(KITTY_PROBE_SAMPLE);
+    // Issue #116: the query is exactly the production builder's — always the
+    // PNG sample; the old per-MIME JPEG/WebP probe was the root cause of the
+    // decode error because f=100 means PNG in the kitty spec.
     const id = /i=(\d+)/.exec(writes[0] ?? "")?.[1];
+    expect(writes[0]).toBe(buildKittyProbeQuery(Number(id)));
     emit(`\x1b_Gi=${id};bad image\x1b\\`);
     await expect(pending).resolves.toBe("error");
   });
@@ -600,8 +615,8 @@ describe("makeTuiKittyDecodeProbe (Issue #101, #116)", () => {
     const { tui, writes, emit } = fakeTui();
     const probe = makeTuiKittyDecodeProbe(tui);
     const pending = probe();
-    expect(writes[0]).toContain(KITTY_PROBE_SAMPLE);
     const id = /i=(\d+)/.exec(writes[0] ?? "")?.[1];
+    expect(writes[0]).toBe(buildKittyProbeQuery(Number(id)));
     expect(emit("some user keystrokes")).toBeUndefined();
     expect(emit(`\x1b_Gi=${id};O`)).toBeUndefined(); // partial: never consumed
     expect(emit("K\x1b\\")).toEqual({ consume: true });
@@ -869,7 +884,7 @@ describe("makeImagePipeline (Issues #116/#144)", () => {
       tier: "native",
       piChafa: { present: true, via: "settings" },
       chafa: { state: "ok", binary: "chafa", version: { major: 1, minor: 18 } },
-      config: { ...DEFAULT_PI_CHAFA_SUBSET },
+      config: { ...makeDeferredImageSupport("auto").config },
       hostShowImages: true,
       hostImageWidthCells: 60,
       ...overrides,
@@ -906,7 +921,11 @@ describe("makeImagePipeline (Issues #116/#144)", () => {
     const saved = getCapabilities();
     try {
       const png = join(dir, "pixel.png");
-      writeFileSync(png, Buffer.from(KITTY_PROBE_SAMPLE, "base64"));
+      // The probe sample is a real 1×1 PNG; the fixture is derived from the
+      // production query and verified before it lands on disk (Issue #180).
+      const sample = probeSampleBase64();
+      expect(getImageDimensions(sample, "image/png")?.widthPx).toBe(1);
+      writeFileSync(png, Buffer.from(sample, "base64"));
       setCapabilities({ ...saved, images: "kitty" });
 
       // Per-load abort ownership, mirroring index.ts beginImageLoad: each load

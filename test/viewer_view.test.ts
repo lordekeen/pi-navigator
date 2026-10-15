@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 
-import { DEFAULT_PI_CHAFA_SUBSET, type ImageSupport } from "../images";
+import { makeDeferredImageSupport, type ImageSupport } from "../images";
 import { makeNavigatorTheme } from "../theme";
 import type { DisplayRow } from "../viewer";
 import { computeRows } from "../viewer";
@@ -65,7 +65,7 @@ function activeSupport(overrides: Partial<ImageSupport> = {}): ImageSupport {
     tier: "chafa",
     piChafa: { present: true, via: "settings" },
     chafa: { state: "ok", binary: "chafa", version: { major: 1, minor: 18 } },
-    config: { ...DEFAULT_PI_CHAFA_SUBSET },
+    config: { ...makeDeferredImageSupport("chafa").config },
     hostShowImages: true,
     hostImageWidthCells: 60,
     ...overrides,

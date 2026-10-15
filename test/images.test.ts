@@ -3,6 +3,13 @@
  * probe, render args/sanitizer, geometry, host settings, and the aggregate
  * support resolution. Every test injects readText/exec — no real $HOME, no
  * real chafa, no real settings files.
+ *
+ * The suite drives the production surface only (Issue #180): the config
+ * mirror, chafa probe, host settings and the native ladder are asserted
+ * through `resolveImageSupport`'s snapshot; the chafa renderer (argv,
+ * timeout, sanitizer, failure mapping) through `makeImagePipeline` with an
+ * injected exec; the native renderer through the pipeline's readBytes /
+ * convertToPng / renderImage seams. No internalized symbol is imported.
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,27 +24,16 @@ import {
 
 import { IMAGE_NATIVE_MAX_BYTES } from "../constants";
 import {
-  DEFAULT_PI_CHAFA_SUBSET,
-  buildSymbolsArgs,
+  NATIVE_PROTOCOL_RULES,
   buildKittyProbeQuery,
   consumeKittyProbeReply,
   createKittyProbeState,
   detectPiChafa,
   isNativelyRenderable,
-  KITTY_PROBE_SAMPLE,
-  loadPiChafaConfig,
   makeDeferredImageSupport,
   makeImagePipeline,
-  NATIVE_PROTOCOL_RULES,
-  planImageLoad,
-  probeChafa,
-  readHostImageSettings,
   resolveChafaGeometry,
   resolveImageSupport,
-  resolveNativeProtocol,
-  runChafaRender,
-  runNativeRender,
-  sanitizeChafaPayload,
 } from "../images";
 import type { ExecFn, ImageSupport, KittyProbeVerdict, PiChafaApi, ReadText } from "../images";
 
@@ -56,11 +52,112 @@ const failProbeExec: ExecFn = async () => {
   throw error;
 };
 
-describe("loadPiChafaConfig", () => {
+/**
+ * Expected default pi-chafa subset (spec §3.1), pinned as a literal: the
+ * internal constant is not exported, so the defaults stay asserted by an
+ * independent expected value.
+ */
+const DEFAULT_CONFIG: ImageSupport["config"] = {
+  version: 1,
+  binaryPath: null,
+  cellWidth: 60,
+  maxRows: 50,
+  colors: "240",
+  symbolsSet: "block+border",
+  dither: "none",
+  timeoutMs: 8000,
+  preferNative: true,
+};
+
+/** A resolved auto-mode snapshot; overrides narrow it per case. */
+function support(overrides: Partial<ImageSupport> = {}): ImageSupport {
+  return {
+    mode: "auto",
+    nativeProtocol: "kitty",
+    tier: "native",
+    piChafa: { present: true, via: "settings" },
+    chafa: { state: "ok", binary: "chafa", version: { major: 1, minor: 18 } },
+    config: { ...DEFAULT_CONFIG },
+    hostShowImages: true,
+    hostImageWidthCells: 60,
+    ...overrides,
+  };
+}
+
+/** Strict-chafa snapshot: the pipeline's single attempt for the chafa suites. */
+function chafaSupport(overrides: Partial<ImageSupport> = {}): ImageSupport {
+  return support({
+    mode: "chafa",
+    nativeProtocol: null,
+    tier: "chafa",
+    ...overrides,
+  });
+}
+
+/** Strict-native snapshot: the pipeline's single attempt for the native suites. */
+function nativeSupport(overrides: Partial<ImageSupport> = {}): ImageSupport {
+  return support({
+    mode: "native",
+    chafa: { state: "deferred" },
+    ...overrides,
+  });
+}
+
+const neverProbe = async (): Promise<KittyProbeVerdict> => "no-reply";
+const liveSignal = new AbortController().signal;
+
+/** Real 1×1 PNG bytes (a standalone fixture pi-tui's own sniffers decode). */
+const PNG_1X1_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+type ReadBytes = (path: string) => Promise<Uint8Array>;
+
+/** readBytes seam seeded with real bytes for a base64 fixture. */
+const readBytesOf = (base64: string) =>
+  vi.fn<ReadBytes>(async () => new Uint8Array(Buffer.from(base64, "base64")));
+
+/** async readBytes seam over the 1×1 PNG fixture. */
+const pngBytes = async (): Promise<Uint8Array> =>
+  new Uint8Array(Buffer.from(PNG_1X1_BASE64, "base64"));
+
+/** The 1×1 PNG payload the kitty probe query carries (the production sample). */
+function probeSampleBase64(): string {
+  const match =
+    /^\x1b_Ga=q,t=d,f=100,i=\d+;([A-Za-z0-9+/=]+)\x1b\\$/.exec(
+      buildKittyProbeQuery(1),
+    );
+  expect(match).not.toBeNull();
+  return match?.[1] ?? "";
+}
+
+/** pi-tui encoder stand-in (no capability mutation needed). */
+const encoder = (sequence = "SEQ") =>
+  vi.fn(() => ({ sequence, columns: 7, rows: 3 }));
+
+/** A chafa exec stand-in returning a fixed stdout payload. */
+const stdoutExec = (stdout: string) =>
+  vi.fn<ExecFn>(async () => ({ stdout, stderr: "" }));
+
+/** A chafa exec stand-in producing one row per entry. */
+const chafaExec = (rows: string[] = ["\x1b[31m██\x1b[0m"]) =>
+  stdoutExec(rows.join("\n"));
+
+describe("pi-chafa config mirror through resolveImageSupport (spec §3.1)", () => {
   const agentDir = "/home/user/.pi/agent";
   const configPath = `${agentDir}/pi-chafa.json`;
+  const paths = {
+    userSettings: "/home/user/.pi/agent/settings.json",
+    projectSettings: "/cwd/.pi/settings.json",
+    agentDir,
+  };
+  const noTools: PiChafaApi = { getAllTools: () => [], getCommands: () => [] };
+  const resolve = (deps: {
+    env?: Record<string, string | undefined>;
+    readText: ReadText;
+  }) =>
+    resolveImageSupport(noTools, paths, { images: { mode: "chafa" } }, deps);
 
-  it("reads the fixture file and applies the full CHAFA_* env precedence table over it", () => {
+  it("reads the fixture file and applies the full CHAFA_* env precedence table over it", async () => {
     const readText = readTextOf({
       [configPath]: JSON.stringify({
         version: 1,
@@ -73,22 +170,20 @@ describe("loadPiChafaConfig", () => {
         binaryPath: "/usr/bin/chafa",
       }),
     });
-    expect(
-      loadPiChafaConfig({
-        agentDir,
-        env: {
-          CHAFA_BIN: "/opt/chafa",
-          CHAFA_CELL_WIDTH: "70",
-          CHAFA_MAX_ROWS: "45",
-          CHAFA_COLORS: "256",
-          CHAFA_SYMBOLS: "ascii",
-          CHAFA_DITHER: "diffusion",
-          CHAFA_TIMEOUT_MS: "12000",
-        },
-        readText,
-      }),
-    ).toEqual({
-      version: 1,
+    const { config } = await resolve({
+      env: {
+        CHAFA_BIN: "/opt/chafa",
+        CHAFA_CELL_WIDTH: "70",
+        CHAFA_MAX_ROWS: "45",
+        CHAFA_COLORS: "256",
+        CHAFA_SYMBOLS: "ascii",
+        CHAFA_DITHER: "diffusion",
+        CHAFA_TIMEOUT_MS: "12000",
+      },
+      readText,
+    });
+    expect(config).toEqual({
+      ...DEFAULT_CONFIG,
       binaryPath: "/opt/chafa",
       cellWidth: 70,
       maxRows: 45,
@@ -96,16 +191,14 @@ describe("loadPiChafaConfig", () => {
       symbolsSet: "ascii",
       dither: "diffusion",
       timeoutMs: 12000,
-      preferNative: true,
     });
   });
 
-  it("lets CHAFA_CONFIG_DIR win over agentDir for locating the file", () => {
+  it("lets CHAFA_CONFIG_DIR win over agentDir for locating the file", async () => {
     const readText = readTextOf({
       "/cfg/dir/pi-chafa.json": JSON.stringify({ colors: "8" }),
     });
-    const config = loadPiChafaConfig({
-      agentDir,
+    const { config } = await resolve({
       env: { CHAFA_CONFIG_DIR: "/cfg/dir/" },
       readText,
     });
@@ -114,7 +207,7 @@ describe("loadPiChafaConfig", () => {
     expect(config.binaryPath).toBeNull();
   });
 
-  it("skips invalid env values silently — file/default wins — and treats empty env as absent", () => {
+  it("skips invalid env values silently — file/default wins — and treats empty env as absent", async () => {
     const readText = readTextOf({
       [configPath]: JSON.stringify({
         colors: "16",
@@ -122,8 +215,7 @@ describe("loadPiChafaConfig", () => {
         dither: "ordered",
       }),
     });
-    const config = loadPiChafaConfig({
-      agentDir,
+    const { config } = await resolve({
       env: {
         CHAFA_COLORS: "hotpink",
         CHAFA_MAX_ROWS: "abc",
@@ -144,73 +236,63 @@ describe("loadPiChafaConfig", () => {
     expect(config.symbolsSet).toBe("block+border");
   });
 
-  it("mirrors preferNative from the file and overlays CHAFA_PREFER_NATIVE (envBoolean semantics)", () => {
+  it("mirrors preferNative from the file and overlays CHAFA_PREFER_NATIVE (envBoolean semantics)", async () => {
     const fileWith = (preferNative: unknown): ReadText =>
       readTextOf({ [configPath]: JSON.stringify({ preferNative }) });
+    const prefer = async (
+      readText: ReadText,
+      env?: Record<string, string | undefined>,
+    ): Promise<boolean> => (await resolve({ readText, env })).config.preferNative;
     // File value honored when no env override.
-    expect(
-      loadPiChafaConfig({ agentDir, readText: fileWith(false) }).preferNative,
-    ).toBe(false);
-    expect(
-      loadPiChafaConfig({ agentDir, readText: fileWith(true) }).preferNative,
-    ).toBe(true);
+    expect(await prefer(fileWith(false))).toBe(false);
+    expect(await prefer(fileWith(true))).toBe(true);
     // Truthy env tokens win over the file (case-insensitive, trimmed).
     for (const token of ["1", "true", "yes", "on", " TRUE ", "Yes"]) {
-      expect(
-        loadPiChafaConfig({
-          agentDir,
-          readText: fileWith(false),
-          env: { CHAFA_PREFER_NATIVE: token },
-        }).preferNative,
-      ).toBe(true);
+      expect(await prefer(fileWith(false), { CHAFA_PREFER_NATIVE: token })).toBe(
+        true,
+      );
     }
     // Falsy env tokens win over the file (case-insensitive, trimmed).
     for (const token of ["0", "false", "no", "off", " FALSE ", "Off"]) {
-      expect(
-        loadPiChafaConfig({
-          agentDir,
-          readText: fileWith(true),
-          env: { CHAFA_PREFER_NATIVE: token },
-        }).preferNative,
-      ).toBe(false);
+      expect(await prefer(fileWith(true), { CHAFA_PREFER_NATIVE: token })).toBe(
+        false,
+      );
     }
   });
 
-  it("ignores invalid CHAFA_PREFER_NATIVE and non-boolean file values silently", () => {
+  it("ignores invalid CHAFA_PREFER_NATIVE and non-boolean file values silently", async () => {
     // Invalid env falls back to the file value (pi-chafa ignores it silently).
     const readText = readTextOf({
       [configPath]: JSON.stringify({ preferNative: false }),
     });
     for (const garbage of ["maybe", "", "   ", "2", "nope"]) {
       expect(
-        loadPiChafaConfig({
-          agentDir,
-          readText,
-          env: { CHAFA_PREFER_NATIVE: garbage },
-        }).preferNative,
+        (await resolve({ readText, env: { CHAFA_PREFER_NATIVE: garbage } }))
+          .config.preferNative,
       ).toBe(false);
     }
     // Non-boolean file values are skipped → default true.
     for (const value of ["yes", 1, null, "false", []]) {
       expect(
-        loadPiChafaConfig({
-          agentDir,
-          readText: readTextOf({
-            [configPath]: JSON.stringify({ preferNative: value }),
-          }),
-        }).preferNative,
+        (
+          await resolve({
+            readText: readTextOf({
+              [configPath]: JSON.stringify({ preferNative: value }),
+            }),
+          })
+        ).config.preferNative,
       ).toBe(true);
     }
     // Absent everywhere → default true.
-    expect(loadPiChafaConfig({ agentDir, readText: readTextOf({}) }).preferNative).toBe(
+    expect((await resolve({ readText: readTextOf({}) })).config.preferNative).toBe(
       true,
     );
   });
 
-  it("skips unknown keys and invalid file values silently", () => {
+  it("skips unknown keys and invalid file values silently", async () => {
     const readText = readTextOf({
       [configPath]: JSON.stringify({
-        version: 2,
+        version: 1,
         preferNative: "yes", // non-boolean → skipped, default stands
         formatOrder: ["native"],
         colors: "hotpink",
@@ -220,8 +302,8 @@ describe("loadPiChafaConfig", () => {
         timeoutMs: 0,
       }),
     });
-    const config = loadPiChafaConfig({ agentDir, readText });
-    expect(config.version).toBe(2);
+    const { config } = await resolve({ readText });
+    expect(config.version).toBe(1);
     expect(config.colors).toBe("240");
     expect(config.cellWidth).toBe(60);
     expect(config.symbolsSet).toBe("border");
@@ -230,15 +312,13 @@ describe("loadPiChafaConfig", () => {
     expect(config.preferNative).toBe(true);
   });
 
-  it("falls back to defaults on corrupt JSON and missing files", () => {
+  it("falls back to defaults on corrupt JSON and missing files", async () => {
     expect(
-      loadPiChafaConfig({
-        agentDir,
-        readText: readTextOf({ [configPath]: "{not json" }),
-      }),
-    ).toEqual(DEFAULT_PI_CHAFA_SUBSET);
-    expect(loadPiChafaConfig({ agentDir, readText: readTextOf({}) })).toEqual(
-      DEFAULT_PI_CHAFA_SUBSET,
+      (await resolve({ readText: readTextOf({ [configPath]: "{not json" }) }))
+        .config,
+    ).toEqual(DEFAULT_CONFIG);
+    expect((await resolve({ readText: readTextOf({}) })).config).toEqual(
+      DEFAULT_CONFIG,
     );
   });
 });
@@ -449,7 +529,39 @@ describe("detectPiChafa", () => {
   });
 });
 
-describe("probeChafa", () => {
+describe("chafa probe through resolveImageSupport (spec §6.2)", () => {
+  const paths = {
+    userSettings: "/home/user/.pi/agent/settings.json",
+    projectSettings: "/cwd/.pi/settings.json",
+    agentDir: "/home/user/.pi/agent",
+  };
+  /** Runtime-presence API: the probe only runs when pi-chafa is present. */
+  const chafaApi = (): PiChafaApi => ({
+    getAllTools: () => [
+      {
+        name: "show_image",
+        sourceInfo: { path: "/pkg/pi-chafa/index.js" },
+      },
+    ],
+    getCommands: () => [],
+  });
+  const runtimeFiles = (config?: string): ReadText =>
+    readTextOf({
+      [paths.userSettings]: "{}",
+      [paths.projectSettings]: "{}",
+      "/pkg/pi-chafa/package.json": JSON.stringify({ name: "pi-chafa" }),
+      ...(config !== undefined
+        ? { [paths.agentDir + "/pi-chafa.json"]: config }
+        : {}),
+    });
+  const probe = (exec: ExecFn, config?: string) =>
+    resolveImageSupport(
+      chafaApi(),
+      paths,
+      { images: { mode: "chafa" } },
+      { readText: runtimeFiles(config), exec, env: {} },
+    );
+
   it("parses the version and uses the trimmed binaryPath", async () => {
     const exec: ExecFn = async (bin, args, opts) => {
       expect(bin).toBe("/usr/bin/chafa");
@@ -458,11 +570,16 @@ describe("probeChafa", () => {
       expect(opts.maxBuffer).toBe(1024 * 1024);
       return { stdout: "Chafa version 1.18.2\n", stderr: "" };
     };
-    expect(await probeChafa("  /usr/bin/chafa  ", exec)).toEqual({
+    const resolved = await probe(
+      exec,
+      JSON.stringify({ binaryPath: "  /usr/bin/chafa  " }),
+    );
+    expect(resolved.chafa).toEqual({
       state: "ok",
       binary: "/usr/bin/chafa",
       version: { major: 1, minor: 18 },
     });
+    expect(resolved.tier).toBe("chafa");
   });
 
   it("defaults to chafa on PATH and accepts exactly the minimum version", async () => {
@@ -470,11 +587,13 @@ describe("probeChafa", () => {
       expect(bin).toBe("chafa");
       return { stdout: "Chafa version 1.10.0\n", stderr: "" };
     };
-    expect(await probeChafa(null, exec)).toEqual({
+    const resolved = await probe(exec);
+    expect(resolved.chafa).toEqual({
       state: "ok",
       binary: "chafa",
       version: { major: 1, minor: 10 },
     });
+    expect(resolved.tier).toBe("chafa");
   });
 
   it("rejects versions below the minimum with the upgrade hint", async () => {
@@ -482,22 +601,28 @@ describe("probeChafa", () => {
       stdout: "Chafa version 1.9.3\n",
       stderr: "",
     });
-    const status = await probeChafa(null, exec);
-    expect(status.state).toBe("too-old");
-    if (status.state === "too-old") {
-      expect(status.detail).toContain(
+    const resolved = await probe(exec);
+    const chafa = resolved.chafa;
+    expect(chafa.state).toBe("too-old");
+    if (chafa.state === "too-old") {
+      expect(chafa.detail).toContain(
         "chafa 1.9 is older than the minimum supported version 1.10",
       );
-      expect(status.detail).toContain("Upgrade chafa (");
-      expect(status.detail).toContain("or point CHAFA_BIN at a newer binary.");
+      expect(chafa.detail).toContain("Upgrade chafa (");
+      expect(chafa.detail).toContain("or point CHAFA_BIN at a newer binary.");
     }
+    expect(resolved.tier).toBe("none");
   });
 
   it("reports ENOENT as missing with the verbatim install hint", async () => {
-    const status = await probeChafa("/no/such/chafa", failProbeExec);
-    expect(status.state).toBe("missing");
-    if (status.state === "missing") {
-      expect(status.detail).toBe(
+    const resolved = await probe(
+      failProbeExec,
+      JSON.stringify({ binaryPath: "/no/such/chafa" }),
+    );
+    const chafa = resolved.chafa;
+    expect(chafa.state).toBe("missing");
+    if (chafa.state === "missing") {
+      expect(chafa.detail).toBe(
         "chafa was not found on PATH (looked for /no/such/chafa). Install it with: apt install chafa (or your distro's package). Or set CHAFA_BIN to its absolute path.",
       );
     }
@@ -505,7 +630,7 @@ describe("probeChafa", () => {
 
   it("reports unparsable output as an error", async () => {
     const exec: ExecFn = async () => ({ stdout: "chafa version 1.18.2\n", stderr: "" });
-    expect(await probeChafa(null, exec)).toEqual({
+    expect((await probe(exec)).chafa).toEqual({
       state: "error",
       detail: `Could not parse a version from "chafa --version". Is chafa really chafa?`,
     });
@@ -515,33 +640,25 @@ describe("probeChafa", () => {
     const exec: ExecFn = async () => {
       throw new Error("permission denied");
     };
-    const status = await probeChafa(null, exec);
-    expect(status.state).toBe("error");
-    if (status.state === "error") {
-      expect(status.detail).toBe("Failed to run chafa --version: permission denied");
+    const chafa = (await probe(exec)).chafa;
+    expect(chafa.state).toBe("error");
+    if (chafa.state === "error") {
+      expect(chafa.detail).toBe("Failed to run chafa --version: permission denied");
     }
   });
 });
 
-describe("buildSymbolsArgs", () => {
-  it("builds the exact pi-chafa argv vector for a fixed config and geometry", () => {
-    expect(
-      buildSymbolsArgs(
-        "/tmp/sample.png",
-        {
-          version: 1,
-          binaryPath: null,
-          cellWidth: 60,
-          maxRows: 50,
-          colors: "240",
-          symbolsSet: "block+border",
-          dither: "none",
-          timeoutMs: 8000,
-          preferNative: true,
-        },
-        { cols: 40, rows: 20 },
-      ),
-    ).toEqual([
+describe("chafa argv through makeImagePipeline (spec §3.1, §7.2)", () => {
+  it("builds the exact pi-chafa argv vector for a fixed config and geometry", async () => {
+    const exec = vi.fn<ExecFn>(async () => ({ stdout: "x", stderr: "" }));
+    const pipeline = makeImagePipeline(
+      chafaSupport({ config: { ...DEFAULT_CONFIG } }),
+      { cols: 40, rows: 20 },
+      { probeDecode: neverProbe, signal: liveSignal, exec },
+    );
+    await pipeline.render("/tmp/sample.png");
+    expect(exec.mock.calls[0]?.[0]).toBe("chafa");
+    expect(exec.mock.calls[0]?.[1]).toEqual([
       "--format",
       "symbols",
       "--relative",
@@ -561,56 +678,80 @@ describe("buildSymbolsArgs", () => {
   });
 });
 
-describe("sanitizeChafaPayload", () => {
+describe("chafa payload sanitizer through makeImagePipeline (spec §8, D7)", () => {
   const geometry = { cols: 40, rows: 10 };
 
-  it("passes an SGR-only payload through with no trailing newlines", () => {
-    const out = sanitizeChafaPayload(
+  /** One chafa render of `stdout` through the pipeline's chafa attempt. */
+  const render = (stdout: string, geom = geometry) =>
+    makeImagePipeline(chafaSupport(), geom, {
+      probeDecode: neverProbe,
+      signal: liveSignal,
+      exec: stdoutExec(stdout),
+    }).render("/tmp/a.png");
+
+  it("passes an SGR-only payload through with no trailing newlines", async () => {
+    const out = await render(
       "\x1b[38;5;123m██\x1b[0m\n\x1b[31m█\x1b[0m",
-      geometry,
     );
     expect(out).toEqual({
-      ok: true,
+      kind: "ok",
+      renderer: "chafa",
       lines: ["\x1b[38;5;123m██\x1b[0m", "\x1b[31m█\x1b[0m"],
+      cols: geometry.cols,
+      rows: geometry.rows,
     });
-    if (out.ok) {
+    if (out.kind === "ok") {
       for (const line of out.lines) expect(line.endsWith("\n")).toBe(false);
     }
   });
 
-  it("drops chafa's cursor-hide/show escapes and trailing empty lines", () => {
-    const out = sanitizeChafaPayload(
+  it("drops chafa's cursor-hide/show escapes and trailing empty lines", async () => {
+    const out = await render(
       "\x1b[?25l\x1b[32mline one\x1b[0m\x1b[?25l\nline two\nline three\n\n\n\x1b[?25h\n",
-      geometry,
     );
     expect(out).toEqual({
-      ok: true,
+      kind: "ok",
+      renderer: "chafa",
       lines: ["\x1b[32mline one\x1b[0m", "line two\x1b[0m", "line three\x1b[0m"],
+      cols: geometry.cols,
+      rows: geometry.rows,
     });
-    if (out.ok) {
+    if (out.kind === "ok") {
       expect(out.lines.join("|")).not.toContain("?25l");
       expect(out.lines.join("|")).not.toContain("?25h");
     }
   });
 
-  it("keeps byte-identical output across a payload dense with SGR transitions (Issue #104)", () => {
+  it("keeps byte-identical output across a payload dense with SGR transitions (Issue #104)", async () => {
     const row = (n: number) => `\x1b[38;5;${160 + (n % 95)}m█\x1b[0m`;
     const payload = Array.from({ length: 10 }, (_, i) =>
       Array.from({ length: 20 }, (_, j) => row(i * 20 + j)).join(""),
     ).join("\n");
-    const out = sanitizeChafaPayload(payload, geometry);
+    const out = await render(payload);
     // Hundreds of escapes, no reordering, no drops, no added resets: the
     // sticky-regex rewrite must be a byte-identical replacement (Issue #104).
-    expect(out).toEqual({ ok: true, lines: payload.split("\n") });
+    expect(out).toEqual({
+      kind: "ok",
+      renderer: "chafa",
+      lines: payload.split("\n"),
+      cols: geometry.cols,
+      rows: geometry.rows,
+    });
   });
 
-  it("strips carriage returns", () => {
-    const out = sanitizeChafaPayload("a\r\nb\r", geometry);
-    expect(out).toEqual({ ok: true, lines: ["a\x1b[0m", "b\x1b[0m"] });
-    if (out.ok) expect(out.lines.join("")).not.toContain("\r");
+  it("strips carriage returns", async () => {
+    const out = await render("a\r\nb\r");
+    expect(out).toEqual({
+      kind: "ok",
+      renderer: "chafa",
+      lines: ["a\x1b[0m", "b\x1b[0m"],
+      cols: geometry.cols,
+      rows: geometry.rows,
+    });
+    if (out.kind === "ok") expect(out.lines.join("")).not.toContain("\r");
   });
 
-  it("rejects any other non-SGR escape sequence", () => {
+  it("rejects any other non-SGR escape sequence", async () => {
     for (const hostile of [
       "\x1b[2J",
       "\x1b[1;2H",
@@ -620,25 +761,29 @@ describe("sanitizeChafaPayload", () => {
       "lone \x1b at end",
       "\x1b[31", // unterminated SGR
     ]) {
-      expect(sanitizeChafaPayload(hostile, geometry)).toEqual({
-        ok: false,
+      expect(await render(hostile)).toEqual({
+        kind: "failed",
+        renderer: "chafa",
         reason: "unexpected escape sequence",
       });
     }
   });
 
-  it("appends a trailing reset to rows that lack one", () => {
-    const out = sanitizeChafaPayload("\x1b[31mred\x1b[39m\nplain", geometry);
+  it("appends a trailing reset to rows that lack one", async () => {
+    const out = await render("\x1b[31mred\x1b[39m\nplain");
     expect(out).toEqual({
-      ok: true,
+      kind: "ok",
+      renderer: "chafa",
       lines: ["\x1b[31mred\x1b[39m\x1b[0m", "plain\x1b[0m"],
+      cols: geometry.cols,
+      rows: geometry.rows,
     });
   });
 
-  it("truncates over-wide rows to exactly cols with no bright ellipsis", () => {
-    const out = sanitizeChafaPayload(`\x1b[33m${"x".repeat(60)}\x1b[0m`, geometry);
-    expect(out.ok).toBe(true);
-    if (!out.ok) return;
+  it("truncates over-wide rows to exactly cols with no bright ellipsis", async () => {
+    const out = await render(`\x1b[33m${"x".repeat(60)}\x1b[0m`);
+    expect(out.kind).toBe("ok");
+    if (out.kind !== "ok") return;
     const line = out.lines[0];
     expect(line).toBe(`\x1b[33m${"x".repeat(40)}\x1b[0m`);
     if (line === undefined) return; // unreachable — the toBe above asserts it
@@ -648,45 +793,72 @@ describe("sanitizeChafaPayload", () => {
     expect(line.endsWith("\x1b[0m")).toBe(true);
   });
 
-  it("caps the number of lines to the geometry rows", () => {
-    const out = sanitizeChafaPayload(
+  it("caps the number of lines to the geometry rows", async () => {
+    const out = await render(
       Array.from({ length: 12 }, (_, i) => `row ${i}`).join("\n"),
       { cols: 40, rows: 5 },
     );
-    expect(out.ok).toBe(true);
-    if (out.ok) expect(out.lines).toHaveLength(5);
+    expect(out.kind).toBe("ok");
+    if (out.kind === "ok") expect(out.lines).toHaveLength(5);
   });
 
-  it("rejects empty output", () => {
-    expect(sanitizeChafaPayload("", geometry)).toEqual({
-      ok: false,
+  it("rejects empty output", async () => {
+    expect(await render("")).toEqual({
+      kind: "failed",
+      renderer: "chafa",
       reason: "chafa produced no output",
     });
-    expect(sanitizeChafaPayload("\n\n", geometry)).toEqual({
-      ok: false,
+    expect(await render("\n\n")).toEqual({
+      kind: "failed",
+      renderer: "chafa",
       reason: "chafa produced no output",
     });
   });
 });
 
-describe("runChafaRender", () => {
-  const render = { cols: 30, rows: 10 };
-  const ctx = {
-    binary: "chafa",
-    config: { ...DEFAULT_PI_CHAFA_SUBSET },
-  };
+describe("chafa render contract through makeImagePipeline (spec §7.2)", () => {
+  const geometry = { cols: 30, rows: 10 };
+  const runChafa = (
+    exec: ExecFn,
+    config: ImageSupport["config"] = DEFAULT_CONFIG,
+    geom = geometry,
+  ) =>
+    makeImagePipeline(chafaSupport({ config: { ...config } }), geom, {
+      probeDecode: neverProbe,
+      signal: liveSignal,
+      exec,
+    }).render("/tmp/a.png");
 
   it("runs chafa with the built args and sanitizes the stdout payload", async () => {
     const exec: ExecFn = async (bin, args, opts) => {
       expect(bin).toBe("chafa");
-      expect(args).toEqual(buildSymbolsArgs("/tmp/a.png", ctx.config, render));
+      expect(args).toEqual([
+        "--format",
+        "symbols",
+        "--relative",
+        "off",
+        "--size",
+        "30x10",
+        "--colors",
+        "240",
+        "--symbols",
+        "block+border",
+        "--dither",
+        "none",
+        "--animate",
+        "off",
+        "/tmp/a.png",
+      ]);
       expect(opts.timeout).toBe(8000);
       expect(opts.maxBuffer).toBe(8 * 1024 * 1024);
       return { stdout: "\x1b[?25l\x1b[31m█\x1b[0m\n\x1b[?25h", stderr: "" };
     };
-    expect(await runChafaRender("/tmp/a.png", render, { ...ctx, exec })).toEqual({
+    expect(await runChafa(exec)).toEqual({
       kind: "ok",
+      renderer: "chafa",
       lines: ["\x1b[31m█\x1b[0m"],
+      cols: geometry.cols,
+      rows: geometry.rows,
     });
   });
 
@@ -696,16 +868,8 @@ describe("runChafaRender", () => {
       seen.push(opts.timeout);
       return { stdout: "x", stderr: "" };
     };
-    await runChafaRender("a.png", render, {
-      ...ctx,
-      config: { ...ctx.config, timeoutMs: 10 },
-      exec,
-    });
-    await runChafaRender("a.png", render, {
-      ...ctx,
-      config: { ...ctx.config, timeoutMs: 120000 },
-      exec,
-    });
+    await runChafa(exec, { ...DEFAULT_CONFIG, timeoutMs: 10 });
+    await runChafa(exec, { ...DEFAULT_CONFIG, timeoutMs: 120000 });
     expect(seen).toEqual([500, 60000]);
   });
 
@@ -715,14 +879,14 @@ describe("runChafaRender", () => {
       error.name = "AbortError";
       throw error;
     };
-    expect(await runChafaRender("a.png", render, { ...ctx, exec: aborting })).toEqual({ kind: "aborted" });
+    expect(await runChafa(aborting)).toEqual({ kind: "aborted" });
 
     const codeAbort: ExecFn = async () => {
       const error = new Error("aborted") as NodeJS.ErrnoException;
       error.code = "ABORT_ERR";
       throw error;
     };
-    expect(await runChafaRender("a.png", render, { ...ctx, exec: codeAbort })).toEqual({ kind: "aborted" });
+    expect(await runChafa(codeAbort)).toEqual({ kind: "aborted" });
 
     const controller = new AbortController();
     const signalAbort: ExecFn = async () => {
@@ -730,12 +894,25 @@ describe("runChafaRender", () => {
       throw new Error("child killed");
     };
     expect(
-      await runChafaRender("a.png", render, {
-        ...ctx,
+      await makeImagePipeline(chafaSupport(), geometry, {
+        probeDecode: neverProbe,
         signal: controller.signal,
         exec: signalAbort,
-      }),
+      }).render("/tmp/a.png"),
     ).toEqual({ kind: "aborted" });
+
+    // Pre-spawn abort check: a superseded pipeline never forks a chafa child.
+    const preAborted = new AbortController();
+    preAborted.abort();
+    const exec = vi.fn<ExecFn>();
+    expect(
+      await makeImagePipeline(chafaSupport(), geometry, {
+        probeDecode: neverProbe,
+        signal: preAborted.signal,
+        exec,
+      }).render("/tmp/a.png"),
+    ).toEqual({ kind: "aborted" });
+    expect(exec).not.toHaveBeenCalled();
   });
 
   it("reports killed/SIGTERM as a timeout", async () => {
@@ -747,7 +924,7 @@ describe("runChafaRender", () => {
       error.code = "ETIMEDOUT";
       throw error;
     };
-    const out = await runChafaRender("a.png", render, { ...ctx, exec: timedOut });
+    const out = await runChafa(timedOut);
     expect(out.kind).toBe("failed");
     if (out.kind === "failed") {
       expect(out.reason).toBe(
@@ -765,8 +942,9 @@ describe("runChafaRender", () => {
       error.stderr = "chafa: cannot open file";
       throw error;
     };
-    expect(await runChafaRender("a.png", render, { ...ctx, exec: stderrExec })).toEqual({
+    expect(await runChafa(stderrExec)).toEqual({
       kind: "failed",
+      renderer: "chafa",
       reason: "chafa exited with an error: chafa: cannot open file",
     });
 
@@ -775,8 +953,9 @@ describe("runChafaRender", () => {
       error.code = "7";
       throw error;
     };
-    expect(await runChafaRender("a.png", render, { ...ctx, exec: codeExec })).toEqual({
+    expect(await runChafa(codeExec)).toEqual({
       kind: "failed",
+      renderer: "chafa",
       reason: "chafa failed (code 7)",
     });
   });
@@ -785,43 +964,13 @@ describe("runChafaRender", () => {
 describe("makeImagePipeline (Issue #144)", () => {
   const geometry = { cols: 30, rows: 8 };
 
-  /** A resolved auto-mode snapshot; overrides narrow it per case. */
-  function support(overrides: Partial<ImageSupport> = {}): ImageSupport {
-    return {
-      mode: "auto",
-      nativeProtocol: "kitty",
-      tier: "native",
-      piChafa: { present: true, via: "settings" },
-      chafa: { state: "ok", binary: "chafa", version: { major: 1, minor: 18 } },
-      config: { ...DEFAULT_PI_CHAFA_SUBSET },
-      hostShowImages: true,
-      hostImageWidthCells: 60,
-      ...overrides,
-    };
-  }
-
-  const neverProbe = async (): Promise<KittyProbeVerdict> => "no-reply";
-  const liveSignal = new AbortController().signal;
-
-  /** Real 1×1 PNG bytes (the kitty probe sample is a valid PNG fixture). */
-  const pngBytes = async (): Promise<Uint8Array> =>
-    new Uint8Array(Buffer.from(KITTY_PROBE_SAMPLE, "base64"));
-
-  /** pi-tui encoder stand-in (no capability mutation needed). */
-  const encoder = (sequence = "\x1b_Gnative\x1b\\") =>
-    vi.fn(() => ({ sequence, columns: 7, rows: 3 }));
-
-  /** A chafa exec stand-in producing one row. */
-  const chafaExec = (rows: string[] = ["\x1b[31m██\x1b[0m"]) =>
-    vi.fn<ExecFn>(async () => ({ stdout: rows.join("\n"), stderr: "" }));
-
   it("exposes the plan's attempts and runs them in order; a native ok stops the list", async () => {
     const exec = chafaExec();
     const pipeline = makeImagePipeline(support(), geometry, {
       probeDecode: neverProbe,
       signal: liveSignal,
       readBytes: pngBytes,
-      renderImage: encoder(),
+      renderImage: encoder("\x1b_Gnative\x1b\\"),
       exec,
     });
     expect(pipeline.attempts).toEqual(["native", "chafa"]);
@@ -837,7 +986,7 @@ describe("makeImagePipeline (Issue #144)", () => {
   });
 
   it("stamps the requested geometry on an ok outcome, not pi-tui's aspect-fitted result", async () => {
-    const pipeline = makeImagePipeline(support({ mode: "native", chafa: { state: "deferred" } }), geometry, {
+    const pipeline = makeImagePipeline(nativeSupport(), geometry, {
       probeDecode: neverProbe,
       signal: liveSignal,
       readBytes: pngBytes,
@@ -925,18 +1074,14 @@ describe("makeImagePipeline (Issue #144)", () => {
   });
 
   it("never throws: a non-Error throw degrades to the generic reason", async () => {
-    const pipeline = makeImagePipeline(
-      support({ mode: "native", chafa: { state: "deferred" } }),
-      geometry,
-      {
-        probeDecode: neverProbe,
-        signal: liveSignal,
-        readBytes: pngBytes,
-        renderImage: vi.fn(() => {
-          throw "not an error";
-        }),
-      },
-    );
+    const pipeline = makeImagePipeline(nativeSupport(), geometry, {
+      probeDecode: neverProbe,
+      signal: liveSignal,
+      readBytes: pngBytes,
+      renderImage: vi.fn(() => {
+        throw "not an error";
+      }),
+    });
     await expect(pipeline.render("/work/x.png")).resolves.toEqual({
       kind: "failed",
       renderer: "native",
@@ -947,7 +1092,7 @@ describe("makeImagePipeline (Issue #144)", () => {
   it("fails chafa cleanly when the snapshot is not ok, without spawning", async () => {
     const exec = chafaExec();
     const pipeline = makeImagePipeline(
-      support({ mode: "chafa", tier: "chafa", nativeProtocol: null, chafa: { state: "missing", detail: "nope" } }),
+      chafaSupport({ chafa: { state: "missing", detail: "nope" } }),
       geometry,
       { probeDecode: neverProbe, signal: liveSignal, exec },
     );
@@ -961,7 +1106,7 @@ describe("makeImagePipeline (Issue #144)", () => {
   });
 
   it("fails the native attempt cleanly when the snapshot carries no protocol", async () => {
-    const snapshot = support({ mode: "native", chafa: { state: "deferred" } });
+    const snapshot = nativeSupport();
     const pipeline = makeImagePipeline(snapshot, geometry, { probeDecode: neverProbe, signal: liveSignal });
     expect(pipeline.attempts).toEqual(["native"]);
     // Defense in depth: a snapshot whose plan says native but whose protocol
@@ -992,205 +1137,239 @@ describe("makeImagePipeline (Issue #144)", () => {
   });
 });
 
-describe("readHostImageSettings", () => {
+describe("host image settings through resolveImageSupport (spec §6.3)", () => {
   const path = "/home/user/.pi/agent/settings.json";
-
-  it("honors terminal.showImages false", () => {
-    expect(
-      readHostImageSettings(
-        { userSettings: path },
-        {
-          readText: readTextOf({
-            [path]: JSON.stringify({
-              terminal: { showImages: false },
-            }),
-          }),
-        },
-      ),
-    ).toEqual({ showImages: false, imageWidthCells: 60, images: null });
+  const paths = {
+    userSettings: path,
+    projectSettings: "/cwd/.pi/settings.json",
+    agentDir: "/home/user/.pi/agent",
+  };
+  const noTools: PiChafaApi = { getAllTools: () => [], getCommands: () => [] };
+  const resolve = (settingsText: string | undefined) =>
+    resolveImageSupport(
+      noTools,
+      paths,
+      { images: { mode: "chafa" } },
+      {
+        readText: readTextOf(settingsText !== undefined ? { [path]: settingsText } : {}),
+        env: {},
+      },
+    );
+  /** The three host fields the snapshot exposes. */
+  const host = (resolved: ImageSupport) => ({
+    showImages: resolved.hostShowImages,
+    imageWidthCells: resolved.hostImageWidthCells,
+    nativeProtocol: resolved.nativeProtocol,
   });
 
-  it("honors a positive integer imageWidthCells", () => {
-    expect(
-      readHostImageSettings(
-        { userSettings: path },
-        {
-          readText: readTextOf({
-            [path]: JSON.stringify({
-              terminal: { imageWidthCells: 120 },
-            }),
-          }),
-        },
-      ),
-    ).toEqual({ showImages: true, imageWidthCells: 120, images: null });
-  });
-
-  it("parses terminal.images for exact kitty/iterm2 only", () => {
-    const read = (terminal: unknown, overrides: string = path) =>
-      readHostImageSettings(
-        { userSettings: overrides },
-        { readText: readTextOf({ [overrides]: JSON.stringify({ terminal }) }) },
-      );
-    expect(read({ images: "kitty" })).toEqual({
-      showImages: true,
+  it("honors terminal.showImages false", async () => {
+    const resolved = await resolve(
+      JSON.stringify({
+        terminal: { showImages: false },
+      }),
+    );
+    expect(host(resolved)).toEqual({
+      showImages: false,
       imageWidthCells: 60,
-      images: "kitty",
+      nativeProtocol: null,
     });
-    expect(read({ images: "iterm2" })).toEqual({
+    expect(resolved.tier).toBe("none");
+  });
+
+  it("honors a positive integer imageWidthCells", async () => {
+    const resolved = await resolve(
+      JSON.stringify({
+        terminal: { imageWidthCells: 120 },
+      }),
+    );
+    expect(host(resolved)).toEqual({
+      showImages: true,
+      imageWidthCells: 120,
+      nativeProtocol: null,
+    });
+  });
+
+  it("parses terminal.images for exact kitty/iterm2 only", async () => {
+    const read = (terminal: unknown) => resolve(JSON.stringify({ terminal }));
+    expect(host(await read({ images: "kitty" }))).toEqual({
       showImages: true,
       imageWidthCells: 60,
-      images: "iterm2",
+      nativeProtocol: "kitty",
+    });
+    expect(host(await read({ images: "iterm2" }))).toEqual({
+      showImages: true,
+      imageWidthCells: 60,
+      nativeProtocol: "iterm2",
     });
     // Everything else — false, "auto", "none", wrong case, non-string,
     // absent — is null.
     for (const images of [false, "auto", "none", "AUTO", "Kitty", 42, null]) {
-      expect(read({ images })).toEqual({
+      expect(host(await read({ images }))).toEqual({
         showImages: true,
         imageWidthCells: 60,
-        images: null,
+        nativeProtocol: null,
       });
     }
-    expect(read({})).toEqual({ showImages: true, imageWidthCells: 60, images: null });
+    expect(host(await read({}))).toEqual({
+      showImages: true,
+      imageWidthCells: 60,
+      nativeProtocol: null,
+    });
     // images is independent of showImages.
-    expect(read({ images: "kitty", showImages: false })).toEqual({
+    expect(host(await read({ images: "kitty", showImages: false }))).toEqual({
       showImages: false,
       imageWidthCells: 60,
-      images: "kitty",
+      nativeProtocol: "kitty",
     });
   });
 
-  it("falls back to defaults on missing, corrupt, or invalid settings", () => {
-    const defaults = { showImages: true, imageWidthCells: 60, images: null };
+  it("falls back to defaults on missing, corrupt, or invalid settings", async () => {
+    const defaults = { showImages: true, imageWidthCells: 60, nativeProtocol: null };
+    expect(host(await resolve(undefined))).toEqual(defaults);
+    expect(host(await resolve("{corrupt"))).toEqual(defaults);
     expect(
-      readHostImageSettings(
-        { userSettings: "/nope/settings.json" },
-        { readText: readTextOf({}) },
-      ),
-    ).toEqual(defaults);
-    expect(
-      readHostImageSettings(
-        { userSettings: "/x/settings.json" },
-        { readText: readTextOf({ "/x/settings.json": "{corrupt" }) },
-      ),
-    ).toEqual(defaults);
-    expect(
-      readHostImageSettings(
-        { userSettings: "/x/settings.json" },
-        {
-          readText: readTextOf({
-            "/x/settings.json": JSON.stringify({
-              terminal: { showImages: "false", imageWidthCells: 0 },
-            }),
+      host(
+        await resolve(
+          JSON.stringify({
+            terminal: { showImages: "false", imageWidthCells: 0 },
           }),
-        },
+        ),
       ),
     ).toEqual(defaults);
   });
 });
 
-describe("resolveNativeProtocol", () => {
-  const userSettings = "/home/user/.pi/agent/settings.json";
+describe("native protocol ladder through resolveImageSupport (spec §5.3, D4; Issue #100)", () => {
+  const paths = {
+    userSettings: "/home/user/.pi/agent/settings.json",
+    projectSettings: "/cwd/.pi/settings.json",
+    agentDir: "/home/user/.pi/agent",
+  };
+  const noTools: PiChafaApi = { getAllTools: () => [], getCommands: () => [] };
   const settingsWith = (images: unknown): ReadText =>
-    readTextOf({ [userSettings]: JSON.stringify({ terminal: { images } }) });
+    readTextOf({ [paths.userSettings]: JSON.stringify({ terminal: { images } }) });
+  /** Mode "native": the ladder reads; tier mirrors an active protocol. */
+  const resolve = (deps?: Parameters<typeof resolveImageSupport>[3]) =>
+    resolveImageSupport(noTools, paths, { images: { mode: "native" } }, deps);
 
-  it("prefers the host capability over conflicting settings and env", () => {
+  it("prefers the host capability over conflicting settings and env", async () => {
     expect(
-      resolveNativeProtocol({
-        capabilities: () => ({ images: "kitty" }),
-        readText: settingsWith("iterm2"),
-        env: { PI_IMAGE_PROTOCOL: "iterm2" },
-        userSettings,
-      }),
+      (
+        await resolve({
+          capabilities: () => ({ images: "kitty" }),
+          readText: settingsWith("iterm2"),
+          env: { PI_IMAGE_PROTOCOL: "iterm2" },
+        })
+      ).nativeProtocol,
     ).toBe("kitty");
     expect(
-      resolveNativeProtocol({
-        capabilities: () => ({ images: "iterm2" }),
-        readText: settingsWith("kitty"),
-        env: { PI_IMAGE_PROTOCOL: "kitty" },
-        userSettings,
-      }),
+      (
+        await resolve({
+          capabilities: () => ({ images: "iterm2" }),
+          readText: settingsWith("kitty"),
+          env: { PI_IMAGE_PROTOCOL: "kitty" },
+        })
+      ).nativeProtocol,
     ).toBe("iterm2");
   });
 
-  it("falls back to the settings file when the host reports null", () => {
+  it("falls back to the settings file when the host reports null", async () => {
     for (const images of ["kitty", "iterm2"] as const) {
-      expect(
-        resolveNativeProtocol({
-          capabilities: () => ({ images: null }),
-          readText: settingsWith(images),
-          env: {},
-          userSettings,
-        }),
-      ).toBe(images);
+      const resolved = await resolve({
+        capabilities: () => ({ images: null }),
+        readText: settingsWith(images),
+        env: {},
+      });
+      expect(resolved.nativeProtocol).toBe(images);
+      expect(resolved.tier).toBe("native");
     }
   });
 
-  it("falls back to the env when host and settings are both absent or non-native", () => {
+  it("falls back to the env when host and settings are both absent or non-native", async () => {
     for (const protocol of ["kitty", "iterm2"] as const) {
       // host null + settings false
       expect(
-        resolveNativeProtocol({
-          capabilities: () => ({ images: null }),
-          readText: settingsWith(false),
-          env: { PI_IMAGE_PROTOCOL: protocol },
-          userSettings,
-        }),
+        (
+          await resolve({
+            capabilities: () => ({ images: null }),
+            readText: settingsWith(false),
+            env: { PI_IMAGE_PROTOCOL: protocol },
+          })
+        ).nativeProtocol,
       ).toBe(protocol);
       // host null + settings "auto"
       expect(
-        resolveNativeProtocol({
-          capabilities: () => ({ images: null }),
-          readText: settingsWith("auto"),
-          env: { PI_IMAGE_PROTOCOL: protocol },
-          userSettings,
-        }),
+        (
+          await resolve({
+            capabilities: () => ({ images: null }),
+            readText: settingsWith("auto"),
+            env: { PI_IMAGE_PROTOCOL: protocol },
+          })
+        ).nativeProtocol,
       ).toBe(protocol);
       // no capabilities accessor at all + settings absent
       expect(
-        resolveNativeProtocol({
-          readText: readTextOf({}),
-          env: { PI_IMAGE_PROTOCOL: protocol },
-          userSettings,
-        }),
+        (
+          await resolve({
+            readText: readTextOf({}),
+            env: { PI_IMAGE_PROTOCOL: protocol },
+          })
+        ).nativeProtocol,
       ).toBe(protocol);
     }
   });
 
-  it("trims the env value before the exact match", () => {
+  it("trims the env value before the exact match", async () => {
     expect(
-      resolveNativeProtocol({
-        capabilities: () => ({ images: null }),
-        readText: readTextOf({}),
-        env: { PI_IMAGE_PROTOCOL: "  kitty  " },
-        userSettings,
-      }),
+      (
+        await resolve({
+          capabilities: () => ({ images: null }),
+          readText: readTextOf({}),
+          env: { PI_IMAGE_PROTOCOL: "  kitty  " },
+        })
+      ).nativeProtocol,
     ).toBe("kitty");
   });
 
-  it("returns null when every source is absent or non-native", () => {
-    expect(resolveNativeProtocol()).toBeNull();
+  it("returns null when every source is absent or non-native", async () => {
+    // Default env (no injected env): still null with the test host.
     expect(
-      resolveNativeProtocol({ capabilities: () => ({ images: null }), env: {} }),
+      (
+        await resolve({
+          capabilities: () => ({ images: null }),
+          readText: readTextOf({}),
+        })
+      ).nativeProtocol,
     ).toBeNull();
     expect(
-      resolveNativeProtocol({
-        capabilities: () => ({ images: null }),
-        readText: settingsWith("none"),
-        env: { PI_IMAGE_PROTOCOL: "auto" },
-        userSettings,
-      }),
+      (
+        await resolve({
+          capabilities: () => ({ images: null }),
+          env: {},
+        })
+      ).nativeProtocol,
     ).toBeNull();
     expect(
-      resolveNativeProtocol({
-        capabilities: () => ({ images: null }),
-        readText: settingsWith("AUTO"),
-        env: { PI_IMAGE_PROTOCOL: "false" },
-        userSettings,
-      }),
+      (
+        await resolve({
+          capabilities: () => ({ images: null }),
+          readText: settingsWith("none"),
+          env: { PI_IMAGE_PROTOCOL: "auto" },
+        })
+      ).nativeProtocol,
+    ).toBeNull();
+    expect(
+      (
+        await resolve({
+          capabilities: () => ({ images: null }),
+          readText: settingsWith("AUTO"),
+          env: { PI_IMAGE_PROTOCOL: "false" },
+        })
+      ).nativeProtocol,
     ).toBeNull();
   });
 
-  it("returns null for known no-image terminals even when settings or env declare a protocol (Issue #100)", () => {
+  it("returns null for known no-image terminals even when settings or env declare a protocol (Issue #100)", async () => {
     for (const env of [
       { TERM_PROGRAM: "alacritty", TERM: "xterm-256color" },
       { ALACRITTY_LOG: "/tmp/Alacritty-333525.log", TERM: "xterm-256color" },
@@ -1202,38 +1381,41 @@ describe("resolveNativeProtocol", () => {
       { WT_SESSION: "1" },
     ]) {
       expect(
-        resolveNativeProtocol({
-          capabilities: () => ({ images: null }),
-          readText: settingsWith("kitty"),
-          env,
-          userSettings,
-        }),
+        (
+          await resolve({
+            capabilities: () => ({ images: null }),
+            readText: settingsWith("kitty"),
+            env,
+          })
+        ).nativeProtocol,
       ).toBeNull();
       expect(
-        resolveNativeProtocol({
-          capabilities: () => ({ images: null }),
-          readText: readTextOf({}),
-          env: { ...env, PI_IMAGE_PROTOCOL: "iterm2" },
-          userSettings,
-        }),
+        (
+          await resolve({
+            capabilities: () => ({ images: null }),
+            readText: readTextOf({}),
+            env: { ...env, PI_IMAGE_PROTOCOL: "iterm2" },
+          })
+        ).nativeProtocol,
       ).toBeNull();
     }
   });
 
-  it("still honors the settings override for unrecognized terminals (Konsole keeps native, Issue #100)", () => {
+  it("still honors the settings override for unrecognized terminals (Konsole keeps native, Issue #100)", async () => {
     // Konsole is not in pi-tui's detection table → "unknown terminal" → the
     // settings override is the only source of its native capability.
     expect(
-      resolveNativeProtocol({
-        capabilities: () => ({ images: null }),
-        readText: settingsWith("kitty"),
-        env: { KONSOLE_VERSION: "240301", TERM: "xterm-256color" },
-        userSettings,
-      }),
+      (
+        await resolve({
+          capabilities: () => ({ images: null }),
+          readText: settingsWith("kitty"),
+          env: { KONSOLE_VERSION: "240301", TERM: "xterm-256color" },
+        })
+      ).nativeProtocol,
     ).toBe("kitty");
   });
 
-  it("known no-image terminals cannot be forced even by a positive caps report (Issue #100)", () => {
+  it("known no-image terminals cannot be forced even by a positive caps report (Issue #100)", async () => {
     // pi pushes terminal.images into pi-tui's capability overrides, so caps
     // can report kitty in Alacritty too — the negative guard precedes every
     // declaration, including the capability step.
@@ -1243,104 +1425,122 @@ describe("resolveNativeProtocol", () => {
       { WT_SESSION: "1" },
     ]) {
       expect(
-        resolveNativeProtocol({
-          capabilities: () => ({ images: "kitty" }),
-          readText: settingsWith("iterm2"),
-          env: { ...env, PI_IMAGE_PROTOCOL: "iterm2" },
-          userSettings,
-        }),
+        (
+          await resolve({
+            capabilities: () => ({ images: "kitty" }),
+            readText: settingsWith("iterm2"),
+            env: { ...env, PI_IMAGE_PROTOCOL: "iterm2" },
+          })
+        ).nativeProtocol,
       ).toBeNull();
     }
   });
 
-  it("keeps positive capability reports for real terminals (no negative markers, Issue #100)", () => {
+  it("keeps positive capability reports for real terminals (no negative markers, Issue #100)", async () => {
     // kitty/ghostty/wezterm/iTerm2 are never in the negative table: their
     // host capability report (or PI_IMAGE_PROTOCOL forcing) still wins.
     expect(
-      resolveNativeProtocol({
-        capabilities: () => ({ images: "kitty" }),
-        readText: settingsWith("iterm2"),
-        env: { TERM_PROGRAM: "kitty", PI_IMAGE_PROTOCOL: "iterm2" },
-        userSettings,
-      }),
+      (
+        await resolve({
+          capabilities: () => ({ images: "kitty" }),
+          readText: settingsWith("iterm2"),
+          env: { TERM_PROGRAM: "kitty", PI_IMAGE_PROTOCOL: "iterm2" },
+        })
+      ).nativeProtocol,
     ).toBe("kitty");
     expect(
-      resolveNativeProtocol({
-        capabilities: () => ({ images: "iterm2" }),
-        env: {},
-      }),
+      (
+        await resolve({
+          capabilities: () => ({ images: "iterm2" }),
+          env: {},
+        })
+      ).nativeProtocol,
     ).toBe("iterm2");
   });
 
-  it("never lets settings garbage block the env step (positive-only ladder)", () => {
+  it("never lets settings garbage block the env step (positive-only ladder)", async () => {
     for (const images of [false, "auto", "none", "AUTO", "kitty-ish", 42, "false"]) {
       expect(
-        resolveNativeProtocol({
-          capabilities: () => ({ images: null }),
-          readText: settingsWith(images as unknown),
-          env: { PI_IMAGE_PROTOCOL: "iterm2" },
-          userSettings,
-        }),
+        (
+          await resolve({
+            capabilities: () => ({ images: null }),
+            readText: settingsWith(images as unknown),
+            env: { PI_IMAGE_PROTOCOL: "iterm2" },
+          })
+        ).nativeProtocol,
       ).toBe("iterm2");
     }
   });
 
-  it("returns null when running under tmux or screen multiplexer (#070, #097)", () => {
+  it("returns null when running under tmux or screen multiplexer (#070, #097)", async () => {
     // TMUX env variable set
     expect(
-      resolveNativeProtocol({
-        capabilities: () => ({ images: "kitty" }),
-        env: { TMUX: "1", PI_IMAGE_PROTOCOL: "kitty" },
-        userSettings,
-        readText: settingsWith("kitty"),
-      }),
+      (
+        await resolve({
+          capabilities: () => ({ images: "kitty" }),
+          env: { TMUX: "1", PI_IMAGE_PROTOCOL: "kitty" },
+          readText: settingsWith("kitty"),
+        })
+      ).nativeProtocol,
     ).toBeNull();
 
     // TERM starting with tmux
     expect(
-      resolveNativeProtocol({
-        capabilities: () => ({ images: "iterm2" }),
-        env: { TERM: "tmux-256color" },
-        userSettings,
-        readText: settingsWith("iterm2"),
-      }),
+      (
+        await resolve({
+          capabilities: () => ({ images: "iterm2" }),
+          env: { TERM: "tmux-256color" },
+          readText: settingsWith("iterm2"),
+        })
+      ).nativeProtocol,
     ).toBeNull();
 
     // TERM starting with screen
     expect(
-      resolveNativeProtocol({
-        capabilities: () => ({ images: "kitty" }),
-        env: { TERM: "screen.xterm-256color" },
-        userSettings,
-        readText: settingsWith("kitty"),
-      }),
+      (
+        await resolve({
+          capabilities: () => ({ images: "kitty" }),
+          env: { TERM: "screen.xterm-256color" },
+          readText: settingsWith("kitty"),
+        })
+      ).nativeProtocol,
     ).toBeNull();
   });
 
-  it("uses only injected capabilities/readText/env — never the real $HOME or process env", () => {
-    expect(
-      resolveNativeProtocol({
+  it("uses only injected capabilities/readText/env — never the real $HOME or process env", async () => {
+    const resolved = await resolveImageSupport(
+      noTools,
+      { ...paths, userSettings: "/not-real/settings.json" },
+      { images: { mode: "native" } },
+      {
         capabilities: () => ({ images: null }),
         readText: readTextOf({}),
         env: {},
-        userSettings: "/not-real/settings.json",
-      }),
-    ).toBeNull();
+      },
+    );
+    expect(resolved.nativeProtocol).toBeNull();
+    expect(resolved.tier).toBe("none");
   });
 });
 
 describe("kitty protocol probe helpers (Issue #101, #116)", () => {
-  it("buildKittyProbeQuery always sends the PNG sample under f=100 (Issue #116)", () => {
+  it("buildKittyProbeQuery always sends a PNG sample under f=100 (Issue #116)", () => {
     const q = buildKittyProbeQuery(31);
     // The PNG sample is the ONLY valid payload for f=100 — JPEG/WebP samples
     // would be rejected by kitty's a=q decoder, which interprets f=100 literally
     // as PNG (Issue #116 root cause). The Issue #102 per-MIME sample table was
-    // removed with its last consumer (Issue #117 cleanup).
-    expect(q).toBe(`\x1b_Ga=q,t=d,f=100,i=31;${KITTY_PROBE_SAMPLE}\x1b\\`);
+    // removed with its last consumer (Issue #117 cleanup). The query itself is
+    // the fixture (Issue #180): parse the payload out and prove it is a PNG.
+    const match = /^\x1b_Ga=q,t=d,f=100,i=31;([A-Za-z0-9+/=]+)\x1b\\$/.exec(q);
+    expect(match).not.toBeNull();
+    const bytes = Buffer.from(match?.[1] ?? "", "base64");
+    expect([...bytes.subarray(0, 8)]).toEqual([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    ]);
   });
 
   it("the PNG probe sample decodes as 1x1 via pi-tui getImageDimensions", () => {
-    const dims = getImageDimensions(KITTY_PROBE_SAMPLE, "image/png");
+    const dims = getImageDimensions(probeSampleBase64(), "image/png");
     expect(dims).not.toBeNull();
     expect(dims?.widthPx).toBe(1);
     expect(dims?.heightPx).toBe(1);
@@ -1449,7 +1649,7 @@ describe("makeDeferredImageSupport", () => {
       tier: "none",
       piChafa: { present: false, via: "none" },
       chafa: { state: "deferred" },
-      config: DEFAULT_PI_CHAFA_SUBSET,
+      config: DEFAULT_CONFIG,
       hostShowImages: true,
       hostImageWidthCells: 60,
     });
@@ -1464,7 +1664,7 @@ describe("makeDeferredImageSupport", () => {
         tier: "none",
         piChafa: { present: false, via: "none" },
         chafa: { state: "deferred" },
-        config: DEFAULT_PI_CHAFA_SUBSET,
+        config: DEFAULT_CONFIG,
         hostShowImages: true,
         hostImageWidthCells: 60,
       });
@@ -1472,97 +1672,80 @@ describe("makeDeferredImageSupport", () => {
   });
 });
 
-describe("planImageLoad (Issue #143)", () => {
+describe("makeImagePipeline plan attempts (Issue #143)", () => {
   const geometry = { cols: 80, rows: 24 };
-
-  /** A resolved auto-mode snapshot; overrides narrow it per case. */
-  function support(overrides: Partial<ImageSupport> = {}): ImageSupport {
-    return {
-      mode: "auto",
-      nativeProtocol: "kitty",
-      tier: "native",
-      piChafa: { present: true, via: "settings" },
-      chafa: { state: "ok", binary: "chafa", version: { major: 1, minor: 18 } },
-      config: { ...DEFAULT_PI_CHAFA_SUBSET },
-      hostShowImages: true,
-      hostImageWidthCells: 60,
-      ...overrides,
-    };
-  }
+  const plan = (
+    snapshot: ImageSupport,
+    geom: { cols: number; rows: number } = geometry,
+  ) =>
+    makeImagePipeline(snapshot, geom, {
+      probeDecode: neverProbe,
+      signal: liveSignal,
+    }).attempts;
 
   it("plans nothing without a geometry (nothing laid out / pane too small)", () => {
-    expect(planImageLoad(support(), null)).toEqual([]);
-    expect(planImageLoad(support({ tier: "chafa" }), null)).toEqual([]);
-    expect(planImageLoad(makeDeferredImageSupport("auto"), null)).toEqual([]);
+    // The pipeline's geometry parameter is non-nullable; the plan keeps its
+    // null guard for direct callers, so drive it with the runtime null.
+    const noGeometry = null as unknown as { cols: number; rows: number };
+    expect(plan(support(), noGeometry)).toEqual([]);
+    expect(plan(support({ tier: "chafa" }), noGeometry)).toEqual([]);
+    expect(plan(makeDeferredImageSupport("auto"), noGeometry)).toEqual([]);
   });
 
   it("plans nothing when the snapshot resolved no renderer (tier none)", () => {
-    expect(planImageLoad(support({ tier: "none" }), geometry)).toEqual([]);
-    expect(planImageLoad(support({ tier: "none", nativeProtocol: null }), geometry)).toEqual([]);
+    expect(plan(support({ tier: "none" }))).toEqual([]);
+    expect(plan(support({ tier: "none", nativeProtocol: null }))).toEqual([]);
     // The host gate stays whole: terminal.showImages=false resolves tier none
     // even though the chafa probe may still have succeeded for the hint copy.
-    expect(planImageLoad(support({ hostShowImages: false, tier: "none" }), geometry)).toEqual([]);
-    expect(planImageLoad(support({ mode: "off", tier: "none" }), geometry)).toEqual([]);
-    expect(planImageLoad(makeDeferredImageSupport("off"), geometry)).toEqual([]);
+    expect(plan(support({ hostShowImages: false, tier: "none" }))).toEqual([]);
+    expect(plan(support({ mode: "off", tier: "none" }))).toEqual([]);
+    expect(plan(makeDeferredImageSupport("off"))).toEqual([]);
   });
 
   it("plans nothing when strict chafa has no usable probe", () => {
     const notOk: ImageSupport["chafa"] = { state: "missing", detail: "not found" };
     expect(
-      planImageLoad(support({ mode: "chafa", nativeProtocol: null, tier: "none", chafa: notOk }), geometry),
+      plan(support({ mode: "chafa", nativeProtocol: null, tier: "none", chafa: notOk })),
     ).toEqual([]);
-    expect(planImageLoad(support({ mode: "chafa", nativeProtocol: null, tier: "none" }), geometry)).toEqual([]);
+    expect(plan(support({ mode: "chafa", nativeProtocol: null, tier: "none" }))).toEqual([]);
   });
 
   it("plans native only under strict native with a protocol", () => {
-    expect(
-      planImageLoad(support({ mode: "native", chafa: { state: "deferred" } }), geometry),
-    ).toEqual(["native"]);
+    expect(plan(nativeSupport())).toEqual(["native"]);
     // Strict native without a capability resolves tier none: nothing renders.
-    expect(
-      planImageLoad(support({ mode: "native", nativeProtocol: null, tier: "none" }), geometry),
-    ).toEqual([]);
+    expect(plan(nativeSupport({ nativeProtocol: null, tier: "none" }))).toEqual([]);
   });
 
   it("orders auto native → chafa when preferNative (the resolved tier) says native", () => {
-    expect(planImageLoad(support(), geometry)).toEqual(["native", "chafa"]);
+    expect(plan(support())).toEqual(["native", "chafa"]);
     expect(
-      planImageLoad(
-        support({ config: { ...DEFAULT_PI_CHAFA_SUBSET, preferNative: true } }),
-        geometry,
-      ),
+      plan(support({ config: { ...DEFAULT_CONFIG, preferNative: true } })),
     ).toEqual(["native", "chafa"]);
   });
 
   it("plans chafa only under auto when preferNative is false (the tier already resolved to chafa)", () => {
     expect(
-      planImageLoad(
-        support({ tier: "chafa", config: { ...DEFAULT_PI_CHAFA_SUBSET, preferNative: false } }),
-        geometry,
-      ),
+      plan(support({ tier: "chafa", config: { ...DEFAULT_CONFIG, preferNative: false } })),
     ).toEqual(["chafa"]);
   });
 
   it("plans chafa only under auto without a native protocol", () => {
-    expect(planImageLoad(support({ nativeProtocol: null, tier: "chafa" }), geometry)).toEqual(["chafa"]);
+    expect(plan(support({ nativeProtocol: null, tier: "chafa" }))).toEqual(["chafa"]);
   });
 
   it("defers chafa under strict native (no per-file fallback attempt)", () => {
-    expect(
-      planImageLoad(support({ mode: "native", chafa: { state: "deferred" } }), geometry),
-    ).toEqual(["native"]);
+    expect(plan(nativeSupport())).toEqual(["native"]);
   });
 
   it("never probes: a resolved chafa tier plans chafa even without pi-chafa metadata", () => {
     // The snapshot is the source of truth; the planner reads, never re-derives.
     expect(
-      planImageLoad(
+      plan(
         support({
           piChafa: { present: false, via: "none" },
           chafa: { state: "ok", binary: "chafa", version: { major: 1, minor: 18 } },
           tier: "chafa",
         }),
-        geometry,
       ),
     ).toEqual(["chafa"]);
   });
@@ -1766,7 +1949,7 @@ describe("resolveImageSupport", () => {
     expect(onWarning).toHaveBeenCalledWith(
       "pi-chafa config version 2 is newer than this navigator supports; using defaults",
     );
-    expect(support.config).toEqual(DEFAULT_PI_CHAFA_SUBSET);
+    expect(support.config).toEqual(DEFAULT_CONFIG);
   });
 
   it("passes a version-1 config through without warning", async () => {
@@ -2002,10 +2185,9 @@ describe("resolveImageSupport", () => {
     expect(support.tier).toBe("native");
   });
 });
-describe("runNativeRender", () => {
+
+describe("native render through makeImagePipeline (spec §5.3, D3)", () => {
   // Real 1×1 image fixtures (spec §12.1): decode via pi-tui's own sniffers.
-  const PNG_1X1_BASE64 =
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
   const GIF_1X1_BASE64 =
     "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
   const JPEG_1X1_BASE64 =
@@ -2014,27 +2196,23 @@ describe("runNativeRender", () => {
     "UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAD8D+JaQAA3AA/ua1AAA=";
   const geometry = { cols: 40, rows: 10 };
 
-  type ReadBytes = (path: string) => Promise<Uint8Array>;
-
-  /** readBytes seam seeded with real bytes for a base64 fixture. */
-  const readBytesOf = (base64: string) =>
-    vi.fn<ReadBytes>(
-      async () => new Uint8Array(Buffer.from(base64, "base64")),
-    );
-
   /** Point pi-tui's real encoders at a protocol, preserving the rest of the caps. */
   const withProtocol = (images: "kitty" | "iterm2"): void => {
     const saved = getCapabilities();
     setCapabilities({ ...saved, images });
   };
 
-  /**
-   * pi-tui encoder stand-in for the cases where real protocol bytes are not
-   * the point (Issue #144): the layout contract is exercised without mutating
-   * pi-tui's capability cache.
-   */
-  const encoder = (sequence = "SEQ", columns = 7, rows = 3) =>
-    vi.fn(() => ({ sequence, columns, rows }));
+  /** Strict-native pipeline over the real seams; ctx narrows per case. */
+  const renderNative = (
+    absPath: string,
+    ctx: Partial<Parameters<typeof makeImagePipeline>[2]> = {},
+    overrides: Partial<ImageSupport> = {},
+  ) =>
+    makeImagePipeline(nativeSupport(overrides), geometry, {
+      probeDecode: neverProbe,
+      signal: liveSignal,
+      ...ctx,
+    }).render(absPath);
 
   afterEach(() => {
     resetCapabilitiesCache();
@@ -2043,10 +2221,7 @@ describe("runNativeRender", () => {
   it("kitty: sequence header carries a=T,f=100,q=2,C=1 plus c=/r=/i= and filler rows are empty", async () => {
     withProtocol("kitty");
     const readBytes = readBytesOf(PNG_1X1_BASE64);
-    const result = await runNativeRender("/tmp/pixel.png", geometry, {
-      protocol: "kitty",
-      readBytes,
-    });
+    const result = await renderNative("/tmp/pixel.png", { readBytes });
     expect(result.kind).toBe("ok");
     if (result.kind !== "ok") return;
     const sequence = result.lines[0] ?? "";
@@ -2059,11 +2234,13 @@ describe("runNativeRender", () => {
     const r = Number(/r=(\d+)/.exec(sequence)?.[1]);
     expect(c).toBeGreaterThan(0);
     expect(r).toBeGreaterThan(0);
-    // Returned geometry is pi-tui's (aspect-fitted), not the request.
-    expect(result.cols).toBe(c);
-    expect(result.rows).toBe(r);
-    expect(result.rows).toBeGreaterThan(1);
-    expect(result.lines).toHaveLength(result.rows);
+    // The pipeline stamps the REQUESTED geometry; the sequence carries
+    // pi-tui's aspect-fitted c=/r= — both contracts asserted here.
+    expect(result.renderer).toBe("native");
+    expect(result.cols).toBe(geometry.cols);
+    expect(result.rows).toBe(geometry.rows);
+    expect(r).toBeGreaterThan(1);
+    expect(result.lines).toHaveLength(r);
     // Every line after the sequence is exactly "" (D9 row contract).
     for (const filler of result.lines.slice(1)) {
       expect(filler).toBe("");
@@ -2074,28 +2251,22 @@ describe("runNativeRender", () => {
   it("iterm2 renders a real JPEG fixture", async () => {
     withProtocol("iterm2");
     const readBytes = readBytesOf(JPEG_1X1_BASE64);
-    const result = await runNativeRender("/tmp/pixel.jpg", geometry, {
-      protocol: "iterm2",
-      readBytes,
-    });
+    const result = await renderNative("/tmp/pixel.jpg", { readBytes }, { nativeProtocol: "iterm2" });
     expect(result.kind).toBe("ok");
     if (result.kind !== "ok") return;
-    expect(result.rows).toBeGreaterThan(0);
-    expect(result.cols).toBeGreaterThan(0);
+    expect(result.lines.length).toBeGreaterThan(0);
+    expect(result.lines.at(-1)).toContain("\x1b]1337;File=");
     expect(readBytes).toHaveBeenCalledWith("/tmp/pixel.jpg");
   });
 
   it("iterm2 renders a real WebP fixture", async () => {
     withProtocol("iterm2");
     const readBytes = readBytesOf(WEBP_1X1_BASE64);
-    const result = await runNativeRender("/tmp/pixel.webp", geometry, {
-      protocol: "iterm2",
-      readBytes,
-    });
+    const result = await renderNative("/tmp/pixel.webp", { readBytes }, { nativeProtocol: "iterm2" });
     expect(result.kind).toBe("ok");
     if (result.kind !== "ok") return;
-    expect(result.rows).toBeGreaterThan(0);
-    expect(result.cols).toBeGreaterThan(0);
+    expect(result.lines.length).toBeGreaterThan(0);
+    expect(result.lines.at(-1)).toContain("\x1b]1337;File=");
     expect(readBytes).toHaveBeenCalledWith("/tmp/pixel.webp");
   });
 
@@ -2107,40 +2278,38 @@ describe("runNativeRender", () => {
       ["gif", GIF_1X1_BASE64],
     ] as const) {
       const readBytes = readBytesOf(b64);
-      const result = await runNativeRender(`/tmp/pixel.${ext}`, geometry, {
-        protocol: "kitty",
-        readBytes,
-      });
+      const result = await renderNative(`/tmp/pixel.${ext}`, { readBytes });
       expect(result.kind).toBe("ok");
       if (result.kind !== "ok") return;
       expect(result.lines[0]).toContain("a=T,f=100,q=2,C=1");
-      expect(result.rows).toBeGreaterThan(0);
-      expect(result.cols).toBeGreaterThan(0);
+      expect(result.lines.length).toBeGreaterThan(0);
       expect(readBytes).toHaveBeenCalledWith(`/tmp/pixel.${ext}`);
     }
   });
 
   it("kitty degrades cleanly when convertToPng fails or returns null", async () => {
     const readBytes = readBytesOf(JPEG_1X1_BASE64);
-    const nullResult = await runNativeRender("/tmp/pixel.jpg", geometry, {
-      protocol: "kitty",
-      readBytes,
-      convertToPng: async () => null,
-    });
-    expect(nullResult).toEqual({
+    expect(
+      await renderNative("/tmp/pixel.jpg", {
+        readBytes,
+        convertToPng: async () => null,
+      }),
+    ).toEqual({
       kind: "failed",
+      renderer: "native",
       reason: "could not convert image to PNG for Kitty rendering",
     });
 
-    const throwResult = await runNativeRender("/tmp/pixel.jpg", geometry, {
-      protocol: "kitty",
-      readBytes,
-      convertToPng: async () => {
-        throw new Error("conversion error");
-      },
-    });
-    expect(throwResult).toEqual({
+    expect(
+      await renderNative("/tmp/pixel.jpg", {
+        readBytes,
+        convertToPng: async () => {
+          throw new Error("conversion error");
+        },
+      }),
+    ).toEqual({
       kind: "failed",
+      renderer: "native",
       reason: "could not convert image to PNG for Kitty rendering",
     });
   });
@@ -2148,8 +2317,7 @@ describe("runNativeRender", () => {
   it("kitty respects abort signal during conversion", async () => {
     const controller = new AbortController();
     const readBytes = readBytesOf(JPEG_1X1_BASE64);
-    const result = await runNativeRender("/tmp/pixel.jpg", geometry, {
-      protocol: "kitty",
+    const result = await renderNative("/tmp/pixel.jpg", {
       readBytes,
       signal: controller.signal,
       convertToPng: async () => {
@@ -2163,45 +2331,44 @@ describe("runNativeRender", () => {
   it("iterm2: fillers are empty and the last line is moveUp + File= with inline=1 and width=", async () => {
     withProtocol("iterm2");
     const readBytes = readBytesOf(PNG_1X1_BASE64);
-    const result = await runNativeRender("/tmp/pixel.png", geometry, {
-      protocol: "iterm2",
-      readBytes,
-    });
+    const result = await renderNative("/tmp/pixel.png", { readBytes }, { nativeProtocol: "iterm2" });
     expect(result.kind).toBe("ok");
     if (result.kind !== "ok") return;
-    expect(result.rows).toBeGreaterThan(1);
-    expect(result.lines).toHaveLength(result.rows);
-    for (const filler of result.lines.slice(0, result.rows - 1)) {
+    expect(result.rows).toBe(geometry.rows); // the request, stamped by the pipeline
+    const fittedRows = result.lines.length;
+    expect(fittedRows).toBeGreaterThan(1);
+    for (const filler of result.lines.slice(0, fittedRows - 1)) {
       expect(filler).toBe("");
     }
-    const last = result.lines[result.rows - 1] ?? "";
-    expect(last.startsWith(`\x1b[${result.rows - 1}A`)).toBe(true);
+    const last = result.lines[fittedRows - 1] ?? "";
+    expect(last.startsWith(`\x1b[${fittedRows - 1}A`)).toBe(true);
     expect(last).toContain("\x1b]1337;File=");
     expect(last).toContain("inline=1");
     expect(last).toContain("width=");
-    expect(last).toContain(`width=${result.cols}`);
-    expect(result.cols).toBeGreaterThan(0);
+    const width = Number(/width=(\d+)/.exec(last)?.[1]);
+    expect(width).toBeGreaterThan(0);
+    expect(width).toBeLessThanOrEqual(geometry.cols);
+    expect(last).toContain(`width=${width}`);
   });
 
-  it("runNativeRender degrades when the decode probe reports an error (Issue #101)", async () => {
+  it("degrades when the decode probe reports an error (Issue #101)", async () => {
     const readBytes = readBytesOf(PNG_1X1_BASE64);
-    const result = await runNativeRender("/tmp/pixel.png", geometry, {
-      protocol: "kitty",
+    const result = await renderNative("/tmp/pixel.png", {
       readBytes,
       probeDecode: async () => "error",
     });
     expect(result).toEqual({
       kind: "failed",
+      renderer: "native",
       reason: "terminal does not support kitty graphics",
     });
     expect(readBytes).not.toHaveBeenCalled();
   });
 
-  it("runNativeRender proceeds on probe ok and no-reply, and tolerates a throwing probe (Issue #101)", async () => {
+  it("proceeds on probe ok and no-reply, and tolerates a throwing probe (Issue #101)", async () => {
     for (const verdict of ["ok", "no-reply"] as const) {
       const readBytes = readBytesOf(PNG_1X1_BASE64);
-      const result = await runNativeRender("/tmp/pixel.png", geometry, {
-        protocol: "kitty",
+      const result = await renderNative("/tmp/pixel.png", {
         readBytes,
         probeDecode: async () => verdict,
         renderImage: encoder(),
@@ -2209,8 +2376,7 @@ describe("runNativeRender", () => {
       expect(result.kind).toBe("ok");
     }
     const throwing = readBytesOf(PNG_1X1_BASE64);
-    const result = await runNativeRender("/tmp/pixel.png", geometry, {
-      protocol: "kitty",
+    const result = await renderNative("/tmp/pixel.png", {
       readBytes: throwing,
       renderImage: encoder(),
       probeDecode: async () => {
@@ -2218,47 +2384,79 @@ describe("runNativeRender", () => {
       },
     });
     expect(result.kind).toBe("ok");
+    expect(throwing).toHaveBeenCalled();
   });
 
-  it("runNativeRender only probes kitty renders, never iterm2 (Issue #101)", async () => {
+  it("only probes kitty renders, never iterm2 (Issue #101)", async () => {
     const probeDecode = vi.fn<() => Promise<KittyProbeVerdict>>(async () => "error");
     const readBytes = readBytesOf(PNG_1X1_BASE64);
-    const result = await runNativeRender("/tmp/pixel.png", geometry, {
-      protocol: "iterm2",
-      readBytes,
-      probeDecode,
-      renderImage: encoder(),
-    });
+    const result = await renderNative(
+      "/tmp/pixel.png",
+      { readBytes, probeDecode, renderImage: encoder() },
+      { nativeProtocol: "iterm2" },
+    );
     expect(result.kind).toBe("ok");
     expect(probeDecode).not.toHaveBeenCalled();
   });
 
-  it("runNativeRender refuses to render on known no-image terminals even when a protocol is forced (Issue #100)", async () => {
-    const readBytes = readBytesOf(PNG_1X1_BASE64);
-    const result = await runNativeRender("/tmp/pixel.png", geometry, {
-      protocol: "kitty",
-      readBytes,
-      env: { TERM_PROGRAM: "alacritty" },
-    });
-    expect(result).toEqual({
-      kind: "failed",
-      reason: "terminal does not support image protocols",
-    });
-    expect(readBytes).not.toHaveBeenCalled();
+  it("folds the renderer's no-image terminal guard into the support ladder: no protocol, no native attempt (Issue #100)", async () => {
+    // The renderer's defensive env guard is unreachable through the pipeline
+    // (makeImagePipeline never passes env down); the SAME terminal inputs are
+    // asserted at the resolution surface: the ladder refuses every declaration
+    // (even a forced caps report), and a refusal plans no native attempt.
+    const noTools: PiChafaApi = { getAllTools: () => [], getCommands: () => [] };
+    for (const env of [
+      { TERM_PROGRAM: "alacritty" },
+      { ALACRITTY_LOG: "/tmp/Alacritty-x.log" },
+      { WT_SESSION: "1" },
+    ]) {
+      const resolved = await resolveImageSupport(
+        noTools,
+        {
+          userSettings: "/u/settings.json",
+          projectSettings: "/p/settings.json",
+          agentDir: "/home/u/.pi/agent",
+        },
+        { images: { mode: "native" } },
+        { readText: readTextOf({}), env, capabilities: () => ({ images: "kitty" }) },
+      );
+      expect(resolved.nativeProtocol).toBeNull();
+      expect(
+        makeImagePipeline(resolved, geometry, {
+          probeDecode: neverProbe,
+          signal: liveSignal,
+        }).attempts,
+      ).toEqual([]);
+    }
   });
 
-  it("runNativeRender refuses to render under multiplexer (#070)", async () => {
-    const readBytes = readBytesOf(PNG_1X1_BASE64);
-    const result = await runNativeRender("/tmp/pixel.png", geometry, {
-      protocol: "kitty",
-      readBytes,
-      env: { TMUX: "1" },
-    });
-    expect(result).toEqual({
-      kind: "failed",
-      reason: "image protocols disabled under tmux/screen",
-    });
-    expect(readBytes).not.toHaveBeenCalled();
+  it("folds the renderer's multiplexer guard into the support ladder: no protocol, no native attempt (#070)", async () => {
+    // Same fold as the no-image terminals above: tmux/screen input via the
+    // resolution surface, where it must refuse every declaration.
+    const noTools: PiChafaApi = { getAllTools: () => [], getCommands: () => [] };
+    for (const env of [
+      { TMUX: "1" },
+      { TERM: "tmux-256color" },
+      { TERM: "screen.xterm-256color" },
+    ]) {
+      const resolved = await resolveImageSupport(
+        noTools,
+        {
+          userSettings: "/u/settings.json",
+          projectSettings: "/p/settings.json",
+          agentDir: "/home/u/.pi/agent",
+        },
+        { images: { mode: "native" } },
+        { readText: readTextOf({}), env, capabilities: () => ({ images: "kitty" }) },
+      );
+      expect(resolved.nativeProtocol).toBeNull();
+      expect(
+        makeImagePipeline(resolved, geometry, {
+          probeDecode: neverProbe,
+          signal: liveSignal,
+        }).attempts,
+      ).toEqual([]);
+    }
   });
 
   it.each([
@@ -2268,12 +2466,14 @@ describe("runNativeRender", () => {
     ["leading dot", "/tmp/.pixel"],
   ])("%s → unsupported format, never reads", async (_label, path) => {
     const readBytes = vi.fn();
-    const result = await runNativeRender(path, geometry, {
-      protocol: "iterm2",
-      readBytes,
-    });
+    const result = await renderNative(
+      path,
+      { readBytes },
+      { nativeProtocol: "iterm2" },
+    );
     expect(result).toEqual({
       kind: "failed",
+      renderer: "native",
       reason: "native rendering does not support this image format",
     });
     expect(readBytes).not.toHaveBeenCalled();
@@ -2282,28 +2482,22 @@ describe("runNativeRender", () => {
   it("iterm2 renders a real GIF fixture", async () => {
     withProtocol("iterm2");
     const readBytes = readBytesOf(GIF_1X1_BASE64);
-    const result = await runNativeRender("/tmp/pixel.gif", geometry, {
-      protocol: "iterm2",
-      readBytes,
-    });
+    const result = await renderNative("/tmp/pixel.gif", { readBytes }, { nativeProtocol: "iterm2" });
     expect(result.kind).toBe("ok");
     if (result.kind !== "ok") return;
-    expect(result.rows).toBeGreaterThan(0);
-    expect(result.cols).toBeGreaterThan(0);
-    expect(result.lines).toHaveLength(result.rows);
-    expect(result.lines[result.rows - 1]).toContain("\x1b]1337;File=");
+    expect(result.lines.length).toBeGreaterThan(0);
+    expect(result.lines.at(-1)).toContain("\x1b]1337;File=");
+    expect(readBytes).toHaveBeenCalledWith("/tmp/pixel.gif");
   });
 
   it("oversized read fails with the exact 4 MiB cap reason (D7)", async () => {
     const readBytes = vi.fn(
       async () => new Uint8Array(IMAGE_NATIVE_MAX_BYTES + 1),
     );
-    const result = await runNativeRender("/tmp/pixel.png", geometry, {
-      protocol: "kitty",
-      readBytes,
-    });
+    const result = await renderNative("/tmp/pixel.png", { readBytes });
     expect(result).toEqual({
       kind: "failed",
+      renderer: "native",
       reason: "image exceeds the 4 MiB native rendering cap",
     });
     expect(readBytes).toHaveBeenCalledTimes(1);
@@ -2311,10 +2505,9 @@ describe("runNativeRender", () => {
 
   it("a pre-aborted signal fails before any read", async () => {
     const readBytes = vi.fn();
-    const result = await runNativeRender("/tmp/pixel.png", geometry, {
-      protocol: "kitty",
-      signal: AbortSignal.abort(),
+    const result = await renderNative("/tmp/pixel.png", {
       readBytes,
+      signal: AbortSignal.abort(),
     });
     expect(result).toEqual({ kind: "aborted" });
     expect(readBytes).not.toHaveBeenCalled();
@@ -2322,12 +2515,10 @@ describe("runNativeRender", () => {
 
   it("garbage bytes under .png fail with could not read image dimensions", async () => {
     const readBytes = vi.fn(async () => new Uint8Array([1, 2, 3, 4, 5]));
-    const result = await runNativeRender("/tmp/pixel.png", geometry, {
-      protocol: "kitty",
-      readBytes,
-    });
+    const result = await renderNative("/tmp/pixel.png", { readBytes });
     expect(result).toEqual({
       kind: "failed",
+      renderer: "native",
       reason: "could not read image dimensions",
     });
   });
@@ -2336,10 +2527,7 @@ describe("runNativeRender", () => {
     const readBytes = vi.fn(async () => {
       throw new Error("boom");
     });
-    const result = await runNativeRender("/tmp/pixel.png", geometry, {
-      protocol: "kitty",
-      readBytes,
-    });
-    expect(result).toEqual({ kind: "failed", reason: "could not read the image file" });
+    const result = await renderNative("/tmp/pixel.png", { readBytes });
+    expect(result).toEqual({ kind: "failed", renderer: "native", reason: "could not read the image file" });
   });
 });

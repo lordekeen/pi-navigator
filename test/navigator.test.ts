@@ -17,7 +17,7 @@ import {
 
 import { IMAGE_RESIZE_DEBOUNCE_MS } from "../constants";
 import { FOCUS_HINTS, type HintPair } from "../help";
-import { DEFAULT_PI_CHAFA_SUBSET, makeDeferredImageSupport, resolveChafaGeometry, type ImageSupport } from "../images";
+import { makeDeferredImageSupport, resolveChafaGeometry, type ImageSupport } from "../images";
 import { makeNavigatorTheme } from "../theme";
 import { buildTree } from "../tree";
 import { entriesFromPaths, findNode } from "./tree_fixtures";
@@ -90,7 +90,7 @@ function activeSupport(overrides: Partial<ImageSupport> = {}): ImageSupport {
     tier: "chafa",
     piChafa: { present: true, via: "settings" },
     chafa: { state: "ok", binary: "chafa", version: { major: 1, minor: 18 } },
-    config: { ...DEFAULT_PI_CHAFA_SUBSET },
+    config: { ...makeDeferredImageSupport("chafa").config },
     hostShowImages: true,
     hostImageWidthCells: 60,
     ...overrides,
@@ -2318,7 +2318,7 @@ describe("chafa image rendering", () => {
 
   it("reports geometry drift once per fresh pass and settles after the session's reflow command", async () => {
     const support = activeSupport({
-      config: { ...DEFAULT_PI_CHAFA_SUBSET, cellWidth: 100, maxRows: 50 },
+      config: { ...makeDeferredImageSupport("chafa").config, cellWidth: 100, maxRows: 50 },
     });
     const harness = makeHarness(
       36,

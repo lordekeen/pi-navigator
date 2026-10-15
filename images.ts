@@ -65,7 +65,7 @@ import { parseTruthyEnv } from "./env";
 
 
 /** Effective image renderer for a session (spec §5.4, D10). */
-export type ImageTier = "native" | "chafa" | "none";
+type ImageTier = "native" | "chafa" | "none";
 
 /** Terminal image protocols pi-tui can render (closed union, D2). */
 export type NativeProtocol = "kitty" | "iterm2";
@@ -104,7 +104,7 @@ export type ImageAttemptRenderer = "native" | "chafa";
  * The failure half of a renderer's raw result (Issue #144): a clean failure
  * with a bounded, renderer-agnostic reason, or a typed supersession.
  */
-export type RendererFailure = { kind: "failed"; reason: string } | { kind: "aborted" };
+type RendererFailure = { kind: "failed"; reason: string } | { kind: "aborted" };
 
 /**
  * The pipeline's per-attempt outcome (Issue #144). `ok` carries the renderer
@@ -121,7 +121,7 @@ export type RenderOutcome =
 
 
 /** Structural provenance subset of pi's SourceInfo (spec §3.2). */
-export interface PiChafaSourceInfoLike {
+interface PiChafaSourceInfoLike {
   path?: string;
   baseDir?: string;
 }
@@ -276,8 +276,8 @@ export function detectPiChafa(
 }
 
 
-export type ChafaColors = "none" | "2" | "8" | "16" | "240" | "256" | "full";
-export type ChafaDither = "none" | "ordered" | "diffusion" | "noise";
+type ChafaColors = "none" | "2" | "8" | "16" | "240" | "256" | "full";
+type ChafaDither = "none" | "ordered" | "diffusion" | "noise";
 
 const COLOR_MODES: readonly ChafaColors[] = [
   "none",
@@ -329,7 +329,7 @@ export interface PiChafaSubset {
 }
 
 /** Defaults mirror pi-chafa's DEFAULT_CONFIG for the mirrored subset (§3.1); preferNative is mirrored (D6), formatOrder stays ignored. */
-export const DEFAULT_PI_CHAFA_SUBSET: PiChafaSubset = {
+const DEFAULT_PI_CHAFA_SUBSET: PiChafaSubset = {
   version: 1,
   binaryPath: null,
   cellWidth: 60,
@@ -417,7 +417,7 @@ function defaultConfigDir(env: Record<string, string | undefined>): string {
  * empty/whitespace env is treated as absent. The parsed `version` is
  * exposed; the `version > 1` guard lives in resolveImageSupport.
  */
-export function loadPiChafaConfig(deps?: {
+function loadPiChafaConfig(deps?: {
   agentDir?: string;
   env?: Record<string, string | undefined>;
   readText?: ReadText;
@@ -532,7 +532,7 @@ function installHint(binary: string): string {
  * missing with the verbatim install hint; unparsable output or other exec
  * failures → error; a version below 1.10 → too-old.
  */
-export async function probeChafa(
+async function probeChafa(
   binaryPath: string | null,
   exec?: ExecFn,
 ): Promise<ChafaStatus> {
@@ -587,7 +587,7 @@ export async function probeChafa(
  * verbatim order), with the size taken from the live pane-bounded geometry
  * (§7.2). No shell: the image path is argv, never interpolated.
  */
-export function buildSymbolsArgs(
+function buildSymbolsArgs(
   imagePath: string,
   s: PiChafaSubset,
   geometry: { cols: number; rows: number },
@@ -630,7 +630,7 @@ const SGR_STICKY_RE = new RegExp(`${ESC}\\[[0-9;]*m`, "y");
  * (hard-cut, Issue #010), and guarantee a per-row trailing `\x1b[0m`.
  * Empty results are rejected. Lines are returned with no trailing `\n`.
  */
-export function sanitizeChafaPayload(
+function sanitizeChafaPayload(
   raw: string,
   geometry: { cols: number; rows: number },
 ): { ok: true; lines: string[] } | { ok: false; reason: string } {
@@ -688,7 +688,7 @@ export function sanitizeChafaPayload(
  * to ctx.signal. Aborts, timeouts, stderr, and nonzero exits all become a
  * typed RendererFailure (never a throw); success is the sanitized payload.
  */
-export async function runChafaRender(
+async function runChafaRender(
   absPath: string,
   geometry: { cols: number; rows: number },
   ctx: {
@@ -763,7 +763,7 @@ export async function runChafaRender(
  * including false/"auto"/"none"/absent/non-string, is null). Missing or
  * corrupt files, and invalid values, fall back to defaults. Never throws.
  */
-export function readHostImageSettings(
+function readHostImageSettings(
   paths: { userSettings: string },
   deps?: { readText?: ReadText },
 ): { showImages: boolean; imageWidthCells: number; images: NativeProtocol | null } {
@@ -835,7 +835,7 @@ function knownNoImageSupport(env: Record<string, string | undefined>): boolean {
   return false;
 }
 
-export function resolveNativeProtocol(deps?: {
+function resolveNativeProtocol(deps?: {
   capabilities?: () => { images: NativeProtocol | null };
   readText?: ReadText;
   env?: Record<string, string | undefined>;
@@ -910,7 +910,7 @@ export type KittyProbeVerdict = "ok" | "error" | "no-reply";
  * per-MIME JPEG/WebP samples failed the probe because kitty decoded them as
  * PNG per the `f=100` tag and are no longer carried.
  */
-export const KITTY_PROBE_SAMPLE: string =
+const KITTY_PROBE_SAMPLE: string =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 
 /**
@@ -1123,7 +1123,7 @@ export const NATIVE_PROTOCOL_RULES: Record<
  * layout come entirely from pi-tui, with NATIVE_PROTOCOL_RULES choosing the
  * probe, the transcode, the image id and the layout (Issue #144).
  */
-export async function runNativeRender(
+async function runNativeRender(
   absPath: string,
   geometry: { cols: number; rows: number },
   ctx: NativeRenderCtx,
@@ -1321,7 +1321,7 @@ export interface ImageSupport {
  * - strict `mode: "native"` keeps chafa deferred and strict `mode: "chafa"`
  *   leaves the native tier unset, so both resolve to a single attempt.
  */
-export function planImageLoad(
+function planImageLoad(
   support: ImageSupport,
   geometry: { cols: number; rows: number } | null,
 ): ImageAttemptRenderer[] {

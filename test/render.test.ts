@@ -36,7 +36,7 @@ import { leftColumnWidth } from "../layout";
 import type { NavigatorLayout } from "../types";
 import type { NavigatorSettings } from "../settings";
 import { openSettingsMenu, type SettingsMenuDeps, type SettingsMenuTheme, type SettingsMenuUi } from "../settings_menu";
-import { DEFAULT_PI_CHAFA_SUBSET, planImageLoad, type ImageSupport } from "../images";
+import { makeDeferredImageSupport, makeImagePipeline, type ImageSupport } from "../images";
 import { makeNavigatorTheme, type NavigatorTheme } from "../theme";
 import { buildTree } from "../tree";
 import { entriesFromPaths } from "./tree_fixtures";
@@ -971,7 +971,7 @@ describe("chafa image render width safety (§12.5)", () => {
     tier: "chafa",
     piChafa: { present: true, via: "settings" },
     chafa: { state: "ok", binary: "chafa", version: { major: 1, minor: 18 } },
-    config: { ...DEFAULT_PI_CHAFA_SUBSET },
+    config: { ...makeDeferredImageSupport("chafa").config },
     hostShowImages: true,
     hostImageWidthCells: 60,
   });
@@ -1007,7 +1007,13 @@ describe("chafa image render width safety (§12.5)", () => {
         const image = opts?.image;
         // Session stand-in (Issue #143): plan under the fixed snapshot — a
         // mode-off/no-tier support leaves the card, never the payload.
-        if (image === undefined || planImageLoad(support, image).length === 0) {
+        if (
+          image === undefined ||
+          makeImagePipeline(support, image, {
+            probeDecode: async () => "no-reply",
+            signal: new AbortController().signal,
+          }).attempts.length === 0
+        ) {
           return { kind: "image", relPath, imageVerdict: { kind: "card" }, lines: [], sizeBytes: 1024, message: "1.0 KB \u00b7 40x40", mtimeMs: 0 };
         }
         return {
@@ -1083,7 +1089,7 @@ describe("native image render width safety (§12.4)", () => {
     tier: "native",
     piChafa: { present: false, via: "none" },
     chafa: { state: "deferred" },
-    config: { ...DEFAULT_PI_CHAFA_SUBSET },
+    config: { ...makeDeferredImageSupport("native").config },
     hostShowImages: true,
     hostImageWidthCells: 60,
   });
@@ -1105,7 +1111,13 @@ describe("native image render width safety (§12.4)", () => {
       onClose: () => undefined,
       loadFile: async (relPath: string, opts?: LoadFileOptions): Promise<ViewerFile> => {
         const image = opts?.image;
-        if (image === undefined || planImageLoad(nativeSupport(), image).length === 0) {
+        if (
+          image === undefined ||
+          makeImagePipeline(nativeSupport(), image, {
+            probeDecode: async () => "no-reply",
+            signal: new AbortController().signal,
+          }).attempts.length === 0
+        ) {
           return { kind: "image", relPath, imageVerdict: { kind: "card" }, lines: [], sizeBytes: 1024, message: "1.0 KB \u00b7 40x40", mtimeMs: 0 };
         }
         return {
