@@ -4,9 +4,9 @@
  * `PI_NAV_ICONS` (icons.ts) and `PI_NAV_IMAGES` (settings.ts) used to carry
  * two copies of the same enable/disable value sets and the same
  * invalid-value warning shape; both now project onto `parseTruthyEnv` so the
- * table cannot drift. The images env additionally accepts the `chafa` token,
- * which `parseImageMode` recognizes itself before delegating (Issue #028
- * carve-out).
+ * table cannot drift. The images env additionally accepts its mode tokens —
+ * `native`, `chafa` and `auto` — which `parseImageMode` recognizes itself
+ * before delegating (Issue #028 carve-out).
  *
  * Pure and dependency-free on purpose: icons.ts imports this module and is
  * pulled in by the TUI component module, so it must stay free of `node:*`

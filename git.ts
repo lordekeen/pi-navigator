@@ -421,7 +421,10 @@ export interface CommitDiff {
   shortHash: string;
   /** Parent short hashes; empty for a root commit. */
   parents: string[];
-  /** Plain diff body lines, already CR-normalized. Empty for a root commit. */
+  /**
+   * Plain diff body lines, already CR-normalized. A root commit diffs against
+   * the empty tree, so its lines list the whole content as additions.
+   */
   lines: string[];
   /** Files changed count + insertions/deletions for the notice row. */
   filesChanged: number;

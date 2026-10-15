@@ -50,7 +50,9 @@ export const MAX_TREE_DEPTH = 6;
  * so (Issue #108). */
 export const MAX_FS_ENTRIES = 25_000;
 
-/** Directory names skipped by the filesystem walk fallback. */
+/** Entry names skipped by the filesystem walk fallback: a matching directory
+ *  prunes its whole subtree, and matching file names (e.g. `.DS_Store`) are
+ *  skipped too — the set is applied to every dirent. */
 export const IGNORED_NAMES = new Set([
   ".git",
   "node_modules",

@@ -18,7 +18,9 @@ function isContinuation(byte: number): boolean {
  * boundary (the byte at the cut is a lead byte or ASCII). A cut at the
  * buffer's end has no such byte, so the final sequence is inspected instead
  * and dropped when incomplete (the capped-read case: `decodeUtf8Head`).
- * Deterministic and total: malformed trailing bytes are left as read.
+ * Deterministic and total: a buffer-end cut drops an incomplete final
+ * sequence (its lead byte and any continuations present); stray malformed
+ * bytes are otherwise left as read.
  */
 export function truncateUtf8ToBytes(buffer: Buffer, maxBytes: number): Buffer {
   const end = Math.min(Math.max(0, maxBytes), buffer.length);

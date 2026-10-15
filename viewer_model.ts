@@ -203,11 +203,12 @@ export class ViewerModel {
       ? paneContentArea(area, file, diskChanged)
       : { noticeRows: 0, contentArea: area };
 
-    // Issue #165: decide the map before any body computation, so the row width
-    // is settled once and the decision never costs a second render of the same
-    // content (the #054 guarantee: markdown renders once per pass). The gate is
-    // the file's own line count, which is exact when wrap is off (`n` IS the
-    // line count) and a sound-enough signal otherwise.
+    // Issue #165: decide whether the map shows before any body computation,
+    // so the content row width is settled once (the #054 guarantee: markdown
+    // renders once per pass). The first gate is the SOURCE line count against
+    // the content area — exact when wrap is off, and deliberately permissive
+    // for wrapping, where the map's own texts re-check; the definitive check
+    // is the map texts' row count once they are built.
     const map = input.minimap;
     let mapW = 0;
     let minimap: { sketch: MinimapSketch; width: number; marks: MinimapMarks | null } | null = null;

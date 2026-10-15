@@ -2,8 +2,8 @@ import { defineConfig } from "vitest/config";
 
 /**
  * Tests run against the real @earendil-works/pi-tui and pi-coding-agent
- * packages (devDependencies, pinned to the running pi version 0.85.1) so
- * viewer wrap math, width accounting and highlighting behave exactly as they
+ * packages (devDependencies, kept in step with the host pi version — see
+ * the dev-pin note in AGENTS.md) so viewer wrap math, width accounting and
  * do inside pi. The only stubs are side-effectful surfaces such as
  * copyToClipboard, mocked per test file via vi.mock.
  *

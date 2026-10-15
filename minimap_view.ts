@@ -43,9 +43,9 @@ export interface MinimapSketch {
   readonly blocks: readonly MinimapBlock[];
   /** One styled, exactly `width`-wide row per block (no band painted). */
   readonly rows: readonly string[];
-  /** The area the fold was built for (Issue #169): the band's window height,
-   *  so `renderMinimap` consumes the fold's own window and cannot be called
-   *  with a differing one. */
+  /** The area the fold was built for (Issue #169): the band's window height.
+   *  The caller passes it as `renderMinimap`'s window, so the band always
+   *  paints the height the rows were folded for. */
   readonly area: number;
 }
 

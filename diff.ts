@@ -43,20 +43,6 @@ export function styleCommitMessage(message: CommitMessage, T: NavigatorTheme): s
 }
 
 /**
- * Style one diff line by its leading characters. Added, removed and context
- * lines use the host's dedicated diff roles (`toolDiffAdded` /
- * `toolDiffRemoved` / `toolDiffContext`) rather than the generic
- * success/error/text tokens, which mean other things elsewhere in the overlay
- * and are not what a theme styles diffs with (Issue #135 L7).
- *
- * - `+++` / `---` file headers → muted
- * - `+`   added line → diffAdded
- * - `-`   removed line → diffRemoved
- * - `@@`  hunk header → accent
- * - `diff` / `index` / `new file` / `deleted file` / `Binary files` meta → muted
- * - anything else (context) → diffContext
- */
-/**
  * The diff-line classes every consumer styles: file banners and git meta
  * lines, hunk headers, additions, removals and context.
  */
@@ -66,9 +52,9 @@ export type DiffLineTone = "meta" | "hunk" | "added" | "removed" | "context";
  * Classify one raw diff line by its prefix — the one diff grammar, so a new
  * prefix is taught once (Issue #175). `+++`/`---` banners and git meta lines
  * are `meta`, `@@` hunks are `hunk`, `+`/`-` are additions/removals, and
- * everything else is context. The commit-message head and blank separator
- * carry no prefix and read as context: prefix-based classification is a
- * deliberate simplification that cannot show message structure.
+ * everything else is context. This classifier sees diff bodies only: the
+ * commit message is styled separately by `styleCommitMessage`, so no message
+ * line ever reaches it.
  */
 export function diffLineTone(line: string): DiffLineTone {
   if (line.startsWith("+++ ") || line.startsWith("--- ")) return "meta";
@@ -101,6 +87,19 @@ export function diffLineStyler(T: NavigatorTheme, tone: DiffLineTone): (text: st
   return DIFF_TONE_STYLERS[tone](T);
 }
 
+/**
+ * Style one diff line by its tone (see `diffLineTone`). Added, removed and
+ * context lines use the host's dedicated diff roles (`toolDiffAdded` /
+ * `toolDiffRemoved` / `toolDiffContext`) rather than the generic
+ * success/error/text tokens, which mean other things elsewhere in the overlay
+ * and are not what a theme styles diffs with (Issue #135 L7).
+ *
+ * - `+++` / `---` file banners and git meta lines → muted
+ * - `+` added line → diffAdded
+ * - `-` removed line → diffRemoved
+ * - `@@` hunk header → accent
+ * - context → diffContext
+ */
 export function styleDiffLines(lines: string[], T: NavigatorTheme): string[] {
   return lines.map((line) => diffLineStyler(T, diffLineTone(line))(line));
 }

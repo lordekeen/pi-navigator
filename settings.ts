@@ -722,8 +722,8 @@ export function commitNavigatorSettings(
 /**
  * Parse a raw numeric setting value, clamping into [min, max] when defined
  * and rejecting NaN (§2.2). Factored out of `applyFieldEdit` so the number
- * rule set is testable today (the registry has no number fields yet; min/max
- * are future-use).
+ * rule set is testable today (the shared rule set behind every number field;
+ * `viewer.minimapWidth` is the live registry row using min/max).
  */
 export function parseNumberField(
   rawValue: string,

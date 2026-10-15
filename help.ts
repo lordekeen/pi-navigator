@@ -123,7 +123,7 @@ export const KEY_BINDINGS: readonly KeyBinding[] = [
 ];
 
 /**
- * The in-overlay `?` modal's keybinding table (19 rows, rendered by
+ * The in-overlay `?` modal's keybinding table (20 rows, rendered by
  * composeHelp in navigator.ts, which projects [keys, description] from here).
  * `id` is a stable slug a test can assert equality against; key order and
  * wording are the rendered contract. Derived from `KEY_BINDINGS` (Issue #148),
