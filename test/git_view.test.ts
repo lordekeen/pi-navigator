@@ -153,6 +153,19 @@ describe("buildGitRows", () => {
     expect(hints).toHaveLength(1);
     expect(hints[0]).toMatchObject({ tone: "dim" });
   });
+
+  it("survives a self- or mutually-referencing parent chain (Issue #188)", () => {
+    // Corrupt or forged parent refs (real git output is well-formed): the
+    // depth walk must terminate instead of recursing forever.
+    const selfRef = buildGitRows(gitState({ history: [commit("a", ["a"])] }), new Set(["a"]));
+    expect(selfRef.some((row) => row.kind === "commit-child" && row.commit.shortHash === "a")).toBe(true);
+
+    const mutual = buildGitRows(
+      gitState({ history: [commit("a", ["b"]), commit("b", ["a"])] }),
+      new Set(["a", "b"]),
+    );
+    expect(mutual.filter((row) => row.kind === "commit-child").length).toBeGreaterThan(0);
+  });
 });
 
 describe("buildGitNavRows", () => {

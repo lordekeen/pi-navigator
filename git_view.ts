@@ -87,18 +87,28 @@ export function buildGitRows(git: GitState | null, expanded: ReadonlySet<string>
     // own depth + 1. Recomputing from `expanded` on every cache miss means
     // collapsing a chain correctly *resets* the depths (no stale indents).
     const memo = new Map<string, number>();
+    const visiting = new Set<string>();
     const commitDepth = (hash: string): number => {
       const cached = memo.get(hash);
       if (cached !== undefined) return cached;
-      for (const anchor of git.history) {
-        if (expanded.has(anchor.shortHash) && (anchor.parents ?? []).includes(hash)) {
-          const depth = commitDepth(anchor.shortHash) + 1;
-          memo.set(hash, depth);
-          return depth;
+      // Defensive cycle guard (Issue #188): real git output is well-formed,
+      // but a forged or corrupt parent ref must not recurse forever — a hash
+      // already being resolved contributes 0.
+      if (visiting.has(hash)) return 0;
+      visiting.add(hash);
+      try {
+        for (const anchor of git.history) {
+          if (expanded.has(anchor.shortHash) && (anchor.parents ?? []).includes(hash)) {
+            const depth = commitDepth(anchor.shortHash) + 1;
+            memo.set(hash, depth);
+            return depth;
+          }
         }
+        memo.set(hash, 0);
+        return 0;
+      } finally {
+        visiting.delete(hash);
       }
-      memo.set(hash, 0);
-      return 0;
     };
     const added = new Set<string>();
     let count = 0;
