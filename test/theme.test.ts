@@ -88,16 +88,26 @@ describe("makeNavigatorTheme token mapping", () => {
 });
 
 describe("makeNavigatorTheme optional-token guards (Issue #042)", () => {
-  it("searchCurrent falls back to the searchMatch pair when underline is missing", () => {
-    const { underline: _dropped, ...minimal } = makeFakeTheme();
-    const nav = makeNavigatorTheme(minimal as never);
-    expect(nav.searchCurrent("<x>")).toBe(nav.searchMatch("<x>"));
-    expect(nav.searchCurrent("<x>")).toBe("bg:searchMatchBg(fg:searchMatchText(<x>))");
+  it("searchCurrent falls back to inverse, then bold, then the plain pair (Issue #194)", () => {
+    const { underline: _droppedUnderline, ...noUnderline } = makeFakeTheme();
+    const inverseNav = makeNavigatorTheme(noUnderline as never);
+    expect(inverseNav.searchCurrent("<x>")).toBe("inverse(bg:searchMatchBg(fg:searchMatchText(<x>)))");
+
+    const { inverse: _droppedInverse, ...noInverse } = noUnderline;
+    const boldNav = makeNavigatorTheme(noInverse as never);
+    expect(boldNav.searchCurrent("<x>")).toBe("bold(bg:searchMatchBg(fg:searchMatchText(<x>)))");
+
+    // No non-colour cue exists on such a host: the current match is the match
+    // pair — indistinguishable, but nothing false is emitted either.
+    const { bold: _droppedBold, ...bare } = noInverse;
+    const bareNav = makeNavigatorTheme(bare as never);
+    expect(bareNav.searchCurrent("<x>")).toBe(bareNav.searchMatch("<x>"));
+    expect(bareNav.searchCurrent("<x>")).toBe("bg:searchMatchBg(fg:searchMatchText(<x>))");
   });
 
   it("searchCurrent falls back when underline is present but not a function", () => {
     const nav = makeNavigatorTheme(makeFakeTheme({ underline: "not-a-function" as unknown as FakeTheme["underline"] }) as never);
-    expect(nav.searchCurrent("<x>")).toBe("bg:searchMatchBg(fg:searchMatchText(<x>))");
+    expect(nav.searchCurrent("<x>")).toBe("inverse(bg:searchMatchBg(fg:searchMatchText(<x>)))");
   });
 
   it("underline receives the composed searchMatch string, not the raw text", () => {

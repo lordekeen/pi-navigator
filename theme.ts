@@ -20,7 +20,7 @@ export interface NavigatorTheme {
   selectedBg(t: string): string;
   /** Search match highlight (all matches). */
   searchMatch(t: string): string;
-  /** Search match highlight (current match, inverted pair). */
+  /** Search match highlight (current match): the match pair plus a non-colour cue. */
   searchCurrent(t: string): string;
   /** Frame borders. */
   frame(t: string): string;
@@ -55,12 +55,18 @@ export function makeNavigatorTheme(theme: Theme): NavigatorTheme {
     bold: (t) => (typeof theme.bold === "function" ? theme.bold(t) : t),
     selectedBg: (t) => theme.bg("selectedBg", t),
     searchMatch: (t) => theme.bg("searchMatchBg", theme.fg("searchMatchText", t)),
-    // Current match: same pair plus underline, mirroring pi's own tui-renderer.
+    // Current match: the same pair plus a non-colour cue, so it never differs
+    // from every other match by colour alone (Issue #194). Underline mirrors
+    // pi's own tui-renderer; hosts without it fall back to inverse, then bold,
+    // and only a host with none of the three collapses to the plain pair.
     // A token-inverted pair would pass a ThemeColor name to theme.bg(), which
     // throws at runtime (theme.bg rejects unknown keys) and fails typecheck.
     searchCurrent: (t) => {
       const match = theme.bg("searchMatchBg", theme.fg("searchMatchText", t));
-      return typeof theme.underline === "function" ? theme.underline(match) : match;
+      if (typeof theme.underline === "function") return theme.underline(match);
+      if (typeof theme.inverse === "function") return theme.inverse(match);
+      if (typeof theme.bold === "function") return theme.bold(match);
+      return match;
     },
     frame: (t) => theme.fg("borderMuted", t),
     // Dedicated scrollbar roles (Issue #137 §4). Both are optional host tokens:
