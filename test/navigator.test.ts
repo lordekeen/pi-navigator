@@ -432,6 +432,24 @@ describe("keybindings-manager cancel (Issues #125/#126)", () => {
     expect(harness.overlay.render(120).join("\n")).not.toContain("cycle pane focus"); // modal gone
   });
 
+  it("drives the help modal with the shared cursor-movement language (#179)", () => {
+    // A shorter terminal makes the 19-row modal scroll (visibleRows 11), so
+    // every movement verb is observable.
+    const harness = makeHarness(24);
+    harness.overlay.handleInput("?");
+    const rendered = (): string => harness.overlay.render(120).join("\n");
+    const top = rendered();
+    harness.overlay.handleInput("j");
+    harness.overlay.handleInput("j");
+    expect(rendered()).not.toBe(top);
+    harness.overlay.handleInput("G"); // jump to the bottom
+    expect(rendered()).not.toBe(top);
+    harness.overlay.handleInput("g"); // jump back to the top, byte-identical
+    expect(rendered()).toBe(top);
+    harness.overlay.handleInput(KEYS.ctrlD); // half-page step
+    expect(rendered()).not.toBe(top);
+  });
+
   it("clears the filter field and exits it without closing", () => {
     const harness = withManager(manager());
     withTree(harness, ["src/a.ts"]);

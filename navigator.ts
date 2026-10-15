@@ -188,6 +188,27 @@ function deleteLastCodePoint(text: string): string {
   return text.slice(0, end);
 }
 
+/**
+ * One cursor-movement language for the cursor-list panes (Issue #179): j/k
+ * and the arrows step, g/G and Home/End jump to the ends, ctrl+d/u and
+ * PgDn/PgUp page by half the pane's visible height. Returns null for any
+ * other key so the caller's own branches keep running; the clamps are
+ * tree.ts's moveCursor/pageJump, with the pane's own total and visible area.
+ */
+function movedCursor(total: number, index: number, area: number, data: string): number | null {
+  if (matchesKey(data, Key.up) || data === "k") return moveCursor(total, index, -1);
+  if (matchesKey(data, Key.down) || data === "j") return moveCursor(total, index, 1);
+  if (data === "g" || matchesKey(data, Key.home)) return 0;
+  if (data === "G" || matchesKey(data, Key.end)) return moveCursor(total, index, total);
+  if (matchesKey(data, Key.ctrl("d")) || matchesKey(data, Key.pageDown)) {
+    return pageJump(total, index, 1, area);
+  }
+  if (matchesKey(data, Key.ctrl("u")) || matchesKey(data, Key.pageUp)) {
+    return pageJump(total, index, -1, area);
+  }
+  return null;
+}
+
 export class NavigatorOverlay implements Focusable {
   /** Set by TUI when focus changes; gates the CURSOR_MARKER emission. */
   focused = false;
@@ -764,18 +785,11 @@ export class NavigatorOverlay implements Focusable {
 
   private handleHelpInput(data: string): void {
     const maxScroll = this.helpMaxScroll();
-    if (matchesKey(data, Key.up) || data === "k") {
-      this.helpScroll = Math.max(0, this.helpScroll - 1);
-    } else if (matchesKey(data, Key.down) || data === "j") {
-      this.helpScroll = Math.min(maxScroll, this.helpScroll + 1);
-    } else if (matchesKey(data, Key.home)) {
-      this.helpScroll = 0;
-    } else if (matchesKey(data, Key.end)) {
-      this.helpScroll = maxScroll;
-    } else if (matchesKey(data, Key.pageUp)) {
-      this.helpScroll = Math.max(0, this.helpScroll - this.helpPageStep());
-    } else if (matchesKey(data, Key.pageDown)) {
-      this.helpScroll = Math.min(maxScroll, this.helpScroll + this.helpPageStep());
+    // The modal scrolls through the same movement language (Issue #179): its
+    // cursor is the scroll offset and its total is maxScroll + 1.
+    const moved = movedCursor(maxScroll + 1, this.helpScroll, this.helpVisibleRows(), data);
+    if (moved !== null) {
+      this.helpScroll = moved;
     } else if (data === "?" || data === "q" || this.matchesCancel(data)) {
       this.mode = "normal";
     } else {
@@ -899,18 +913,9 @@ export class NavigatorOverlay implements Focusable {
     const area = filesArea(this.getTerminalRows(), this.layout);
     const current = rows[this.filesCursor];
 
-    if (matchesKey(data, Key.up) || data === "k") {
-      this.filesCursor = moveCursor(rows.length, this.filesCursor, -1);
-    } else if (matchesKey(data, Key.down) || data === "j") {
-      this.filesCursor = moveCursor(rows.length, this.filesCursor, 1);
-    } else if (data === "g" || matchesKey(data, Key.home)) {
-      this.filesCursor = 0;
-    } else if (data === "G" || matchesKey(data, Key.end)) {
-      this.filesCursor = moveCursor(rows.length, this.filesCursor, rows.length);
-    } else if (matchesKey(data, Key.ctrl("d")) || matchesKey(data, Key.pageDown)) {
-      this.filesCursor = pageJump(rows.length, this.filesCursor, 1, area);
-    } else if (matchesKey(data, Key.ctrl("u")) || matchesKey(data, Key.pageUp)) {
-      this.filesCursor = pageJump(rows.length, this.filesCursor, -1, area);
+    const moved = movedCursor(rows.length, this.filesCursor, area, data);
+    if (moved !== null) {
+      this.filesCursor = moved;
     } else if (matchesKey(data, Key.enter)) {
       if (current?.node.isDir) {
         this.toggleDir(current.node);
@@ -944,18 +949,14 @@ export class NavigatorOverlay implements Focusable {
 
   private handleGitInput(data: string): void {
     const rows = this.gitNavRows();
-    if (matchesKey(data, Key.up) || data === "k") {
-      this.gitCursor = moveCursor(rows.length, this.gitCursor, -1);
-    } else if (matchesKey(data, Key.down) || data === "j") {
-      this.gitCursor = moveCursor(rows.length, this.gitCursor, 1);
-    } else if (data === "g" || matchesKey(data, Key.home)) {
-      this.gitCursor = 0;
-    } else if (data === "G" || matchesKey(data, Key.end)) {
-      this.gitCursor = moveCursor(rows.length, this.gitCursor, rows.length);
-    } else if (matchesKey(data, Key.ctrl("d")) || matchesKey(data, Key.pageDown)) {
-      this.gitCursor = pageJump(rows.length, this.gitCursor, 1, gitArea(this.getTerminalRows(), this.layout));
-    } else if (matchesKey(data, Key.ctrl("u")) || matchesKey(data, Key.pageUp)) {
-      this.gitCursor = pageJump(rows.length, this.gitCursor, -1, gitArea(this.getTerminalRows(), this.layout));
+    const moved = movedCursor(
+      rows.length,
+      this.gitCursor,
+      gitArea(this.getTerminalRows(), this.layout),
+      data,
+    );
+    if (moved !== null) {
+      this.gitCursor = moved;
     } else if (matchesKey(data, Key.enter)) {
       const row = rows[this.gitCursor];
       if (!row) return;
@@ -1244,10 +1245,6 @@ export class NavigatorOverlay implements Focusable {
   }
 
   /** Half-page step for the help modal (PageUp/PageDown aliases, Issue #127). */
-  private helpPageStep(): number {
-    return Math.max(1, Math.ceil(this.helpVisibleRows() / HALF_PAGE_DIVISOR));
-  }
-
   /**
    * Native geometry for the current pane snapshot (§7.2, Q2 amendment): the
    * pane is the hard cap and the host width preference narrows it
