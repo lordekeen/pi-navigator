@@ -345,7 +345,6 @@ export class NavigatorOverlay implements Focusable {
     });
   }
 
-  // ── Public API ──
 
   /**
    * Install a freshly built tree. Expansion state is applied by the session
@@ -637,7 +636,6 @@ export class NavigatorOverlay implements Focusable {
     this.viewerModel.invalidate("theme");
   }
 
-  // ── Row models ──
 
   private filesRows(): FilesRow[] {
     const root = this.root;
@@ -703,7 +701,6 @@ export class NavigatorOverlay implements Focusable {
     this.touch();
   }
 
-  // ── Input ──
 
   /**
    * Host-owned cancel (Issues #125/#126): consult the injected
@@ -1154,7 +1151,6 @@ export class NavigatorOverlay implements Focusable {
     this.touch();
   }
 
-  // ── Actions ──
 
   /**
    * Identity of a cursor-navigable git row (Issue #124): file rows anchor by
@@ -1236,7 +1232,6 @@ export class NavigatorOverlay implements Focusable {
     this.cachedLines = undefined;
   }
 
-  // ── Geometry helpers ──
 
   /** Help rows that fit. Shared by the input clamp and the renderer. */
   private helpVisibleRows(body = bodyRows(overlayHeight(this.getTerminalRows()))): number {
@@ -1305,7 +1300,6 @@ export class NavigatorOverlay implements Focusable {
     this.onImageViewChanged();
   }
 
-  // ── Render ──
 
   render(width: number): string[] {
     if (this.cachedLines && this.cachedWidth === width) return this.cachedLines;
@@ -1396,7 +1390,6 @@ export class NavigatorOverlay implements Focusable {
     return lines;
   }
 
-  // ── Left column ──
 
   /**
    * Left-column rows for the current layout (Issue #119): per `layoutPanes`,
@@ -1510,7 +1503,6 @@ export class NavigatorOverlay implements Focusable {
     this.gitScroll = Math.max(0, Math.min(this.gitScroll, Math.max(0, rows.length - area)));
   }
 
-  // ── Right pane ──
 
   private buildRightRows(rightW: number, body: number): string[] {
     const isSwitching =

@@ -94,6 +94,7 @@ The overlay is a pure TUI component; it never touches the filesystem or git dire
 
 - **Single-writer for source edits.** Routine localized edits → small, targeted changes. Cross-module refactors stay coherent.
 - **No hardcoded colors.** All styling goes through `NavigatorTheme` (`theme.ts`), which delegates to the user's active pi theme. Never inline ANSI color codes in component code — the theme is the only source of color.
+- **No section banners.** Long modules carry their structure through symbol names and doc comments, not `// ── Section ──` dividers (Issue #176: all 48 production banners removed deliberately; tests keep theirs as group narration).
 - **ANSI / escape sequences are load-bearing.** The viewer composes styled strings that are sliced, wrapped, truncated, and padded. Before changing any truncation, wrapping, or padding code, read these two facts that have already caused shipped bugs:
   - **Carriage returns break layout.** Normalize `\r\n` and lone `\r` to `\n` in `loadFile` before highlighting/splitting. A stray `\r` resets the terminal cursor to column 0 and the row's padding overwrites the gutter/border (Issue #009).
   - **`truncateToWidth`'s default `"..."` ellipsis is wrapped in `\x1b[0m` resets.** It closes any open style and renders the ellipsis in bright default. Truncate styled strings with an **empty** ellipsis (`""`) for a clean hard-cut; for plain text you want to re-style, truncate with `""`, strip the injected reset, and append your own styled ellipsis before wrapping (Issue #010).

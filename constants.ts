@@ -6,7 +6,6 @@
  * data modules (tree, git, viewer) and the overlay component.
  */
 
-// ── Refresh ──
 
 /** Git and tree refresh base interval while the overlay is open. */
 export const REFRESH_INTERVAL_MS = 3000;
@@ -14,7 +13,6 @@ export const REFRESH_INTERVAL_MS = 3000;
 /** Maximum idle polling interval under dynamic backoff. */
 export const MAX_POLL_INTERVAL_MS = 10000;
 
-// ── Viewing caps ──
 
 /** Files larger than this render as a truncated head plus a notice row. */
 export const MAX_HIGHLIGHT_BYTES = 1024 * 1024;
@@ -43,7 +41,6 @@ export const BINARY_SNIFF_BYTES = 4096;
 /** Tabs expand to this many columns before highlighting. */
 export const TAB_WIDTH = 4;
 
-// ── Tree ──
 
 /** Directory recursion depth cap for the filesystem walk fallback. */
 export const MAX_TREE_DEPTH = 6;
@@ -78,7 +75,6 @@ export const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "b
 /** Extensions identified as Markdown files for rendered viewing. */
 export const MARKDOWN_EXTENSIONS = new Set(["md", "markdown", "mdown", "mkd", "mdx"]);
 
-// ── Settings ──
 
 /** User-level pi-navigator settings file, under the pi agent dir. */
 export const NAVIGATOR_SETTINGS_FILE = "pi-navigator.json";
@@ -89,7 +85,6 @@ export const NAVIGATOR_IMAGES_ENV = "PI_NAV_IMAGES";
 /** Environment override for the default layout (read once in index.ts, Issue #119). */
 export const NAVIGATOR_LAYOUT_ENV = "PI_NAV_LAYOUT";
 
-// ── CLI flags (Issue #131) ──
 //
 // Registered with pi.registerFlag so they appear in `pi --help`, which env vars
 // never do. Flags are the most explicit layer and beat the env vars
@@ -110,7 +105,6 @@ export const NAVIGATOR_ICONS_FLAG = "navigator-icons";
 /** `--navigator-layout <files-git-viewer|files-viewer|git-viewer>`; beats `PI_NAV_LAYOUT`. */
 export const NAVIGATOR_LAYOUT_FLAG = "navigator-layout";
 
-// ── Chafa / image rendering ──
 
 /** pi-chafa's config file name (read-only mirror; never written here). */
 export const PI_CHAFA_CONFIG_FILE = "pi-chafa.json";
@@ -164,7 +158,6 @@ export const NATIVE_IMAGE_MIME: Record<string, string> = {
   webp: "image/webp",
 };
 
-// ── Git ──
 
 /** Timeout for every git invocation. */
 export const GIT_TIMEOUT_MS = 3000;
@@ -178,9 +171,7 @@ export const FAMILY_MAX_DEPTH = 3;
 /** Maximum rows rendered by one expanded commit family. */
 export const FAMILY_MAX_ROWS = 16;
 
-// ── Layout ──
 
-/** Overlay options passed to ctx.ui.custom. */
 /** Overlay height as a fraction of the terminal. Shared by the host option
  *  below and `layout.overlayHeight`, so the box the host allocates and the frame
  *  the component draws cannot drift apart (Issue #130). */
@@ -189,6 +180,7 @@ export const OVERLAY_HEIGHT_RATIO = 0.85;
  *  `overlayHeight` clamp that reserves it. */
 export const OVERLAY_MARGIN_ROWS = 1;
 
+/** Overlay options passed to ctx.ui.custom. */
 export const OVERLAY_OPTIONS = {
   width: "90%",
   minWidth: 80,

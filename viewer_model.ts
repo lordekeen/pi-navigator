@@ -79,7 +79,6 @@ export class ViewerModel {
   private readonly theme: () => NavigatorTheme;
   private readonly styleKey: () => string;
 
-  // ── Render caches ──
   private plainRowsCache: { file: ViewerFile; width: number; wrap: boolean; rows: DisplayRow[] } | null =
     null;
   private maxLineWidthCache: { file: ViewerFile; value: number } | null = null;
@@ -105,7 +104,6 @@ export class ViewerModel {
   private mdRenderer: Markdown | null = null;
   private mdCache: { file: ViewerFile; width: number; lines: string[] } | null = null;
 
-  // ── Search derivation ──
   private searchQuery = "";
   private searchMatches: SearchMatch[] = [];
   private searchIndex = 0;
@@ -124,7 +122,6 @@ export class ViewerModel {
     this.styleKey = deps.styleKey;
   }
 
-  // ── Search surface ──
 
   get query(): string {
     return this.searchQuery;
@@ -196,7 +193,6 @@ export class ViewerModel {
     this.searchVersion += 1;
   }
 
-  // ── Render ──
 
   render(input: ViewerRenderInput): ViewerRenderOutput {
     const { file, wrap, renderMarkdown, diskChanged, imageCard } = input;
@@ -356,7 +352,6 @@ export class ViewerModel {
     return { content, window: win, minimap, digits, noticeRows, mapActive: minimap !== null };
   }
 
-  // ── Search derivation ──
 
   private recomputeSearch(): void {
     const file = this.latestFile;
@@ -470,7 +465,6 @@ export class ViewerModel {
     return rows;
   }
 
-  // ── Caches ──
 
   private getRenderedMarkdownLines(file: ViewerFile, width: number): string[] {
     if (width <= 0) return [];

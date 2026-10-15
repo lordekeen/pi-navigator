@@ -6,7 +6,6 @@
  * from here so the module boundaries stay honest.
  */
 
-// ── Focus and modes ──
 
 export type Focus = "files" | "git" | "viewer";
 export type InputMode = "normal" | "filter" | "search" | "help";
@@ -21,7 +20,6 @@ export type InputMode = "normal" | "filter" | "search" | "help";
 export const NAVIGATOR_LAYOUTS = ["files-git-viewer", "files-viewer", "git-viewer"] as const;
 export type NavigatorLayout = (typeof NAVIGATOR_LAYOUTS)[number];
 
-// ── Tree ──
 
 /** Raw git status code for a path ("M", "A", "D", "??", ...). */
 export type GitCode = string;
@@ -66,7 +64,6 @@ export interface MatchRow {
 
 export type FilesRow = TreeRow | MatchRow;
 
-// ── Git ──
 
 export interface GitChangedFile {
   relPath: string;
@@ -114,7 +111,6 @@ export type GitRow =
   | { kind: "commit"; commit: GitCommit }
   | { kind: "commit-child"; commit: GitCommit; depth: number };
 
-// ── Viewer ──
 
 /**
  * What the viewer is showing (Issue #142): a file keyed by its relPath, or a

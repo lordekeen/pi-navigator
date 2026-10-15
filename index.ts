@@ -359,7 +359,6 @@ async function runNavigator(
       // is per invocation (not per process) so error verdicts expire.
       const kittyProbe = makeTuiKittyDecodeProbe(tui);
 
-      // ── Image support (optional chafa rendering) — resolved per invocation ──
       // Settings are read once here (never in the component, Issue #028/#039
       // pattern); warnings notify once per distinct message (§5.2). The
       // registry rows drive both startup layers (Issue #145).

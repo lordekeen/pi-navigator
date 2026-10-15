@@ -24,7 +24,6 @@ import type { FileNode, MatchRow, TreeRow } from "./types";
 
 const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 
-// ── Entry collection ──
 
 export interface TreeEntry {
   /** cwd-relative posix path. */
@@ -242,7 +241,6 @@ export async function collectFsProbe(cwd: string, dirs: Set<string>): Promise<st
   return parts.join("|");
 }
 
-// ── Build ──
 
 function makeNode(
   name: string,
@@ -355,7 +353,6 @@ export function buildTree(cwd: string, entries: TreeEntry[], gitCodes: Map<strin
   return root;
 }
 
-// ── Git codes ──
 
 /**
  * Stamp worktree/index codes onto an existing tree without rebuilding it.
@@ -385,7 +382,6 @@ function recomputeSubtreeChanged(node: FileNode): boolean {
   return any;
 }
 
-// ── Traversal ──
 
 /**
  * Action returned by `visit` to control tree traversal:
@@ -414,7 +410,6 @@ export function walkTree(root: FileNode, visit: (node: FileNode) => WalkAction):
   }
 }
 
-// ── Expansion state ──
 
 /**
  * RelPaths of expanded untracked (`??`) and ignored (`!!`) directory nodes.
@@ -461,7 +456,6 @@ export function reapplyExpansion(root: FileNode, expanded: Set<string>, defaultD
   });
 }
 
-// ── Navigation helpers ──
 
 /** Clamp a cursor move into [0, total - 1]. One place for cursor math. */
 export function moveCursor(total: number, index: number, delta: number): number {

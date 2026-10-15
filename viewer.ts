@@ -32,7 +32,6 @@ import { truncateUtf8ToBytes } from "./bytes";
 import { type ImageAttemptRenderer, type RenderOutcome } from "./images";
 import type { SearchMatch, ViewerFile } from "./types";
 
-// ── Text helpers ──
 
 /** Expand tabs to the next tab stop, column aware, per line. */
 export function expandTabs(text: string, tabWidth = TAB_WIDTH): string {
@@ -131,7 +130,6 @@ export function markMatches(
   return out;
 }
 
-// ── Detection ──
 
 export function extOf(relPath: string): string {
   const slash = relPath.lastIndexOf("/");
@@ -194,7 +192,6 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-// ── Loading ──
 
 /**
  * Decode UTF-8 bytes, dropping a trailing sequence that the read cut in half,
@@ -483,7 +480,6 @@ export function restyleViewerFile(file: ViewerFile, styleKey: string): ViewerFil
   return { ...file, lines: highlightLines(file.styleText, file.relPath), styleKey };
 }
 
-// ── Search ──
 
 /** Smart-case search over styled lines. Returns match offsets valid for the
  *  styled string (see the module note). */
@@ -511,7 +507,6 @@ export function searchLines(lines: string[], query: string): SearchMatch[] {
   return matches;
 }
 
-// ── Display rows ──
 
 export interface DisplayRow {
   /** Source line index, null for wrapped continuation rows. */

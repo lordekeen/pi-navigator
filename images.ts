@@ -63,7 +63,6 @@ import {
 import type { NavigatorImageMode } from "./settings";
 import { parseTruthyEnv } from "./env";
 
-// ── native-image tier types (spec §5.3) ──
 
 /** Effective image renderer for a session (spec §5.4, D10). */
 export type ImageTier = "native" | "chafa" | "none";
@@ -71,7 +70,6 @@ export type ImageTier = "native" | "chafa" | "none";
 /** Terminal image protocols pi-tui can render (closed union, D2). */
 export type NativeProtocol = "kitty" | "iterm2";
 
-// ── shared plumbing ──
 
 export type ReadText = (path: string) => string | undefined;
 
@@ -121,7 +119,6 @@ export type RenderOutcome =
   | { kind: "failed"; renderer: ImageAttemptRenderer; reason: string }
   | { kind: "aborted" };
 
-// ── pi-chafa presence ──
 
 /** Structural provenance subset of pi's SourceInfo (spec §3.2). */
 export interface PiChafaSourceInfoLike {
@@ -278,7 +275,6 @@ export function detectPiChafa(
   return { present: false, via: "none" };
 }
 
-// ── pi-chafa config (read-only mirror of the documented subset) ──
 
 export type ChafaColors = "none" | "2" | "8" | "16" | "240" | "256" | "full";
 export type ChafaDither = "none" | "ordered" | "diffusion" | "noise";
@@ -469,7 +465,6 @@ export function loadPiChafaConfig(deps?: {
   };
 }
 
-// ── chafa binary ──
 
 export type ChafaStatus =
   | { state: "ok"; binary: string; version: { major: number; minor: number } }
@@ -586,7 +581,6 @@ export async function probeChafa(
   return { state: "ok", binary, version };
 }
 
-// ── render ──
 
 /**
  * The chafa symbols arg vector — pi-chafa's buildSymbolsArgs (spec §3.1,
@@ -760,7 +754,6 @@ export async function runChafaRender(
     : { kind: "failed", reason: sanitized.reason };
 }
 
-// ── host + geometry ──
 
 /**
  * Read pi's own terminal image settings (spec §6.3). Defaults
@@ -884,10 +877,8 @@ export function resolveNativeProtocol(deps?: {
   return null;
 }
 
-// ── native render (spec §5.3, D3, D5, D7) ──
 
 /** One native render's context: protocol plus abort/read seams. */
-// ── Kitty decode probe (Issue #101, #102, #116) ──────────────────────────
 // The kitty graphics protocol's query action (`a=q`) makes a terminal attempt
 // to load the payload and reply, per the spec: with an id present, "the
 // terminal emulator will reply after trying to load the image, saying whether
@@ -1272,7 +1263,6 @@ export function resolveChafaGeometry(input: {
   return { ok: true, cols, rows };
 }
 
-// ── aggregate support ──
 
 export interface ImageSupport {
   mode: NavigatorImageMode;
