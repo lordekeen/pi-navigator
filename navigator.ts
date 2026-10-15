@@ -475,12 +475,9 @@ export class NavigatorOverlay implements Focusable {
   /** Reload the displayed target, keeping scroll position. Used by "r". */
   reloadOpenFile(): void {
     const target = targetOf(this.viewFile);
-    if (!target) return;
-    if (target.kind === "commit") {
-      if (this.loadCommit) void this.openTarget(target, true);
-      return;
-    }
-    void this.openTarget(target, true);
+    // openTarget no-ops a commit target when no loadCommit is injected, so no
+    // kind check is needed here (Issue #175).
+    if (target) void this.openTarget(target, true);
   }
 
   /**

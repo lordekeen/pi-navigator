@@ -236,27 +236,22 @@ export function buildGitRow(row: GitRow, selected: boolean, leftW: number, view:
     const fit = truncateAndWidth(nameStyle(row.relPath), room);
     const gap = Math.max(0, leftW - 2 - fit.width - visibleWidth(badge));
     line = arrow + fit.text + " ".repeat(gap) + badge;
-  } else if (row.kind === "commit-child") {
+  } else {
+    // Commit and commit-child rows differ only by the child indent; one
+    // shape keeps their width accounting from drifting (Issue #175).
     const arrow = selected ? T.accent(T.bold("\u25b6 ")) : "  ";
     const marker = commitMarker(row.commit, view.expanded);
     const hash = T.muted(row.commit.shortHash);
-    const indentW = 2 * row.depth;
+    const depth = row.kind === "commit-child" ? row.depth : 0;
+    const indent = "  ".repeat(depth);
+    const indentW = 2 * depth;
     // Width accounting: arrow(2) + indent(2·depth) + marker(2) + hash + sep(2).
     const room = Math.max(4, leftW - 2 - indentW - 2 - visibleWidth(row.commit.shortHash) - 2);
     // L5 (audit §Low): the subject is the row's primary content — the text
     // step — while the hash stays muted as secondary metadata; dim is for
     // chrome and hints, not content.
     const subject = T.text(hardTruncate(row.commit.subject, room));
-    line = arrow + "  ".repeat(row.depth) + marker + hash + "  " + subject;
-  } else {
-    const arrow = selected ? T.accent(T.bold("\u25b6 ")) : "  ";
-    const marker = commitMarker(row.commit, view.expanded);
-    const hash = T.muted(row.commit.shortHash);
-    // Width accounting: arrow(2) + marker(2) + hash + sep(2).
-    const room = Math.max(4, leftW - 2 - 2 - visibleWidth(row.commit.shortHash) - 2);
-    // L5: same content/metadata hierarchy as the nested commit-child row.
-    const subject = T.text(hardTruncate(row.commit.subject, room));
-    line = arrow + marker + hash + "  " + subject;
+    line = arrow + indent + marker + hash + "  " + subject;
   }
   return selected ? T.selectedBg(padTo(line, leftW)) : padTo(line, leftW);
 }

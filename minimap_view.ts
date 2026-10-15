@@ -27,6 +27,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { MINIMAP_MAX_COLUMNS } from "./constants";
 import type { NavigatorTheme } from "./theme";
 import { inkRuns, stripAnsi } from "./ansi";
+import { diffLineStyler, diffLineTone } from "./diff";
 
 export type MinimapEncoding = "braille" | "bars";
 export type MinimapPalette = "mono" | "syntax";
@@ -218,30 +219,6 @@ function dominantColor(styled: string): string | null {
 }
 
 /**
- * The diff-status tone for one row, mirroring `styleDiffLines` (diff.ts): the
- * file/meta prefixes and the `+++`/`---` markers are muted, a hunk header is
- * the accent, and the rest follow their +/- prefix. The commit-message head and
- * the blank separator carry no prefix and therefore read as context — a
- * deliberate simplification (a six-column map cannot show message structure).
- */
-function diffTone(plain: string, theme: NavigatorTheme): (text: string) => string {
-  if (plain.startsWith("+++ ") || plain.startsWith("--- ")) return theme.muted;
-  if (plain.startsWith("@@")) return theme.accent;
-  if (plain.startsWith("+")) return theme.diffAdded;
-  if (plain.startsWith("-")) return theme.diffRemoved;
-  if (
-    plain.startsWith("diff ") ||
-    plain.startsWith("index ") ||
-    plain.startsWith("new file") ||
-    plain.startsWith("deleted file") ||
-    plain.startsWith("Binary files")
-  ) {
-    return theme.muted;
-  }
-  return theme.diffContext;
-}
-
-/**
  * The painter for one block's row: syntax mode uses the representative row's
  * dominant captured colour (re-emitted verbatim), falling back to the diff
  * mirror on a diff and then to the plain ink tone.
@@ -256,7 +233,7 @@ function rowPainter(
     const color = dominantColor(representativeRow.styled);
     if (color !== null) return (text) => theme.syntax(color, text);
   }
-  if (diff) return diffTone(representativeRow.plain, theme);
+  if (diff) return diffLineStyler(theme, diffLineTone(representativeRow.plain));
   return theme.scrollbarThumb;
 }
 

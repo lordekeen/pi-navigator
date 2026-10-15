@@ -56,26 +56,53 @@ export function styleCommitMessage(message: CommitMessage, T: NavigatorTheme): s
  * - `diff` / `index` / `new file` / `deleted file` / `Binary files` meta → muted
  * - anything else (context) → diffContext
  */
-export function styleDiffLines(lines: string[], T: NavigatorTheme): string[] {
-  const out: string[] = [];
-  for (const line of lines) {
-    if (line.startsWith("+++ ") || line.startsWith("--- ")) out.push(T.muted(line));
-    else if (line.startsWith("+")) out.push(T.diffAdded(line));
-    else if (line.startsWith("-")) out.push(T.diffRemoved(line));
-    else if (line.startsWith("@@")) out.push(T.accent(line));
-    else if (
-      line.startsWith("diff ") ||
-      line.startsWith("index ") ||
-      line.startsWith("new file") ||
-      line.startsWith("deleted file") ||
-      line.startsWith("Binary files")
-    ) {
-      out.push(T.muted(line));
-    } else {
-      out.push(T.diffContext(line));
-    }
+/**
+ * The diff-line classes every consumer styles: file banners and git meta
+ * lines, hunk headers, additions, removals and context.
+ */
+export type DiffLineTone = "meta" | "hunk" | "added" | "removed" | "context";
+
+/**
+ * Classify one raw diff line by its prefix — the one diff grammar, so a new
+ * prefix is taught once (Issue #175). `+++`/`---` banners and git meta lines
+ * are `meta`, `@@` hunks are `hunk`, `+`/`-` are additions/removals, and
+ * everything else is context. The commit-message head and blank separator
+ * carry no prefix and read as context: prefix-based classification is a
+ * deliberate simplification that cannot show message structure.
+ */
+export function diffLineTone(line: string): DiffLineTone {
+  if (line.startsWith("+++ ") || line.startsWith("--- ")) return "meta";
+  if (line.startsWith("@@")) return "hunk";
+  if (line.startsWith("+")) return "added";
+  if (line.startsWith("-")) return "removed";
+  if (
+    line.startsWith("diff ") ||
+    line.startsWith("index ") ||
+    line.startsWith("new file") ||
+    line.startsWith("deleted file") ||
+    line.startsWith("Binary files")
+  ) {
+    return "meta";
   }
-  return out;
+  return "context";
+}
+
+/** The theme styler for one tone; every consumer paints through this table
+ *  (a Record keyed by the tone union, so a new tone cannot be forgotten). */
+const DIFF_TONE_STYLERS: Record<DiffLineTone, (T: NavigatorTheme) => (text: string) => string> = {
+  meta: (T) => T.muted,
+  hunk: (T) => T.accent,
+  added: (T) => T.diffAdded,
+  removed: (T) => T.diffRemoved,
+  context: (T) => T.diffContext,
+};
+
+export function diffLineStyler(T: NavigatorTheme, tone: DiffLineTone): (text: string) => string {
+  return DIFF_TONE_STYLERS[tone](T);
+}
+
+export function styleDiffLines(lines: string[], T: NavigatorTheme): string[] {
+  return lines.map((line) => diffLineStyler(T, diffLineTone(line))(line));
 }
 
 /**
