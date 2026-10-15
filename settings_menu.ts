@@ -260,6 +260,8 @@ class SettingsMenuFrame implements Component {
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    // Before the first render there is no row grid to hit-test (Issue #198).
+    if (this.listHeight === 0) return undefined;
     if (event.type === "wheel") {
       // SAFETY: pi-tui's SettingsList keeps `searchEnabled` (set from the
       // `enableSearch` option this wrapper always passes) as an internal field
@@ -338,13 +340,20 @@ export async function openSettingsMenu(ui: SettingsMenuUi, deps: SettingsMenuDep
         submenu: data.submenu,
       }));
 
+      // Issue #198: the host unmounts the frame one tick after `done()`, so a
+      // second Ctrl+S (or a trailing Esc) landing in that window would commit
+      // twice or overwrite the settled outcome. The frame settles once; a
+      // failed save deliberately stays open and unsettled for a retry.
+      let settled = false;
       const saveAndClose = (): void => {
+        if (settled) return;
         try {
           const committed = deps.commit(current);
           if (!committed.ok) {
             deps.onWarning(`pi-navigator: ${committed.error}`);
             return;
           }
+          settled = true;
           done({ kind: "saved", settings: committed.settings });
         } catch (err) {
           deps.onWarning(`pi-navigator: failed to save settings: ${err instanceof Error ? err.message : String(err)}`);
@@ -375,7 +384,11 @@ export async function openSettingsMenu(ui: SettingsMenuUi, deps: SettingsMenuDep
         maxVisible,
         settingsTheme,
         onChange,
-        () => done({ kind: "cancelled" }),
+        () => {
+          if (settled) return;
+          settled = true;
+          done({ kind: "cancelled" });
+        },
         { enableSearch: true },
       );
       return new SettingsMenuFrame(settingsList, theme, truncate, () => (dirty() ? DIRTY_FOOTER : CLEAN_FOOTER), saveAndClose);

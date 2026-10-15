@@ -21,7 +21,12 @@ export const NAVIGATOR_LAYOUTS = ["files-git-viewer", "files-viewer", "git-viewe
 export type NavigatorLayout = (typeof NAVIGATOR_LAYOUTS)[number];
 
 
-/** Raw git status code for a path ("M", "A", "D", "??", ...). */
+/**
+ * Raw git status code for a path ("M", "A", "D", "??", ...). Deliberately a
+ * `string`, not a closed union: porcelain v1 is open-ended (both axes, merge
+ * codes, future codes) and an unknown code must reach the pane verbatim
+ * rather than fail to parse (Issue #198).
+ */
 export type GitCode = string;
 
 export interface FileNode {
@@ -158,6 +163,15 @@ export type ImageVerdict =
   | { kind: "rendered"; renderer: "native" | "chafa"; lines: string[]; cols: number; rows: number }
   | { kind: "card"; failed?: { renderer: "native" | "chafa"; detail: string } };
 
+/**
+ * A viewer load's result. The `kind` tag discriminates which optional fields
+ * are meaningful — each field's doc names its kinds. Deliberately a record
+ * with optional fields rather than a discriminated union (Issue #198): most
+ * fields are legally absent (a diff has no `tokens`, a text file no
+ * `imageVerdict`) and consumers already switch on `kind`, so a union would
+ * buy little while forcing `"field" in file` checks through every generic
+ * consumer that reads `lines`/`mtimeMs`/`notice` without caring about kind.
+ */
 export interface ViewerFile {
   kind: ViewerKind;
   relPath: string;

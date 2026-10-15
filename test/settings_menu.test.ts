@@ -314,6 +314,22 @@ describe("settings menu integration (real SettingsList)", () => {
     expect(outcome()).toEqual({ kind: "saved", settings: commit.mock.calls[0]![0] });
   });
 
+  it("settles once: a second Ctrl+S before unmount does not recommit (Issue #198)", async () => {
+    const commit = vi.fn((next: NavigatorSettings): CommitResult => ({ ok: true, settings: next }));
+    const onWarning = vi.fn();
+    const { component, outcome } = await openMenu({ settings: fullSettings(), overrides: {}, commit, onWarning });
+
+    component.handleInput?.(KEYS.enter); // stage one edit
+    component.handleInput?.(KEYS.ctrlS);
+    component.handleInput?.(KEYS.ctrlS); // the host has not unmounted the frame yet
+    expect(commit).toHaveBeenCalledTimes(1);
+
+    // A trailing Esc cannot overwrite the saved outcome with "cancelled".
+    component.handleInput?.(KEYS.escape);
+    expect(outcome()).toEqual({ kind: "saved", settings: commit.mock.calls[0]![0] });
+    expect(onWarning).not.toHaveBeenCalled();
+  });
+
   it("warns on a failed save, keeps the draft, and stays open for a retry", async () => {
     const commit = vi.fn((_next: NavigatorSettings): CommitResult => ({ ok: false, error: "disk full" }));
     const onWarning = vi.fn();

@@ -178,12 +178,14 @@ export function parseNavigatorArgs(args: string): ParsedNavigatorArgs {
   if (sub === undefined) return { kind: "unknown", raw: token };
   // `set` is `set <setting> <value>` (three tokens); every other subcommand
   // takes nothing beyond its own name. Extra tokens are rejected, never
-  // dropped (Issue #134).
-  const arity = sub.cmd.endsWith("set") ? 3 : 1;
+  // dropped (Issue #134). Route on the exact TOKEN, not on a suffix of the
+  // table's command string (Issue #198): a future subcommand whose name
+  // merely ends in "set"/"settings" must not be classified as one.
+  const arity = token === "set" ? 3 : 1;
   if (tokens.length > arity) return { kind: "extra", sub: token, extra: tokens.slice(arity) };
   if (sub.layout !== undefined) return { kind: "layout", layout: sub.layout };
-  if (sub.cmd.endsWith("set")) return { kind: "set", field: tokens[1], value: tokens[2] };
-  if (sub.cmd.endsWith("settings")) return { kind: "settings" };
+  if (token === "set") return { kind: "set", field: tokens[1], value: tokens[2] };
+  if (token === "settings") return { kind: "settings" };
   return { kind: "help" };
 }
 
