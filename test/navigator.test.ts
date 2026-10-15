@@ -26,7 +26,11 @@ import type { LoadFileOptions } from "../viewer";
 import { targetOf } from "../viewer";
 import * as minimapView from "../minimap_view";
 import * as viewerModule from "../viewer";
-import type { NavigatorMinimapEncoding, NavigatorMinimapPalette } from "../settings";
+import {
+  DEFAULT_NAVIGATOR_SETTINGS,
+  type NavigatorMinimapEncoding,
+  type NavigatorMinimapPalette,
+} from "../settings";
 import { imageCardHints } from "../viewer_view";
 
 const { copyToClipboard } = vi.hoisted(() => ({ copyToClipboard: vi.fn() }));
@@ -3711,5 +3715,31 @@ describe("viewer minimap (Issue #165)", () => {
     // Glyph equality alone cannot tell a repaint from a deterministic re-fold;
     // the fold count can, and it must not move.
     expect(folds()).toBe(folded);
+  });
+});
+
+// ── Issue #171: ctor fallbacks come from the registry defaults ──
+
+describe("ctor-seeded defaults (Issue #171)", () => {
+  it("seeds every settings-backed fallback from the registry defaults", () => {
+    const harness = makeHarness();
+    const view = harness.overlay as unknown as {
+      enableIcons: boolean;
+      showHidden: boolean;
+      viewWrap: boolean;
+      viewRenderMarkdown: boolean;
+      viewMinimap: string;
+      viewMinimapColors: string;
+      viewMinimapWidth: number;
+      layout: string;
+    };
+    expect(view.enableIcons).toBe(DEFAULT_NAVIGATOR_SETTINGS.icons.enabled);
+    expect(view.showHidden).toBe(DEFAULT_NAVIGATOR_SETTINGS.tree.showHidden);
+    expect(view.viewWrap).toBe(DEFAULT_NAVIGATOR_SETTINGS.viewer.wrap);
+    expect(view.viewRenderMarkdown).toBe(DEFAULT_NAVIGATOR_SETTINGS.viewer.markdown === "rendered");
+    expect(view.viewMinimap).toBe(DEFAULT_NAVIGATOR_SETTINGS.viewer.minimap);
+    expect(view.viewMinimapColors).toBe(DEFAULT_NAVIGATOR_SETTINGS.viewer.minimapColors);
+    expect(view.viewMinimapWidth).toBe(DEFAULT_NAVIGATOR_SETTINGS.viewer.minimapWidth);
+    expect(view.layout).toBe(DEFAULT_NAVIGATOR_SETTINGS.layout.default);
   });
 });

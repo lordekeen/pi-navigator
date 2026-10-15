@@ -225,13 +225,11 @@ describe("buildSettingItems", () => {
       id: "viewer.tabWidth",
       path: ["viewer", "tabWidth"],
       kind: "number",
-      section: "Viewer",
       label: "Tab width",
       description: "Spaces per tab stop",
       min: 1,
       max: 8,
       default: 4,
-      live: false,
     };
     (NAVIGATOR_CONFIG_FIELDS as any).push(numberField);
     try {
@@ -411,13 +409,11 @@ describe("settings menu integration (real SettingsList)", () => {
       id: "viewer.tabWidth",
       path: ["viewer", "tabWidth"],
       kind: "number",
-      section: "Viewer",
       label: "Tab width",
       description: "Spaces per tab stop",
       min: 1,
       max: 8,
       default: 4,
-      live: false,
     };
     (NAVIGATOR_CONFIG_FIELDS as any).push(numberField);
     try {
@@ -500,13 +496,11 @@ describe("settings menu integration (real SettingsList)", () => {
       id: "viewer.tabWidth",
       path: ["viewer", "tabWidth"],
       kind: "number",
-      section: "Viewer",
       label: "Tab width",
       description: "Spaces per tab stop",
       min: 1,
       max: 8,
       default: 4,
-      live: false,
     };
     (NAVIGATOR_CONFIG_FIELDS as any).push(numberField);
     try {

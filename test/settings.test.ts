@@ -842,13 +842,11 @@ describe("loadNavigatorSettings", () => {
       id: "viewer.tabWidth",
       path: ["viewer", "tabWidth"],
       kind: "number",
-      section: "Viewer",
       label: "Tab width",
       description: "Synthetic registry row proving the loader walks the table.",
       min: 1,
       max: 8,
       default: 4,
-      live: false,
       override: {
         env: "PI_NAV_SYNTHETIC",
         flag: { name: "navigator-synthetic", description: "synthetic", type: "string" },
@@ -1123,13 +1121,11 @@ describe("field rule parity (Issue #145)", () => {
       id: "viewer.tabWidth",
       path: ["viewer", "tabWidth"],
       kind: "number",
-      section: "Viewer",
       label: "Tab width",
       description: "Synthetic numeric row for the rule-parity sweep.",
       min: 1,
       max: 8,
       default: 4,
-      live: false,
     };
     (NAVIGATOR_CONFIG_FIELDS as unknown as NavigatorConfigField[]).push(numberField);
     try {
@@ -1176,93 +1172,73 @@ describe("NAVIGATOR_CONFIG_FIELDS", () => {
       id: "images.mode",
       path: ["images", "mode"],
       kind: "enum",
-      section: "Images",
       label: "Image rendering",
       options: ["off", "chafa", "native", "auto"],
-      live: false,
     });
     expect(fieldById("icons.enabled")).toMatchObject({
       id: "icons.enabled",
       path: ["icons", "enabled"],
       kind: "boolean",
-      section: "Icons",
       label: "Nerd Font icons",
-      live: false,
     });
     expect(fieldById("viewer.wrap")).toMatchObject({
       id: "viewer.wrap",
       path: ["viewer", "wrap"],
       kind: "boolean",
-      section: "Viewer",
       label: "Word wrap",
-      live: false,
     });
     expect(fieldById("viewer.markdown")).toMatchObject({
       id: "viewer.markdown",
       path: ["viewer", "markdown"],
       kind: "enum",
-      section: "Viewer",
       label: "Markdown view",
       options: ["code", "rendered"],
-      live: false,
     });
     expect(fieldById("viewer.minimap")).toMatchObject({
       id: "viewer.minimap",
       path: ["viewer", "minimap"],
       kind: "enum",
-      section: "Viewer",
       label: "Viewer minimap",
       options: ["off", "braille", "bars"],
       default: "braille",
-      live: false,
     });
     expect(fieldById("viewer.minimapColors")).toMatchObject({
       id: "viewer.minimapColors",
       path: ["viewer", "minimapColors"],
       kind: "enum",
-      section: "Viewer",
       label: "Minimap palette",
       options: ["mono", "syntax"],
       default: "mono",
-      live: false,
     });
     expect(fieldById("viewer.minimapWidth")).toMatchObject({
       id: "viewer.minimapWidth",
       path: ["viewer", "minimapWidth"],
       kind: "number",
-      section: "Viewer",
       label: "Minimap width",
       min: 4,
       max: 12,
       default: 7,
-      live: false,
     });
     expect(fieldById("tree.showHidden")).toMatchObject({
       id: "tree.showHidden",
       path: ["tree", "showHidden"],
       kind: "boolean",
-      section: "Tree",
       label: "Hidden files",
-      live: false,
     });
     expect(fieldById("tree.respectGitignore")).toMatchObject({
       id: "tree.respectGitignore",
       path: ["tree", "respectGitignore"],
       kind: "boolean",
-      section: "Tree",
       label: "Respect .gitignore",
       default: true,
-      live: false,
     });
     expect(fieldById("layout.default")).toMatchObject({
       id: "layout.default",
       path: ["layout", "default"],
       kind: "enum",
-      section: "Layout",
       label: "Default layout",
       options: ["files-git-viewer", "files-viewer", "git-viewer"],
       default: "files-git-viewer",
-      live: false,
     });
     for (const field of NAVIGATOR_CONFIG_FIELDS) {
       expect(field.description.length).toBeGreaterThan(0);
@@ -1333,11 +1309,10 @@ describe("NAVIGATOR_CONFIG_FIELDS", () => {
     }
   });
 
-  it("kinds and options are valid and every field is not live", () => {
+  it("kinds and options are valid", () => {
     const validKinds = new Set(["enum", "boolean", "number"]);
     for (const field of NAVIGATOR_CONFIG_FIELDS) {
       expect(validKinds.has(field.kind)).toBe(true);
-      expect(field.live).toBe(false);
       if (field.kind === "enum") {
         expect(field.options?.length ?? 0).toBeGreaterThan(0);
       } else {

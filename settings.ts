@@ -82,18 +82,13 @@ export interface NavigatorConfigField {
   readonly id: string;
   readonly path: readonly string[];
   readonly kind: "enum" | "boolean" | "number";
-  /** Grouping section name; reserved for future grouped-menu views. */
-  readonly section: string;
   readonly label: string;
   readonly description: string;
   readonly options?: readonly string[];
-  /** Minimum value; reserved for future numeric config fields. */
+  /** Inclusive bounds for a `kind: "number"` value; both faces clamp to them. */
   readonly min?: number;
-  /** Maximum value; reserved for future numeric config fields. */
   readonly max?: number;
   readonly default: string | number | boolean;
-  /** Whether changing this field takes effect immediately without restart; reserved for future live-reload. */
-  readonly live: boolean;
   /**
    * The startup layers that can set this field (Issue #145): the env var name,
    * the flag descriptor `registerFlag` registers, and the one parser both
@@ -113,12 +108,10 @@ export const NAVIGATOR_CONFIG_FIELDS: readonly NavigatorConfigField[] = [
     id: "images.mode",
     path: ["images", "mode"],
     kind: "enum",
-    section: "Images",
     label: "Image rendering",
     description: "Render images as native terminal graphics (kitty/iTerm2), chafa symbols, or auto; off keeps the metadata card.",
     options: [...IMAGE_MODES],
     default: "off",
-    live: false,
     override: {
       env: NAVIGATOR_IMAGES_ENV,
       flag: {
@@ -136,11 +129,9 @@ export const NAVIGATOR_CONFIG_FIELDS: readonly NavigatorConfigField[] = [
     id: "icons.enabled",
     path: ["icons", "enabled"],
     kind: "boolean",
-    section: "Icons",
     label: "Nerd Font icons",
     description: "Show a Nerd Font filetype icon column in the file tree (requires a Nerd Font terminal).",
     default: false,
-    live: false,
     override: {
       env: ICONS_ENV,
       flag: {
@@ -158,92 +149,76 @@ export const NAVIGATOR_CONFIG_FIELDS: readonly NavigatorConfigField[] = [
     id: "viewer.wrap",
     path: ["viewer", "wrap"],
     kind: "boolean",
-    section: "Viewer",
     label: "Word wrap",
     description: "Start files with word wrap enabled; the `w` key still toggles it per session.",
     default: false,
-    live: false,
   },
   {
     id: "viewer.markdown",
     path: ["viewer", "markdown"],
     kind: "enum",
-    section: "Viewer",
     label: "Markdown view",
     description: "Open Markdown files as rendered text or plain code; the `m` key still toggles it per session.",
     options: [...VIEWER_MODES],
     default: "code",
-    live: false,
   },
   {
     id: "viewer.minimap",
     path: ["viewer", "minimap"],
     kind: "enum",
-    section: "Viewer",
     label: "Viewer minimap",
     description:
       "Show a minimap column in the viewer: `braille` dots, positioned `bars`, or `off`; the `v` key toggles it per session.",
     options: [...MINIMAP_MODES],
     default: "braille",
-    live: false,
   },
   {
     id: "viewer.minimapColors",
     path: ["viewer", "minimapColors"],
     kind: "enum",
-    section: "Viewer",
     label: "Minimap palette",
     description:
       "Minimap palette: `mono` (scrollbar tone, diff-status colours) or `syntax` (each row takes its dominant syntax colour).",
     options: [...MINIMAP_PALETTES],
     default: "mono",
-    live: false,
   },
   {
     id: "viewer.minimapWidth",
     path: ["viewer", "minimapWidth"],
     kind: "number",
-    section: "Viewer",
     label: "Minimap width",
     description:
       "Minimap width in columns (4-12), plus its one-column divider; the map hides itself when the remaining content width would drop under 36.",
     min: 4,
     max: 12,
     default: 7,
-    live: false,
   },
   {
     id: "tree.showHidden",
     path: ["tree", "showHidden"],
     kind: "boolean",
-    section: "Tree",
     label: "Hidden files",
     description: "Start with hidden files visible; the `.` key still toggles it per session.",
     default: false,
-    live: false,
   },
   {
     id: "tree.respectGitignore",
     path: ["tree", "respectGitignore"],
     kind: "boolean",
-    section: "Tree",
     label: "Respect .gitignore",
     description:
       "Hide untracked files and directories ignored by Git in the file tree (requires a git repository); tracked files always show.",
     default: true,
-    live: false,
   },
   {
     id: "layout.default",
     path: ["layout", "default"],
     kind: "enum",
-    section: "Layout",
     label: "Default layout",
     description:
       "Layout opened by bare /navigator; /navigator all, /navigator files, and /navigator git always open their own layout for one session.",
     options: [...NAVIGATOR_LAYOUTS],
     default: "files-git-viewer",
-    live: false,
     override: {
       env: NAVIGATOR_LAYOUT_ENV,
       flag: {
@@ -266,8 +241,8 @@ const MAX_UNKNOWN_KEY_WARNINGS = 5;
  * Build the canonical default settings from the registry's per-field
  * defaults, with the canonical section order (first registry appearance:
  * images, icons, viewer, tree) and `version: 1`. Fresh objects every call,
- * so `cloneDefaults()` is safe to mutate; the exported frozen default is
- * derived from the same function.
+ * so each call is safe to mutate; the exported frozen default is derived from
+ * the same function.
  */
 function buildDefaultSettings(): NavigatorSettings {
   const settings: Record<string, unknown> = { version: SETTINGS_VERSION };
@@ -302,15 +277,7 @@ function deepFreeze<T>(obj: T): T {
   return Object.freeze(obj);
 }
 
-function deepFreezeDefaults(settings: NavigatorSettings): NavigatorSettings {
-  return deepFreeze(settings);
-}
-
-export const DEFAULT_NAVIGATOR_SETTINGS: NavigatorSettings = deepFreezeDefaults(buildDefaultSettings());
-
-function cloneDefaults(): NavigatorSettings {
-  return buildDefaultSettings();
-}
+export const DEFAULT_NAVIGATOR_SETTINGS: NavigatorSettings = deepFreeze(buildDefaultSettings());
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -405,7 +372,7 @@ export function normalizeNavigatorSettings(raw: unknown): { settings: NavigatorS
   const rawRec = asRecord(raw);
   if (rawRec === undefined) {
     warnings.push("pi-navigator settings must be a JSON object; using defaults");
-    return { settings: cloneDefaults(), warnings };
+    return { settings: buildDefaultSettings(), warnings };
   }
 
   // version: absent → 1 (silent); integer > 1 → defaults + warning (no
@@ -415,7 +382,7 @@ export function normalizeNavigatorSettings(raw: unknown): { settings: NavigatorS
     if (typeof version === "number" && Number.isInteger(version) && version >= 1) {
       if (version > SETTINGS_VERSION) {
         warnings.push(`pi-navigator settings version ${version} is newer than this navigator supports; using defaults`);
-        return { settings: cloneDefaults(), warnings };
+        return { settings: buildDefaultSettings(), warnings };
       }
     } else {
       warnings.push("settings version is invalid; using 1");
@@ -426,7 +393,7 @@ export function normalizeNavigatorSettings(raw: unknown): { settings: NavigatorS
   // order) guard the object shape and warn on unknown leaf keys, then
   // validate each field against its kind. Validated values land in a fresh
   // defaults clone, so missing and invalid leaves keep their defaults.
-  const settings = cloneDefaults();
+  const settings = buildDefaultSettings();
   // SAFETY: the clone is a fresh NavigatorSettings record; writing
   // validated registry values through the record view never mutates the
   // caller's input.

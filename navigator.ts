@@ -33,7 +33,11 @@ import {
   MIN_OVERLAY_WIDTH,
 } from "./constants";
 import { restyleDiffViewerFile } from "./diff";
-import type { NavigatorMinimapEncoding, NavigatorMinimapPalette } from "./settings";
+import {
+  DEFAULT_NAVIGATOR_SETTINGS,
+  type NavigatorMinimapEncoding,
+  type NavigatorMinimapPalette,
+} from "./settings";
 import { NAVIGATOR_KEYBINDINGS } from "./help";
 import { buildFilesHeader, buildFileRow, buildFilesRows, filesEmptyRow } from "./files_view";
 import { buildCompactFrame, buildFooterRow, composeFrame, FRAME_TOP_ROWS, padTo } from "./frame";
@@ -319,21 +323,23 @@ export class NavigatorOverlay implements Focusable {
     this.loadCommit = options.loadCommit;
     this.keybindings = options.keybindings ?? null;
     this.refresh = options.refresh;
-    this.enableIcons = options.enableIcons ?? false;
+    this.enableIcons = options.enableIcons ?? DEFAULT_NAVIGATOR_SETTINGS.icons.enabled;
     this.home = options.home ?? "";
     this.imageSupport = options.imageSupport ?? makeDeferredImageSupport("off");
-    // Settings-landed initial state (Issue #061): defaults preserve the
-    // session-toggle behavior of prior versions exactly.
-    this.showHidden = options.initialShowHidden ?? false;
-    this.viewWrap = options.initialWrap ?? false;
-    this.viewRenderMarkdown = options.initialRenderMarkdown ?? false;
-    this.viewMinimap = options.initialMinimap ?? "braille";
-    this.viewMinimapColors = options.initialMinimapColors ?? "mono";
-    this.viewMinimapWidth = options.initialMinimapWidth ?? 6;
+    // Settings-landed initial state (Issue #061): the fallbacks are the
+    // registry defaults (Issue #171) — one source, so a default can never
+    // drift between settings.ts and this constructor.
+    this.showHidden = options.initialShowHidden ?? DEFAULT_NAVIGATOR_SETTINGS.tree.showHidden;
+    this.viewWrap = options.initialWrap ?? DEFAULT_NAVIGATOR_SETTINGS.viewer.wrap;
+    this.viewRenderMarkdown =
+      options.initialRenderMarkdown ?? DEFAULT_NAVIGATOR_SETTINGS.viewer.markdown === "rendered";
+    this.viewMinimap = options.initialMinimap ?? DEFAULT_NAVIGATOR_SETTINGS.viewer.minimap;
+    this.viewMinimapColors = options.initialMinimapColors ?? DEFAULT_NAVIGATOR_SETTINGS.viewer.minimapColors;
+    this.viewMinimapWidth = options.initialMinimapWidth ?? DEFAULT_NAVIGATOR_SETTINGS.viewer.minimapWidth;
     this.viewMinimapOn = this.viewMinimap !== "off";
     // Layout-landed initial state (Issue #119, D6/D8): the layout fixes the
     // pane set, the initial focus, and the render geometry for this overlay.
-    this.layout = options.initialLayout ?? "files-git-viewer";
+    this.layout = options.initialLayout ?? DEFAULT_NAVIGATOR_SETTINGS.layout.default;
     this.focus = initialFocus(this.layout);
     this.viewerModel = new ViewerModel({
       theme: () => this.T,
