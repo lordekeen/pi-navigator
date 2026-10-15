@@ -182,8 +182,6 @@ export function buildSettingsMenuTheme(theme: SettingsMenuTheme): SettingsListTh
   };
 }
 
-export type SettingsListThemeLike = SettingsListTheme;
-
 /** Rows the frame renders before the SettingsList (rule, title, blank). */
 const FRAME_HEADER_ROWS = 3;
 /** Host frame rule glyph (pi's DynamicBorder, pi-overseer's BorderLine). */

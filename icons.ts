@@ -147,11 +147,3 @@ export function parseIconMode(value: string | undefined): { enabled?: boolean; w
   return { enabled: parsed.value };
 }
 
-/**
- * Compatibility wrapper over `parseIconMode`: `1`/`true`/`yes`/`on` → true,
- * anything else (including unset) → false. Pure so the module and tests stay
- * hermetic.
- */
-export function parseEnableIcons(env: string | undefined): boolean {
-  return parseIconMode(env).enabled ?? false;
-}

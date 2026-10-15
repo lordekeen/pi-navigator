@@ -48,19 +48,6 @@ import { createSession, type OverlaySink } from "./session";
 import { makeNavigatorTheme, makeStyleKey } from "./theme";
 import { loadFile } from "./viewer";
 
-// Issue #140: the session policy helpers below moved to session.ts; they stay
-// re-exported here because test/index.test.ts imports them from this entry and
-// the suite must remain green without edits to test files.
-import {
-  createViewerCache,
-  isCacheableRender,
-  makeTreeTruncationWarner,
-  touchCacheEntry,
-  type ViewerCache,
-} from "./session";
-export { createViewerCache, isCacheableRender, makeTreeTruncationWarner, touchCacheEntry };
-export type { ViewerCache };
-
 type TuiLike = {
   terminal: { rows: number; write: (data: string) => void };
   requestRender: () => void;

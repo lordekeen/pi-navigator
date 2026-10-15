@@ -30,15 +30,12 @@ import { NAVIGATOR_CONFIG_FIELDS, serializeNavigatorSettings, type NavigatorSett
 import type { ViewerFile } from "../types";
 import { loadFile } from "../viewer";
 import registerNavigatorExtension, {
-  createViewerCache,
-  isCacheableRender,
-  makeTreeTruncationWarner,
   makeTuiKittyDecodeProbe,
   makeWarningNotifier,
   navigatorCompletions,
   parseNavigatorArgs,
-  touchCacheEntry,
 } from "../index";
+import { createViewerCache, isCacheableRender, makeTreeTruncationWarner, touchCacheEntry } from "../session";
 
 /**
  * Test seam (Issue #121): the integration tests point getAgentDir at a

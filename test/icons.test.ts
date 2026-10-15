@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { GENERIC_ICON, ICON_GLYPHS, mapExtensionToIcon, parseEnableIcons, parseIconMode } from "../icons";
+import { GENERIC_ICON, ICON_GLYPHS, mapExtensionToIcon, parseIconMode } from "../icons";
 
 // ── PI_NAV_ICONS truth table (Issue #061) ──
 
@@ -46,34 +46,6 @@ describe("parseIconMode", () => {
       enabled: undefined,
       warning: "chafa is not a valid PI_NAV_ICONS value; using the file/default setting",
     });
-  });
-});
-
-describe("parseEnableIcons", () => {
-  it("enables on the accepted truthy values", () => {
-    expect(parseEnableIcons("1")).toBe(true);
-    expect(parseEnableIcons("true")).toBe(true);
-    expect(parseEnableIcons("yes")).toBe(true);
-    expect(parseEnableIcons("on")).toBe(true);
-  });
-
-  it("is case-insensitive and trims whitespace", () => {
-    expect(parseEnableIcons(" TRUE ")).toBe(true);
-    expect(parseEnableIcons("  On  ")).toBe(true);
-  });
-
-  it("disables on unset, empty, and anything else (compat wrapper over parseIconMode)", () => {
-    expect(parseEnableIcons(undefined)).toBe(false);
-    expect(parseEnableIcons("")).toBe(false);
-    expect(parseEnableIcons("0")).toBe(false);
-    expect(parseEnableIcons("false")).toBe(false);
-    expect(parseEnableIcons("off")).toBe(false);
-    expect(parseEnableIcons("2")).toBe(false);
-  });
-
-  it("matches parseIconMode for disable values", () => {
-    expect(parseEnableIcons("no")).toBe(parseIconMode("no").enabled ?? false);
-    expect(parseEnableIcons("false")).toBe(parseIconMode("false").enabled ?? false);
   });
 });
 
