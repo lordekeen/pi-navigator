@@ -15,7 +15,7 @@ import { isNativelyRenderable, type ImageSupport } from "./images";
 import type { NavigatorTheme } from "./theme";
 import type { Focus, SearchMatch, ViewerFile, ViewerScrollWindow } from "./types";
 import { formatSize, hardTruncate, isMarkdownPath, sliceStyled, type DisplayRow } from "./viewer";
-import { renderMinimap, type MinimapSketch } from "./minimap_view";
+import { renderMinimap, type MinimapMarks, type MinimapSketch } from "./minimap_view";
 import { FRAME_CORNERS, isImageLine, joinLeftRight, padTo, shortPath, truncateAndWidth } from "./frame";
 import { MODE_HINTS, plainHint } from "./help";
 
@@ -180,7 +180,7 @@ export interface ViewerPaneView {
   /** Viewer minimap (Issue #165): the cached sketch and the columns it owns,
    *  or null when the map is off, the setting is `off`, nothing scrolls, or
    *  the pane is too narrow. Text-like branches only. */
-  minimap: { sketch: MinimapSketch; width: number } | null;
+  minimap: { sketch: MinimapSketch; width: number; marks?: MinimapMarks | null } | null;
   /** Search query for the search bar counter. */
   searchQuery: string;
   /** Active search matches for the bar counter. */
@@ -271,7 +271,7 @@ export function renderViewerPane(view: ViewerPaneView, width: number, area: numb
   const divider = dividerW > 0 ? T.frame("\u2502") : "";
   const bodyWidth = Math.max(0, width - mapWidth - dividerW);
   const mapRows = view.minimap
-    ? renderMinimap(view.minimap.sketch, view.viewScroll, view.minimap.sketch.area, T)
+    ? renderMinimap(view.minimap.sketch, view.viewScroll, view.minimap.sketch.area, T, view.minimap.marks)
     : null;
   const withMap = (row: string, i: number): string =>
     mapRows

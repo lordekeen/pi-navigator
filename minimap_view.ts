@@ -48,6 +48,18 @@ export interface MinimapSketch {
   readonly area: number;
 }
 
+/**
+ * Search marks for the map's per-render paint (Issue #166): one flag per map
+ * row and the current match's map row (or -1). Deliberately outside the
+ * sketch cache — match state changes far more often than the folded rows.
+ */
+export interface MinimapMarks {
+  /** One flag per map row: does the row's display range contain a match? */
+  readonly marked: readonly boolean[];
+  /** The current match's map row index, or -1 when none. */
+  readonly current: number;
+}
+
 export interface MinimapInput {
   /** One styled text per display row, in pane order. */
   readonly texts: readonly string[];
@@ -300,12 +312,18 @@ export function buildMinimap(input: MinimapInput): MinimapSketch | null {
  * `[scroll, scroll + count)` gets a background, foreground preserved. The band
  * is computed from the live (clamped) scroll window, so a scroll never needs a
  * new sketch.
+ *
+ * Search marks (Issue #166) paint on top: a matched row takes `searchMatch`
+ * and the current match `searchCurrent`, applied OVER the band's background so
+ * a banded marked row stays a readable band row with the mark carried by the
+ * foreground (and the current match's underline).
  */
 export function renderMinimap(
   sketch: MinimapSketch,
   scroll: number,
   count: number,
   theme: NavigatorTheme,
+  marks?: MinimapMarks | null,
 ): string[] {
   const { blocks, rows } = sketch;
   if (count <= 0) return [...rows];
@@ -323,6 +341,14 @@ export function renderMinimap(
       break;
     }
   }
-  if (from < 0) return [...rows];
-  return rows.map((row, k) => (k >= from && k <= to ? theme.selectedBg(row) : row));
+  const banded = (k: number): boolean => from >= 0 && k >= from && k <= to;
+  if (!marks) {
+    if (from < 0) return [...rows];
+    return rows.map((row, k) => (banded(k) ? theme.selectedBg(row) : row));
+  }
+  return rows.map((row, k) => {
+    const out = banded(k) ? theme.selectedBg(row) : row;
+    if (marks.current === k) return theme.searchCurrent(out);
+    return marks.marked[k] ? theme.searchMatch(out) : out;
+  });
 }

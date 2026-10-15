@@ -14,7 +14,7 @@ import { Markdown, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 import { MINIMAP_DIVIDER_WIDTH, MINIMAP_MIN_CONTENT_WIDTH } from "./constants";
 import { padTo } from "./frame";
-import { buildMinimap, type MinimapEncoding, type MinimapSketch } from "./minimap_view";
+import { buildMinimap, type MinimapEncoding, type MinimapMarks, type MinimapSketch } from "./minimap_view";
 import type { NavigatorMinimapEncoding, NavigatorMinimapPalette } from "./settings";
 import type { NavigatorTheme } from "./theme";
 import type { SearchMatch, ViewerFile } from "./types";
@@ -56,7 +56,7 @@ export interface ViewerRenderOutput {
   content: ViewerContent;
   /** The one clamped window this pass drew at (Issue #147). */
   window: ViewerWindow;
-  minimap: { sketch: MinimapSketch; width: number } | null;
+  minimap: { sketch: MinimapSketch; width: number; marks: MinimapMarks | null } | null;
   digits: number;
   /** True when this pass drew a map (drives the border-thumb rule). */
   mapActive: boolean;
@@ -87,6 +87,8 @@ export class ViewerModel {
     wrap: boolean;
     renderMarkdown: boolean;
     texts: string[];
+    /** Source line per display row when wrapping (null when row === line). */
+    rowLines: number[] | null;
   } | null = null;
   private sketchCache: {
     texts: readonly string[];
@@ -210,7 +212,7 @@ export class ViewerModel {
     // line count) and a sound-enough signal otherwise.
     const map = input.minimap;
     let mapW = 0;
-    let minimap: { sketch: MinimapSketch; width: number } | null = null;
+    let minimap: { sketch: MinimapSketch; width: number; marks: MinimapMarks | null } | null = null;
     if (
       file &&
       map.encoding !== "off" &&
@@ -218,15 +220,15 @@ export class ViewerModel {
       contentW - map.width - MINIMAP_DIVIDER_WIDTH >= MINIMAP_MIN_CONTENT_WIDTH &&
       (file.lines.length > contentArea || (wrap && !useRendered))
     ) {
-      const texts = this.minimapTexts(
+      const entry = this.minimapTexts(
         file,
         contentW - map.width - MINIMAP_DIVIDER_WIDTH,
         useRendered,
         wrap,
       );
-      if (texts.length > contentArea) {
+      if (entry.texts.length > contentArea) {
         const sketch = this.viewerSketch(
-          texts,
+          entry.texts,
           contentArea,
           map.width,
           file.kind === "diff",
@@ -235,7 +237,7 @@ export class ViewerModel {
         );
         if (sketch) {
           mapW = map.width;
-          minimap = { sketch, width: mapW };
+          minimap = { sketch, width: mapW, marks: this.minimapMarks(entry, sketch) };
         }
       }
     }
@@ -513,14 +515,16 @@ export class ViewerModel {
    * The map's row texts for one width (Issue #165): the **unmarked** twin of
    * the body rows, memoised so the sketch can key on a stable array identity.
    * The wrapped source is the body's shared plain wrap (Issue #168), so the
-   * map never wraps the file a second time.
+   * map never wraps the file a second time. `rowLines` maps each display row
+   * back to its source line while wrapping, so search marks can resolve a
+   * match line to the map rows it occupies (Issue #166).
    */
   private minimapTexts(
     file: ViewerFile,
     width: number,
     renderMarkdown: boolean,
     wrap: boolean,
-  ): string[] {
+  ): { texts: string[]; rowLines: number[] | null } {
     const c = this.mapTextsCache;
     if (
       c &&
@@ -529,14 +533,56 @@ export class ViewerModel {
       c.wrap === wrap &&
       c.renderMarkdown === renderMarkdown
     ) {
-      return c.texts;
+      return c;
     }
     let texts: string[];
-    if (renderMarkdown) texts = this.getRenderedMarkdownLines(file, width);
-    else if (wrap) texts = this.cachedPlainRows(file, width, true).map((row) => row.text);
-    else texts = file.lines;
-    this.mapTextsCache = { file, width, wrap, renderMarkdown, texts };
-    return texts;
+    let rowLines: number[] | null = null;
+    if (renderMarkdown) {
+      texts = this.getRenderedMarkdownLines(file, width);
+    } else if (wrap) {
+      const plain = this.cachedPlainRows(file, width, true);
+      texts = plain.map((row) => row.text);
+      rowLines = [];
+      let line = -1;
+      for (const row of plain) {
+        if (row.line !== null) line = row.line;
+        rowLines.push(line);
+      }
+    } else {
+      texts = file.lines;
+    }
+    this.mapTextsCache = { file, width, wrap, renderMarkdown, texts, rowLines };
+    return this.mapTextsCache;
+  }
+
+  /**
+   * The map's search marks for one render pass (Issue #166): one flag per map
+   * row whose display range holds a matched line, plus the current match's row.
+   * Computed per pass — outside the sketch cache — because match state changes
+   * on far more events than the fold, and returned null when nothing matches.
+   */
+  private minimapMarks(
+    entry: { texts: string[]; rowLines: number[] | null },
+    sketch: MinimapSketch,
+  ): MinimapMarks | null {
+    if (!this.searchQuery || this.searchMatches.length === 0) return null;
+    const currentMatch = this.searchMatches[Math.min(this.searchIndex, this.searchMatches.length - 1)];
+    const currentLine = currentMatch?.line ?? -1;
+    const marked: boolean[] = [];
+    let current = -1;
+    sketch.blocks.forEach((block, k) => {
+      let hit = false;
+      let cur = false;
+      for (let j = block.start; j < block.end; j += 1) {
+        const line = entry.rowLines ? entry.rowLines[j] : j;
+        if (line === undefined) continue;
+        if (this.searchMatchLines.has(line)) hit = true;
+        if (line === currentLine) cur = true;
+      }
+      marked.push(hit);
+      if (cur) current = k;
+    });
+    return { marked, current };
   }
 
   /**

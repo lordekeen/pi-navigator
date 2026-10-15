@@ -96,6 +96,62 @@ describe("buildMinimap folding (Bresenham blocks)", () => {
   });
 });
 
+describe("renderMinimap marks (Issue #166)", () => {
+  const MATCH_BG = "\x1b[48;5;3m";
+  const MATCH_FG = "\x1b[38;5;16m";
+  const UNDER = "\x1b[4m";
+  const BAND2 = "\x1b[48;5;12m";
+
+  /** Composes like the real theme: searchMatch wraps a bg around a fg, and
+   *  searchCurrent adds underline; the band bg is applied under both. */
+  function markTheme(): NavigatorTheme {
+    return {
+      ...makeTheme(),
+      selectedBg: (t) => `${BAND2}${t}\x1b[49m`,
+      searchMatch: (t) => `${MATCH_BG}${MATCH_FG}${t}\x1b[39m\x1b[49m`,
+      searchCurrent: (t) => `${MATCH_BG}${MATCH_FG}${UNDER}${t}\x1b[24m\x1b[39m\x1b[49m`,
+    };
+  }
+
+  it("marks matched rows and the current row in both encodings, width unchanged", () => {
+    for (const encoding of ["braille", "bars"] as const) {
+      const theme = markTheme();
+      const sketch = buildMinimap(input({ texts: lines(12), area: 4, encoding, theme }))!;
+      const rows = renderMinimap(sketch, 0, 4, theme, {
+        marked: [false, true, false, true],
+        current: 3,
+      });
+      expect(rows[0]).not.toContain(MATCH_FG);
+      expect(rows[1]).toContain(MATCH_FG);
+      expect(rows[1]).not.toContain(UNDER);
+      expect(rows[3]).toContain(MATCH_FG);
+      expect(rows[3]).toContain(UNDER); // the current match is underlined
+      for (const row of rows) expect(visibleWidth(row)).toBe(6);
+    }
+  });
+
+  it("keeps the band background under a mark where they overlap", () => {
+    const theme = markTheme();
+    const sketch = buildMinimap(input({ texts: lines(12), area: 4, theme }))!;
+    // The viewport [0, 3) bands block 0 only; mark that same row as current.
+    const rows = renderMinimap(sketch, 0, 3, theme, { marked: [true, false, false, false], current: 0 });
+    expect(rows[0]).toContain(BAND2);
+    expect(rows[0]).toContain(MATCH_FG);
+    expect(rows[0]).toContain(UNDER);
+    // The band code follows the mark's own background, so the band's
+    // background is the one in force over the glyphs.
+    expect(rows[0]!.indexOf(BAND2)).toBeGreaterThan(rows[0]!.indexOf(MATCH_BG));
+  });
+
+  it("is identical to the markless output when marks are null or empty", () => {
+    const theme = markTheme();
+    const sketch = buildMinimap(input({ texts: lines(12), area: 4, theme }))!;
+    const plain = renderMinimap(sketch, 0, 2, theme);
+    expect(renderMinimap(sketch, 0, 2, theme, null)).toEqual(plain);
+    expect(renderMinimap(sketch, 0, 2, theme, { marked: [], current: -1 })).toEqual(plain);
+  });
+});
+
 describe("renderMinimap band", () => {
   it("puts the band on the last block when the viewport ends the file", () => {
     const sketch = buildMinimap(input({ texts: lines(10), area: 5 }))!;

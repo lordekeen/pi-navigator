@@ -3333,12 +3333,12 @@ describe("viewer minimap (Issue #165)", () => {
   }
 
   function makeMapHarness(
-    opts: { file?: ViewerFile | null; minimap?: NavigatorMinimapEncoding; colors?: NavigatorMinimapPalette; width?: number; rows?: number; styleKey?: () => string; wrap?: boolean } = {},
+    opts: { file?: ViewerFile | null; minimap?: NavigatorMinimapEncoding; colors?: NavigatorMinimapPalette; width?: number; rows?: number; styleKey?: () => string; wrap?: boolean; fg?: (color: string, text: string) => string } = {},
   ): MapHarness {
     const state = { renders: 0 };
     const loads: Array<{ relPath: string; opts?: LoadFileOptions }> = [];
     const theme = makeNavigatorTheme({
-      fg: (_color: string, text: string) => text,
+      fg: (color: string, text: string) => (opts.fg ? opts.fg(color, text) : text),
       bg: (_color: string, text: string) => text,
       bold: (text: string) => text,
       underline: (text: string) => text,
@@ -3423,6 +3423,26 @@ describe("viewer minimap (Issue #165)", () => {
     // marked and split at the plain wrap's boundaries: marking each chunk on
     // its own would find no match in any of them.
     expect(marked.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("marks matched map rows and never re-folds while typing (#166)", async () => {
+    const MARK = "\x1b[38;5;111m";
+    const harness = makeMapHarness({
+      fg: (color, text) => (color === "searchMatchText" ? `${MARK}${text}\x1b[39m` : text),
+    });
+    await harness.overlay.openRelPath("src/big.ts");
+    focusViewer(harness.overlay);
+    harness.overlay.render(120); // warm the fold
+    const folds = countFolds();
+    expect(folds()).toBe(0);
+    harness.overlay.handleInput("/");
+    for (const ch of "value1") {
+      harness.overlay.handleInput(ch);
+      harness.overlay.render(120);
+    }
+    const lines = harness.overlay.render(120);
+    expect(folds()).toBe(0); // match state never rebuilds the sketch
+    expect(lines.some((line) => BRAILLE.test(line) && line.includes(MARK))).toBe(true);
   });
 
   it("hides itself when the map plus its divider would leave under 36 columns", async () => {
