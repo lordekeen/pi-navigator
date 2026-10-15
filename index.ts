@@ -41,6 +41,7 @@ import {
   loadNavigatorSettings,
   NAVIGATOR_CONFIG_FIELDS,
   resolveOverrideOrigins,
+  type OverrideOrigin,
 } from "./settings";
 import { countChangedFields, navigatorFieldNotes, openSettingsMenu } from "./settings_menu";
 import { NavigatorOverlay } from "./navigator";
@@ -249,14 +250,23 @@ function unknownSubcommandNotice(raw: string): string {
  * value the user actually passed, which is what makes "absent" observable.
  * The loader ignores a value of the wrong shape for the row's flag type.
  */
-function flagValues(pi: ExtensionAPI): Record<string, string | boolean | undefined> {
-  const values: Record<string, string | boolean | undefined> = {};
+/**
+ * The startup-layer provenance for one command invocation (Issue #178): the
+ * `--navigator-*` flag values and the resolved per-field origins. `/navigator
+ * set`, `/navigator settings` and the overlay mount read both through this one
+ * resolver, so no path can disagree about which layer won (the #131 class).
+ */
+function resolveStartupOrigins(pi: ExtensionAPI): {
+  flags: Record<string, string | boolean | undefined>;
+  origins: Record<string, OverrideOrigin>;
+} {
+  const flags: Record<string, string | boolean | undefined> = {};
   for (const field of NAVIGATOR_CONFIG_FIELDS) {
     const flag = field.override?.flag;
     if (flag === undefined) continue;
-    values[flag.name] = pi.getFlag(flag.name);
+    flags[flag.name] = pi.getFlag(flag.name);
   }
-  return values;
+  return { flags, origins: resolveOverrideOrigins(process.env, flags) };
 }
 
 /**
@@ -297,7 +307,7 @@ function runSet(
     ctx.ui.notify(`pi-navigator: could not write settings: ${committed.error}`, "warning");
     return;
   }
-  const shadowed = resolveOverrideOrigins(process.env, flagValues(pi))[field];
+  const shadowed = resolveStartupOrigins(pi).origins[field];
   ctx.ui.notify(
     `pi-navigator: set ${field} = ${value} → ${userPath}${shadowed !== undefined ? ` (${shadowed.source} overrides it for this run)` : ""}`,
     "info",
@@ -367,7 +377,7 @@ async function runNavigator(
         userPath: join(agentDir, NAVIGATOR_SETTINGS_FILE),
         env: process.env,
         // Flags beat env inside the loader (Issue #131).
-        flags: flagValues(pi),
+        flags: resolveStartupOrigins(pi).flags,
       });
       const notifyWarning = makeWarningNotifier(ctx.ui);
       for (const warning of loaded.warnings) notifyWarning(warning);
@@ -521,7 +531,7 @@ async function runSettings(pi: ExtensionAPI, ctx: ExtensionCommandContext): Prom
   // Startup layers shadow the file view (Issue #145): the origins report names
   // the layer that actually won, so the menu annotations are truthful — a
   // present-but-invalid flag no longer labels its row as overridden.
-  const origins = resolveOverrideOrigins(process.env, flagValues(pi));
+  const origins = resolveStartupOrigins(pi).origins;
   const overrides: Record<string, string> = {};
   for (const [fieldId, origin] of Object.entries(origins)) overrides[fieldId] = origin.source;
 
@@ -559,7 +569,7 @@ export default function (pi: ExtensionAPI): void {
   // default on purpose: the host stores a declared default into the flag's
   // value, so getFlag would then return it even when the user passed nothing —
   // flattening the precedence chain (defaults ← file ← env ← flag). Absent
-  // must stay `undefined`, which is what `flagValues` reads.
+  // must stay `undefined`, which is what `resolveStartupOrigins` reads.
   for (const field of NAVIGATOR_CONFIG_FIELDS) {
     const flag = field.override?.flag;
     if (flag === undefined) continue;
