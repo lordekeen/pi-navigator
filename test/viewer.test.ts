@@ -21,8 +21,6 @@ import {
   expandTabs,
   extOf,
   formatSize,
-  hardTruncate,
-  inkRuns,
   imageDimensions,
   isMarkdownPath,
   loadFile,
@@ -30,10 +28,9 @@ import {
   maxLineWidth,
   restyleViewerFile,
   searchLines,
-  sliceStyled,
-  stripAnsi,
-  visibleTextWidth,
 } from "../viewer";
+import { hardTruncate, inkRuns, sliceStyled, stripAnsi, visibleTextWidth } from "../ansi";
+import { truncateUtf8ToBytes } from "../bytes";
 import type { ImageRenderer } from "../viewer";
 
 // Stat-call counter (Issue #144): the loader must not stat a path the session
@@ -155,7 +152,7 @@ describe("hardTruncate", () => {
     // reset-terminated so an open style cannot leak into later padding.
     const cut = hardTruncate("abcdef", 3);
     expect(cut).not.toContain("...");
-    expect(cut).not.toMatch(/\x1b\[0m\.\.\./);
+    expect(cut).not.toContain("\x1b[0m...");
     expect(stripAnsi(cut)).toBe("abc");
     expect(visibleTextWidth(cut)).toBe(3);
     expect(hardTruncate("abcdef", 0)).toBe("");
@@ -305,6 +302,21 @@ describe("extOf / formatSize / imageDimensions", () => {
 });
 
 // ── Display rows ──
+
+describe("truncateUtf8ToBytes (Issue #172)", () => {
+  it("cuts mid-buffer at a sequence boundary and drops an incomplete tail at the end", () => {
+    const bytes = Buffer.from("aéb", "utf8"); // 61 C3 A9 62
+    expect(truncateUtf8ToBytes(bytes, 2).toString("utf8")).toBe("a"); // cut inside é steps back
+    expect(truncateUtf8ToBytes(bytes, 3).toString("utf8")).toBe("aé"); // exact boundary
+    expect(truncateUtf8ToBytes(bytes, 4).toString("utf8")).toBe("aéb");
+    // A capped read that cut a sequence in half (end of buffer) drops it.
+    const partial = bytes.subarray(0, 2); // 61 C3
+    expect(truncateUtf8ToBytes(partial, partial.length).toString("utf8")).toBe("a");
+    const emoji = Buffer.from("x😀", "utf8"); // 78 F0 9F 98 80
+    expect(truncateUtf8ToBytes(emoji.subarray(0, 4), 4).toString("utf8")).toBe("x");
+    expect(truncateUtf8ToBytes(emoji, 5).toString("utf8")).toBe("x😀");
+  });
+});
 
 describe("computeRows / maxLineWidth", () => {
   const file = {
@@ -607,7 +619,7 @@ describe("loadFile", () => {
     expect(file.kind).toBe("image");
     expect(file.imageVerdict?.kind).toBe("card");
     const failure = failed(file);
-    expect(failure).toEqual({ renderer: "chafa", detail: "x".repeat(199) + "\u2026" });
+    expect(failure).toEqual({ renderer: "chafa", detail: `${ "x".repeat(199) }\u2026` });
     expect(failure.detail.length).toBeLessThanOrEqual(200);
   });
 

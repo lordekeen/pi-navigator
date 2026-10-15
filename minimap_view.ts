@@ -26,7 +26,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 import { MINIMAP_MAX_COLUMNS } from "./constants";
 import type { NavigatorTheme } from "./theme";
-import { inkRuns, stripAnsi } from "./viewer";
+import { inkRuns, stripAnsi } from "./ansi";
 
 export type MinimapEncoding = "braille" | "bars";
 export type MinimapPalette = "mono" | "syntax";

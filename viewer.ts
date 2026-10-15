@@ -6,10 +6,6 @@
  * size caps, tab expansion and pi-native syntax highlighting (highlightCode +
  * getLanguageFromPath; no external binaries, no npm dependencies).
  *
- * This module also owns the typed open-target vocabulary (`targetOf` /
- * `targetPath` / `sameTarget`, Issue #142) so the overlay and the session can
- * compare displayed targets without importing each other (Issue #144).
- *
  * Search note: matches are located inside the already highlighted line using
  * the technique proven by pi-skill-gate (visible search over a styled string;
  * case folding is length preserving for the escape sequences the highlighter
@@ -19,7 +15,7 @@
 
 import { open, readFile, stat } from "node:fs/promises";
 import { getLanguageFromPath, highlightCode } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 import {
   BINARY_SNIFF_BYTES,
@@ -31,44 +27,10 @@ import {
   MAX_LINE_COUNT_BYTES,
   TAB_WIDTH,
 } from "./constants";
+import { sliceStyled, visibleTextWidth } from "./ansi";
+import { truncateUtf8ToBytes } from "./bytes";
 import { type ImageAttemptRenderer, type RenderOutcome } from "./images";
-import type { OpenTarget, SearchMatch, ViewerFile } from "./types";
-
-// ── Open targets ──
-
-/**
- * The typed open target of a displayed ViewerFile (Issue #142): the diff kind
- * or a stamped commitHash makes it a commit target; everything else is a file
- * target keyed by its display relPath. Null while nothing is displayed, and
- * defensive null for a commit-kind file that carries no hash (it cannot be
- * addressed). Shared here so the overlay and the session compare targets
- * without importing each other (Issue #144).
- */
-export function targetOf(file: ViewerFile | null): OpenTarget | null {
-  if (file === null) return null;
-  if (file.kind === "diff" || file.commitHash !== undefined) {
-    return file.commitHash === undefined ? null : { kind: "commit", hash: file.commitHash };
-  }
-  return { kind: "file", relPath: file.relPath };
-}
-
-/**
- * The string projection of a target for the consumers that still speak
- * paths: `commit:<hash>` stays the commit display/cache identity (Issue #142
- * decision 6), and a file target is its relPath.
- */
-export function targetPath(target: OpenTarget | null): string | null {
-  if (target === null) return null;
-  return target.kind === "commit" ? `commit:${target.hash}` : target.relPath;
-}
-
-/** Structural identity of two targets (Issue #142); null matches nothing. */
-export function sameTarget(a: OpenTarget | null, b: OpenTarget | null): boolean {
-  if (a === null || b === null) return false;
-  if (a.kind === "file" && b.kind === "file") return a.relPath === b.relPath;
-  if (a.kind === "commit" && b.kind === "commit") return a.hash === b.hash;
-  return false;
-}
+import type { SearchMatch, ViewerFile } from "./types";
 
 // ── Text helpers ──
 
@@ -96,150 +58,6 @@ export function expandTabs(text: string, tabWidth = TAB_WIDTH): string {
     out.push(expanded);
   }
   return out.join("\n");
-}
-
-const ANSI_PATTERN = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
-
-export function stripAnsi(text: string): string {
-  return text.replace(ANSI_PATTERN, "");
-}
-
-export function visibleTextWidth(text: string): number {
-  return visibleWidth(stripAnsi(text));
-}
-
-/**
- * Column-slice a styled line for horizontal scrolling. Escape sequences are
- * preserved as encountered; the result is reset-terminated when any styling
- * was included. Columns are terminal cells (Issue #059): a wide character
- * occupies two of them, so a glyph whose first cell falls inside the window is
- * emitted whole — callers hard-cut any transient one-cell overflow (padTo).
- */
-// Sticky ANSI escape sequence matcher (CSI + OSC) reused by sliceStyled;
-// `lastIndex` is set per call site so it scans the full string without
-// allocating a suffix copy per character (Issue #083).
-const ANSI_ESCAPE_RE = /\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x1b\x07]*(?:\x1b\\|\x07))/y;
-
-/**
- * One visible run of styled text with the SGR foreground code active over it
- * (Issue #165). `color` is the raw parameter string a re-emitter can paste
- * back into `\x1b[<color>m` ("38;5;240", "38;2;1;2;3"), or null for the
- * theme's default foreground. The viewer minimap measures ink and colour from
- * these runs, so the ANSI grammar stays in one module.
- */
-export interface InkRun {
-  text: string;
-  color: string | null;
-}
-
-/**
- * Advance the active foreground over one SGR parameter list. Handles the two
- * colour introducers (38;5;N and 38;2;R;G;B), the two resets (0 and 39), and
- * leaves the colour untouched for every other code — including 48;* (a
- * background) and 58;* (the pretty-print underline colour), which are not the
- * text's foreground.
- */
-function nextForeground(current: string | null, params: string): string | null {
-  // An empty parameter list IS SGR 0 (ECMA-48), so `\x1b[m` resets exactly
-  // like `\x1b[0m` — a real code, not the malformed one it resembles.
-  const tokens = params === "" ? ["0"] : params.split(";");
-  let value = current;
-  for (let i = 0; i < tokens.length; i += 1) {
-    const token = tokens[i] ?? "";
-    if (token === "0" || token === "39") {
-      value = null;
-      continue;
-    }
-    if (token !== "38") continue;
-    const kind = tokens[i + 1];
-    if (kind === "5" && tokens[i + 2] !== undefined) {
-      value = `38;5;${tokens[i + 2]}`;
-      i += 2;
-      continue;
-    }
-    if (kind === "2" && tokens[i + 4] !== undefined) {
-      value = `38;2;${tokens[i + 2]};${tokens[i + 3]};${tokens[i + 4]}`;
-      i += 4;
-    }
-  }
-  return value;
-}
-
-export function inkRuns(styled: string): InkRun[] {
-  const runs: InkRun[] = [];
-  let text = "";
-  let color: string | null = null;
-  const flush = (): void => {
-    if (text.length > 0) runs.push({ text, color });
-    text = "";
-  };
-  let i = 0;
-  while (i < styled.length) {
-    ANSI_ESCAPE_RE.lastIndex = i;
-    const esc = ANSI_ESCAPE_RE.exec(styled);
-    if (esc) {
-      const seq = esc[0];
-      i += seq.length;
-      // CSI sequences end in a letter; only "m" (SGR) carries styling.
-      // `\x1b[m` is the shortest of them (empty parameter list = reset),
-      // so there is no length floor beyond the two introducer bytes.
-      if (seq.startsWith("\x1b[") && seq.endsWith("m")) {
-        const next = nextForeground(color, seq.slice(2, -1));
-        if (next !== color) {
-          flush();
-          color = next;
-        }
-      }
-      continue;
-    }
-    text += styled[i] ?? "";
-    i += 1;
-  }
-  flush();
-  return runs;
-}
-
-export function sliceStyled(styled: string, start: number, end: number): string {
-  let out = "";
-  let column = 0;
-  let styledOut = false;
-  let i = 0;
-  while (i < styled.length) {
-    ANSI_ESCAPE_RE.lastIndex = i;
-    const esc = ANSI_ESCAPE_RE.exec(styled);
-    if (esc) {
-      out += esc[0];
-      styledOut = true;
-      i += esc[0].length;
-      continue;
-    }
-    const code = styled.codePointAt(i);
-    if (code === undefined) break; // unreachable: i walks valid code points
-    const ch = String.fromCodePoint(code);
-    if (column >= start && column < end) out += ch;
-    column += visibleWidth(ch);
-    i += ch.length;
-    if (column >= end) break;
-  }
-  if (styledOut && out.length > 0 && !out.endsWith("\x1b[0m")) out += "\x1b[0m";
-  return out;
-}
-
-/**
- * Hard-truncate a (possibly styled) string to a visible width with no
- * ellipsis. `truncateToWidth`'s default `"..."` ellipsis is wrapped in
- * `\x1b[0m` resets, which close any enclosing style and render the ellipsis
- * in bright default (Issue #010); overlay callers instead pass an empty
- * ellipsis so they can re-style or pad the cut themselves. This helper is
- * that convention in one named place: it delegates to
- * `truncateToWidth(text, width, "")`, so like `sliceStyled` the result is
- * reset-terminated when a cut actually happens (a bare `\x1b[0m` closes an
- * open style at the cut, which cannot leak into later padding), and it never
- * splits a wide (CJK) character — the contiguous prefix simply under-fills
- * the last cell.
- */
-export function hardTruncate(text: string, width: number): string {
-  return truncateToWidth(text, width, "");
 }
 
 /**
@@ -380,25 +198,13 @@ function estimateTokens(text: string): number {
 
 /**
  * Decode UTF-8 bytes, dropping a trailing sequence that the read cut in half,
- * so a capped read never ends on a replacement character. Exported for the
- * unit suite; the loader itself uses it through readCappedHead.
+ * so a capped read never ends on a replacement character. The alignment rule
+ * lives in `truncateUtf8ToBytes` (Issue #172), shared with the git commit
+ * reads. Exported for the unit suite; the loader itself uses it through
+ * readCappedHead.
  */
 export function decodeUtf8Head(buffer: Buffer): string {
-  let end = buffer.length;
-  const last = buffer[end - 1];
-  if (last !== undefined && last >= 0x80) {
-    // Walk back over continuation bytes to the lead byte of the final sequence.
-    let lead = end - 1;
-    let continuations = 0;
-    while (lead >= 0 && (buffer[lead] ?? 0) >= 0x80 && (buffer[lead] ?? 0) < 0xc0 && continuations < 3) {
-      lead -= 1;
-      continuations += 1;
-    }
-    const leadByte = lead >= 0 ? buffer[lead] ?? 0 : 0;
-    const needed = leadByte >= 0xf0 ? 4 : leadByte >= 0xe0 ? 3 : leadByte >= 0xc0 ? 2 : 0;
-    if (needed > 0 && end - lead < needed) end = lead;
-  }
-  return buffer.subarray(0, end).toString("utf8");
+  return truncateUtf8ToBytes(buffer, buffer.length).toString("utf8");
 }
 
 /**
@@ -422,9 +228,9 @@ function errorCard(relPath: string, message: string): ViewerFile {
 }
 
 /**
- * Synchronous highlight core. `highlightText` is the loader's async wrapper
- * (it awaits nothing), while `restyleViewerFile` re-runs this directly on the
- * retained pre-highlight source (Issue #136).
+ * Synchronous highlight core. The loader and `restyleViewerFile` both call it
+ * directly; `restyleViewerFile` re-runs it on the retained pre-highlight
+ * source (Issue #136).
  */
 function highlightLines(text: string, relPath: string): string[] {
   const lang = getLanguageFromPath(relPath);
@@ -434,10 +240,6 @@ function highlightLines(text: string, relPath: string): string[] {
   } catch {
     return text.split("\n");
   }
-}
-
-async function highlightText(text: string, relPath: string): Promise<string[]> {
-  return highlightLines(text, relPath);
 }
 
 /**
@@ -630,7 +432,7 @@ export async function loadFile(
   if (overBytes || overLines) {
     const head = allLines.slice(0, MAX_HIGHLIGHT_LINES);
     const styleText = head.join("\n");
-    const lines = await highlightText(styleText, relPath);
+    const lines = highlightLines(styleText, relPath);
     const reason = overBytes
       ? `${formatSize(sizeBytes)} exceeds the ${formatSize(MAX_HIGHLIGHT_BYTES)} highlight cap`
       : `${allLines.length} lines exceed the ${MAX_HIGHLIGHT_LINES} line cap`;
@@ -652,7 +454,7 @@ export async function loadFile(
     };
   }
 
-  const lines = await highlightText(expanded, relPath);
+  const lines = highlightLines(expanded, relPath);
   const lineCount = sizeBytes <= MAX_LINE_COUNT_BYTES ? allLines.length : undefined;
   const rawText = isMarkdownPath(relPath) ? raw : undefined;
   return {

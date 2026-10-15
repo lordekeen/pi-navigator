@@ -80,11 +80,9 @@ import type {
 import {
   extOf,
   restyleViewerFile,
-  sameTarget,
-  targetOf,
-  targetPath,
   type LoadFileOptions,
 } from "./viewer";
+import { sameTarget, targetOf, targetPath } from "./open_target";
 import {
   buildFilterBar,
   canRenderMarkdown,

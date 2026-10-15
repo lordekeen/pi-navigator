@@ -19,6 +19,7 @@
 
 import * as childProcess from "node:child_process";
 
+import { truncateUtf8ToBytes } from "./bytes";
 import { GIT_HISTORY_COUNT, GIT_TIMEOUT_MS, MAX_HIGHLIGHT_BYTES, MAX_HIGHLIGHT_LINES } from "./constants";
 import type { CommitMessage } from "./diff";
 import type { TreeEntry } from "./tree";
@@ -476,10 +477,7 @@ export async function readCommitDiff(cwd: string, shortHash: string): Promise<Co
   msgText = msgText.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   let messageTruncated = false;
   if (Buffer.byteLength(msgText, "utf8") > MAX_HIGHLIGHT_BYTES) {
-    const bytes = Buffer.from(msgText, "utf8");
-    let end = MAX_HIGHLIGHT_BYTES;
-    while (end > 0 && (bytes[end] ?? 0) >= 0x80 && (bytes[end] ?? 0) < 0xc0) end -= 1;
-    msgText = bytes.subarray(0, end).toString("utf8");
+    msgText = truncateUtf8ToBytes(Buffer.from(msgText, "utf8"), MAX_HIGHLIGHT_BYTES).toString("utf8");
     messageTruncated = true;
   }
   const msgLines = msgText.split("\n");
@@ -514,14 +512,10 @@ export async function readCommitDiff(cwd: string, shortHash: string): Promise<Co
   body = body.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   // Byte-true cap (Issue #060 finding 5): `body.length` counts UTF-16 code
   // units — multi-byte characters overcount the budget, and `.slice` can split
-  // a surrogate pair mid-way. Truncate to the byte budget, then step back over
-  // UTF-8 continuation bytes to a lead byte so no sequence is cut in half
-  // (same rule decodeUtf8Head applies to capped file reads).
+  // a surrogate pair mid-way. The shared UTF-8 cap truncates to the byte
+  // budget at a code-point boundary (the same rule capped file reads use).
   if (Buffer.byteLength(body, "utf8") > MAX_HIGHLIGHT_BYTES) {
-    const bytes = Buffer.from(body, "utf8");
-    let end = MAX_HIGHLIGHT_BYTES;
-    while (end > 0 && (bytes[end] ?? 0) >= 0x80 && (bytes[end] ?? 0) < 0xc0) end -= 1;
-    body = bytes.subarray(0, end).toString("utf8");
+    body = truncateUtf8ToBytes(Buffer.from(body, "utf8"), MAX_HIGHLIGHT_BYTES).toString("utf8");
     truncated = true;
   }
 

@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import { buildMinimap, renderMinimap, type MinimapInput } from "../minimap_view";
 import type { NavigatorTheme } from "../theme";
-import { stripAnsi } from "../viewer";
+import { stripAnsi } from "../ansi";
 
 const INK = "\x1b[38;5;11m";
 const BAND = "\x1b[48;5;12m";

@@ -13,7 +13,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { FAMILY_MAX_ROWS } from "./constants";
 import type { NavigatorTheme } from "./theme";
 import type { Focus, GitChangedFile, GitCommit, GitRow, GitState } from "./types";
-import { hardTruncate } from "./viewer";
+import { hardTruncate } from "./ansi";
 import { joinLeftRight, leftBudget, padTo, truncateAndWidth } from "./frame";
 
 /**

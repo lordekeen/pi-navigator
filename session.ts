@@ -65,7 +65,8 @@ import {
   type TreeSkipPredicate,
 } from "./tree";
 import type { FileNode, GitState, OpenTarget, ViewerFile } from "./types";
-import { extOf, restyleViewerFile, sameTarget, type LoadFileOptions } from "./viewer";
+import { extOf, restyleViewerFile, type LoadFileOptions } from "./viewer";
+import { sameTarget } from "./open_target";
 
 /**
  * One-shot file-tree truncation warning (Issue #108): the three tree walks —

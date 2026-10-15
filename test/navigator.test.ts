@@ -23,7 +23,7 @@ import { buildTree } from "../tree";
 import { entriesFromPaths, findNode } from "./tree_fixtures";
 import { NAVIGATOR_LAYOUTS, type GitState, type NavigatorLayout, type ViewerFile } from "../types";
 import type { LoadFileOptions } from "../viewer";
-import { targetOf } from "../viewer";
+import { targetOf } from "../open_target";
 import * as minimapView from "../minimap_view";
 import * as viewerModule from "../viewer";
 import {

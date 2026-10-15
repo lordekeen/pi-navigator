@@ -10,7 +10,7 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 
 import type { NavigatorTheme } from "./theme";
-import { hardTruncate } from "./viewer";
+import { hardTruncate } from "./ansi";
 import { FRAME_CORNERS, padTo } from "./frame";
 
 /** Help rows that fit. Shared by the input clamp and the renderer. */

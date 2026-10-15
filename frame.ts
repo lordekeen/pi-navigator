@@ -25,7 +25,7 @@ import {
 import { visiblePanes } from "./layout";
 import type { NavigatorTheme } from "./theme";
 import type { Focus, GitState, InputMode, NavigatorLayout, ViewerScrollWindow } from "./types";
-import { hardTruncate } from "./viewer";
+import { hardTruncate } from "./ansi";
 
 /**
  * Truncate a (possibly styled) string to a visible width and return both the
