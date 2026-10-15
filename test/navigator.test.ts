@@ -11,6 +11,7 @@ import {
   Markdown,
   TUI_KEYBINDINGS,
   type KeybindingsConfig,
+  type TuiMouseEvent,
   visibleWidth,
 } from "@earendil-works/pi-tui";
 
@@ -3443,6 +3444,53 @@ describe("viewer minimap (Issue #165)", () => {
     const lines = harness.overlay.render(120);
     expect(folds()).toBe(0); // match state never rebuilds the sketch
     expect(lines.some((line) => BRAILLE.test(line) && line.includes(MARK))).toBe(true);
+  });
+
+  it("jumps to the clicked map row in both encodings and widths, refocusing the viewer (#167)", async () => {
+    for (const [encoding, width] of [["braille", 4], ["bars", 12]] as const) {
+      const harness = makeMapHarness({ minimap: encoding, width });
+      await harness.overlay.openRelPath("src/big.ts");
+      const lines = harness.overlay.render(120);
+      const glyph = encoding === "braille" ? BRAILLE : BAR;
+      const mapRows = lines.filter((line) => glyph.test(line)).length;
+      expect(mapRows).toBeGreaterThan(1);
+      const x = 120 - 1 - width; // left edge of the map column
+      const top = 4; // 3 frame rows + the viewer header (no notices on big.ts)
+      const total = 200;
+      const maxScroll = total - mapRows;
+      const mouse = (type: TuiMouseEvent["type"], y: number, at = x): TuiMouseEvent => ({
+        type, button: "left", x: at, y, screenX: at, screenY: y,
+        width: 120, height: lines.length, shift: false, alt: false, ctrl: false,
+      });
+      const firstBody = (): string => harness.overlay.render(120)[top] ?? "";
+      const blockStart = (row: number): number => Math.floor((row * total) / mapRows);
+
+      // The top map row jumps to the first display row.
+      expect(harness.overlay.handleMouse(mouse("press", top))?.handled).toBe(true);
+      expect(firstBody()).toContain("const value0");
+
+      // A middle map row lands on its block's first display row.
+      const mid = Math.floor(mapRows / 2);
+      harness.overlay.handleMouse(mouse("press", top + mid));
+      expect(firstBody()).toContain(`const value${blockStart(mid)}`);
+
+      // The last map row shows the end of the file, clamped like the keyboard.
+      harness.overlay.handleMouse(mouse("press", top + mapRows - 1));
+      expect(firstBody()).toContain(`const value${Math.min(blockStart(mapRows - 1), maxScroll)}`);
+
+      // The click is swallowed without moving again; the click refocused the
+      // viewer (its footer hints carry `w wrap`; the files pane's do not).
+      const settled = firstBody();
+      expect(harness.overlay.handleMouse(mouse("click", top + mid))?.handled).toBe(true);
+      expect(firstBody()).toBe(settled);
+      expect(harness.overlay.render(120).join("\n")).toContain("w wrap");
+
+      // Outside the map column, wheel events, and non-left buttons fall through.
+      expect(harness.overlay.handleMouse(mouse("press", top, 10))).toBeUndefined();
+      expect(harness.overlay.handleMouse(mouse("wheel", top))).toBeUndefined();
+      expect(harness.overlay.handleMouse({ ...mouse("press", top), button: "right" })).toBeUndefined();
+      expect(firstBody()).toBe(settled);
+    }
   });
 
   it("hides itself when the map plus its divider would leave under 36 columns", async () => {

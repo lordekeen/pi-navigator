@@ -115,6 +115,13 @@ export const FRAME_CORNERS = {
 } as const;
 
 /**
+ * Rows above the body in the full frame (Issue #167): top border, subtitle
+ * row, separator. `layout.bodyRows` reserves these three plus the two bottom
+ * rows; mouse hit-testing offsets overlay-local coordinates from this value.
+ */
+export const FRAME_TOP_ROWS = 3;
+
+/**
  * The overlay's top border with the product-name pill (Issue #137 §2):
  * `╭` + `──` + accent-bold `" title "` + `─`.repeat(fill) + `╮`, so the total
  * visible width is `innerW + 2` — the mock's E chrome

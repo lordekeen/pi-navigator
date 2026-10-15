@@ -58,6 +58,8 @@ export interface ViewerRenderOutput {
   window: ViewerWindow;
   minimap: { sketch: MinimapSketch; width: number; marks: MinimapMarks | null } | null;
   digits: number;
+  /** Notice rows drawn above the text content (truncation / diff / disk). */
+  noticeRows: number;
   /** True when this pass drew a map (drives the border-thumb rule). */
   mapActive: boolean;
 }
@@ -351,7 +353,7 @@ export class ViewerModel {
       win = viewerWindow({ requestedScroll: input.scroll, requestedHscroll: input.hscroll });
     }
 
-    return { content, window: win, minimap, digits, mapActive: minimap !== null };
+    return { content, window: win, minimap, digits, noticeRows, mapActive: minimap !== null };
   }
 
   // ── Search derivation ──

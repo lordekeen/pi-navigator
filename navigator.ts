@@ -19,6 +19,8 @@ import {
   matchesKey,
   type Focusable,
   type KeybindingsManager,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 
 import {
@@ -34,7 +36,7 @@ import { restyleDiffViewerFile } from "./diff";
 import type { NavigatorMinimapEncoding, NavigatorMinimapPalette } from "./settings";
 import { NAVIGATOR_KEYBINDINGS } from "./help";
 import { buildFilesHeader, buildFileRow, buildFilesRows, filesEmptyRow } from "./files_view";
-import { buildCompactFrame, buildFooterRow, composeFrame, padTo } from "./frame";
+import { buildCompactFrame, buildFooterRow, composeFrame, FRAME_TOP_ROWS, padTo } from "./frame";
 import { buildGitHeader, buildGitRow, buildGitNavRows, buildGitRows } from "./git_view";
 import {
   bodyRows,
@@ -87,6 +89,7 @@ import {
   type ViewerWindow,
 } from "./viewer_view";
 import { ViewerModel } from "./viewer_model";
+import type { MinimapSketch } from "./minimap_view";
 
 export interface NavigatorOptions {
   cwd: string;
@@ -250,6 +253,13 @@ export class NavigatorOverlay implements Focusable {
   private viewMinimapOn = true;
   /** True when the last pass rendered a map (drives the border-thumb rule). */
   private viewerMapActive = false;
+  /**
+   * Map hit-test geometry from the last full render (Issue #167): the map's
+   * overlay-local top row, its column count and its folded blocks. Null when
+   * no map was drawn (or a compact frame replaced the overlay), so a click
+   * falls through to nothing.
+   */
+  private mapHit: { top: number; width: number; blocks: MinimapSketch["blocks"] } | null = null;
   // Row-model memos. Each is keyed on exactly the inputs that affect its
   // output (object references + primitives), so a single render pass that
   // calls filesRows()/gitRows()/gitNavRows() several times builds each array
@@ -724,6 +734,34 @@ export class NavigatorOverlay implements Focusable {
       return;
     }
     this.handleNormalInput(data);
+  }
+
+  /**
+   * Map click-to-jump (Issue #167). A left press on the minimap column
+   * scrolls the viewer to the clicked map row's first display row and focuses
+   * the viewer; a click is swallowed so the renderer's fallback does not also
+   * react to the same gesture. Wheel and drag are deliberately not routed —
+   * no pane has mouse scrolling yet, and every click target stays reachable
+   * by key. The compact frame and the help/filter modes are excluded.
+   */
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (event.type !== "press" && event.type !== "click") return undefined;
+    if (event.button !== "left") return undefined;
+    if (this.mode === "help" || this.mode === "filter") return undefined;
+    if (event.width < MIN_OVERLAY_WIDTH || event.height < MIN_OVERLAY_HEIGHT) return undefined;
+    const map = this.mapHit;
+    if (!map) return undefined;
+    const x0 = event.width - 1 - map.width;
+    if (event.x < x0 || event.x > event.width - 2) return undefined;
+    const block = map.blocks[event.y - map.top];
+    if (block === undefined) return undefined;
+    if (event.type === "press") {
+      this.viewScroll = block.start;
+      this.focus = "viewer";
+      this.touch();
+      this.requestRender();
+    }
+    return { handled: true, focus: true };
   }
 
   private handleHelpInput(data: string): void {
@@ -1280,6 +1318,7 @@ export class NavigatorOverlay implements Focusable {
       const lines = buildCompactFrame(width, T);
       this.cachedWidth = width;
       this.cachedLines = lines;
+      this.mapHit = null; // no map exists in the compact frame
       return lines;
     }
     const body = bodyRows(overlayH);
@@ -1503,6 +1542,16 @@ export class NavigatorOverlay implements Focusable {
     // (Issue #165): the frame's border thumb is suppressed in render() so two
     // cues cannot drift apart over the same window.
     this.viewerMapActive = out.mapActive;
+    // Issue #167: the map's hit-test geometry for a later mouse event — the
+    // overlay-local row its first map row was drawn at (frame chrome + the
+    // viewer header + any notice rows), the carved width and the fold itself.
+    this.mapHit = out.minimap
+      ? {
+          top: FRAME_TOP_ROWS + 1 + out.noticeRows,
+          width: out.minimap.width,
+          blocks: out.minimap.sketch.blocks,
+        }
+      : null;
     // Pane snapshot for chafa geometry. The chafa branch has no gutter, so the
     // pane is the full right panel width (rev. 2 amendment 3). Pure
     // bookkeeping — no user-visible state is touched during render (Issue
