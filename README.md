@@ -162,8 +162,7 @@ The map appears only when the file actually scrolls (a short file shows nothing)
 
 One honest limit: the map's appearance test is the file's **source line count**, not its rendered height. A file with few source lines that overflows only because its lines wrap, or a small markdown file that expands when rendered, scrolls without a map. The exact test would mean rendering markdown twice per pass, which the viewer does not do.
 
-<!-- Screenshot placeholder (Issue #165): drop assets/viewer-minimap.png in and
-     replace this comment with the image when the owner captures one. -->
+![pi-navigator viewer with the minimap column on the right edge: a braille map of minimap_view.ts with search marks and a viewport band](assets/viewer-minimap.png)
 
 ## Behavior notes
 
