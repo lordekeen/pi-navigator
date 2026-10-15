@@ -25,6 +25,30 @@ export function visibleTextWidth(text: string): number {
 const ANSI_ESCAPE_RE = /\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x1b\x07]*(?:\x1b\\|\x07))/y;
 
 /**
+ * Escape-sequence spans of a styled string, ascending and non-overlapping:
+ * the byte ranges that are grammar, not text (Issue #181). A sequence cut off
+ * at the end of the line counts too — a terminal keeps consuming it, so the
+ * rest of the line is not readable text.
+ */
+export function escapeSpans(styled: string): Array<{ start: number; end: number }> {
+  const spans: Array<{ start: number; end: number }> = [];
+  let i = 0;
+  while (i < styled.length) {
+    const at = styled.indexOf("\x1b", i);
+    if (at === -1) break;
+    ANSI_ESCAPE_RE.lastIndex = at;
+    const esc = ANSI_ESCAPE_RE.exec(styled);
+    if (esc === null) {
+      spans.push({ start: at, end: styled.length });
+      break;
+    }
+    spans.push({ start: at, end: at + esc[0].length });
+    i = at + esc[0].length;
+  }
+  return spans;
+}
+
+/**
  * One visible run of styled text with the SGR foreground code active over it
  * (Issue #165). `color` is the raw parameter string a re-emitter can paste
  * back into `\x1b[<color>m` ("38;5;240", "38;2;1;2;3"), or null for the

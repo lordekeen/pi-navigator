@@ -3761,3 +3761,35 @@ describe("ctor-seeded defaults (Issue #171)", () => {
     expect(view.layout).toBe(DEFAULT_NAVIGATOR_SETTINGS.layout.default);
   });
 });
+
+describe("viewer search never touches escape bytes (Issue #181)", () => {
+  it("keeps every rendered row well-formed and exactly pane-wide when searching 'm'", async () => {
+    const styled: ViewerFile = {
+      kind: "text",
+      relPath: "styled.ts",
+      sizeBytes: 64,
+      lineCount: 1,
+      lines: ["\x1b[38;5;111mconst name = compute(value);\x1b[39m"],
+    };
+    const harness = makeHarness(36, async () => styled, (color, text) =>
+      color === "searchMatchText" ? `\x1b[7m${text}\x1b[0m` : text,
+    );
+    withTree(harness, ["styled.ts"]);
+    harness.overlay.handleInput(KEYS.enter);
+    await Promise.resolve();
+    harness.overlay.handleInput("/");
+    harness.overlay.handleInput("m");
+    const rows = harness.overlay.render(120);
+    expect(rows.some((row) => row.includes("\x1b[7m"))).toBe(true); // marking happened
+    for (const row of rows) {
+      expect(visibleWidth(row)).toBe(120);
+      // Every ESC must begin a well-formed CSI. Before the fix the marker
+      // matched the SGR terminators, split the sequences and left dangling
+      // fragments that a terminal consumes differently than the renderer
+      // measures — the padding and right border were eaten.
+      expect((row.match(/\x1b/g) ?? []).length).toBe(
+        (row.match(/\x1b\[[0-9;?]*[ -/]*[@-~]/g) ?? []).length,
+      );
+    }
+  });
+});

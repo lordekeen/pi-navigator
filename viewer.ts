@@ -9,8 +9,10 @@
  * Search note: matches are located inside the already highlighted line using
  * the technique proven by pi-skill-gate (visible search over a styled string;
  * case folding is length preserving for the escape sequences the highlighter
- * emits, so folded offsets stay valid). An occurrence split by an escape
- * sequence is not matched — an accepted v1 approximation.
+ * emits, so folded offsets stay valid). Escape bytes themselves are never
+ * matched (Issue #181: a query like `m` used to match every SGR terminator,
+ * and the marker then split the sequence it "matched"); an occurrence split
+ * by an escape sequence is not matched — an accepted v1 approximation.
  */
 
 import { open, readFile, stat } from "node:fs/promises";
@@ -27,7 +29,7 @@ import {
   MAX_LINE_COUNT_BYTES,
   TAB_WIDTH,
 } from "./constants";
-import { sliceStyled, visibleTextWidth } from "./ansi";
+import { escapeSpans, sliceStyled, visibleTextWidth } from "./ansi";
 import { truncateUtf8ToBytes } from "./bytes";
 import { type ImageAttemptRenderer, type RenderOutcome } from "./images";
 import type { SearchMatch, ViewerFile } from "./types";
@@ -88,12 +90,50 @@ function foldMaps(styled: string): { starts: number[]; ends: number[] } | null {
   return { starts, ends };
 }
 
+/** True when [start, end) overlaps an escape span. */
+function inEscape(spans: Array<{ start: number; end: number }>, start: number, end: number): boolean {
+  for (const span of spans) {
+    if (span.start >= end) return false;
+    if (span.end > start) return true;
+  }
+  return false;
+}
+
+/**
+ * Occurrences of `query` in one styled line's VISIBLE text, as offsets into
+ * the styled string (Issue #181). Matching runs on the styled string (folded
+ * offsets stay valid, see the module note), then every occurrence overlapping
+ * an escape sequence is dropped — the highlighter's own bytes used to satisfy
+ * queries like `m` (every SGR terminator) or `111` (a colour parameter), and
+ * the marker then split the sequence it had "matched".
+ */
+function visibleMatches(styled: string, query: string): Array<{ start: number; end: number }> {
+  if (query.length === 0) return [];
+  const smartCase = /\p{Lu}/u.test(query);
+  const haystack = smartCase ? styled : styled.toLowerCase();
+  const needle = smartCase ? query : query.toLowerCase();
+  const maps = smartCase ? null : foldMaps(styled);
+  const spans = escapeSpans(styled);
+  const out: Array<{ start: number; end: number }> = [];
+  let from = 0;
+  while (from <= haystack.length) {
+    const idx = haystack.indexOf(needle, from);
+    if (idx < 0) break;
+    const start = maps ? (maps.starts[idx] ?? idx) : idx;
+    const end = maps ? (maps.ends[idx + needle.length - 1] ?? idx + needle.length) : idx + needle.length;
+    if (!inEscape(spans, start, end)) out.push({ start, end });
+    from = idx + Math.max(1, needle.length);
+  }
+  return out;
+}
+
 /**
  * Replace every occurrence of the query with the match style; optionally style
  * the first occurrence as the current match.
  *
  * Case handling mirrors searchLines(): smart case, so an uppercase query is
- * matched case-sensitively and only real matches are highlighted.
+ * matched case-sensitively and only real matches are highlighted. Escape
+ * sequences are never matched and never split (Issue #181).
  */
 export function markMatches(
   styled: string,
@@ -102,32 +142,17 @@ export function markMatches(
   styleCurrent: (text: string) => string,
   currentOccurrence: number,
 ): string {
-  if (!query) return styled;
-  const smartCase = /\p{Lu}/u.test(query);
-  const haystack = smartCase ? styled : styled.toLowerCase();
-  const needle = smartCase ? query : query.toLowerCase();
-  const maps = smartCase ? null : foldMaps(styled);
-  let from = 0; // folded haystack cursor for indexOf
-  let fromUnfolded = 0; // unfolded cursor for slicing when maps is set
-  let occurrence = 0;
+  const matches = visibleMatches(styled, query);
+  if (matches.length === 0) return styled;
   let out = "";
-  while (from <= haystack.length) {
-    const idx = haystack.indexOf(needle, from);
-    if (idx < 0) {
-      out += styled.slice(fromUnfolded);
-      break;
-    }
-    const start = maps ? (maps.starts[idx] ?? idx) : idx;
-    const end = maps ? (maps.ends[idx + needle.length - 1] ?? styled.length) : idx + needle.length;
-    out += styled.slice(fromUnfolded, start);
-    const slice = styled.slice(start, end);
-    const useCurrent = occurrence === currentOccurrence;
-    out += useCurrent ? styleCurrent(slice) : styleMatch(slice);
-    occurrence += 1;
-    from = idx + Math.max(1, needle.length);
-    fromUnfolded = end;
-  }
-  return out;
+  let cursor = 0;
+  matches.forEach((match, occurrence) => {
+    out += styled.slice(cursor, match.start);
+    const slice = styled.slice(match.start, match.end);
+    out += occurrence === currentOccurrence ? styleCurrent(slice) : styleMatch(slice);
+    cursor = match.end;
+  });
+  return out + styled.slice(cursor);
 }
 
 
@@ -481,27 +506,18 @@ export function restyleViewerFile(file: ViewerFile, styleKey: string): ViewerFil
 }
 
 
-/** Smart-case search over styled lines. Returns match offsets valid for the
- *  styled string (see the module note). */
+/** Smart-case search over styled lines, visible text only (Issue #181).
+ *  Returns match offsets valid for the styled string (see the module note). */
 export function searchLines(lines: string[], query: string): SearchMatch[] {
   if (!query) return [];
-  const smartCase = /\p{Lu}/u.test(query);
-  const needle = smartCase ? query : query.toLowerCase();
   const matches: SearchMatch[] = [];
   for (let line = 0; line < lines.length; line++) {
     // Defensive: a malformed ViewerFile with a hole in lines would otherwise
-    // throw on the .toLowerCase() below. Well-formed files never hit this.
+    // throw below. Well-formed files never hit this.
     const raw = lines[line];
     if (raw === undefined) continue;
-    const maps = smartCase ? null : foldMaps(raw);
-    const haystack = smartCase ? raw : raw.toLowerCase();
-    let from = 0;
-    let idx: number;
-    while ((idx = haystack.indexOf(needle, from)) !== -1) {
-      const start = maps ? (maps.starts[idx] ?? idx) : idx;
-      const end = maps ? (maps.ends[idx + needle.length - 1] ?? idx + needle.length) : idx + needle.length;
-      matches.push({ line, start, end });
-      from = idx + Math.max(1, needle.length);
+    for (const match of visibleMatches(raw, query)) {
+      matches.push({ line, start: match.start, end: match.end });
     }
   }
   return matches;

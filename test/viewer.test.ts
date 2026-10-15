@@ -220,6 +220,22 @@ describe("markMatches", () => {
   it("returns the text unchanged for an empty query", () => {
     expect(markMatches("abc", "", match, current, -1)).toBe("abc");
   });
+
+  it("never matches or splits escape sequences (Issue #181)", () => {
+    const styled = "\x1b[38;5;111mconst name\x1b[39m";
+    // The visible "m" in "name" is the only match: the SGR terminator's m is
+    // not, and the sequence survives intact instead of being split into
+    // `\x1b[38;5;111` + an injected style (the layout break of #181).
+    expect(markMatches(styled, "m", match, current, -1)).toBe(
+      "\x1b[38;5;111mconst na<m>m</m>e\x1b[39m",
+    );
+  });
+
+  it("leaves a query that only occurs inside escapes unmatched (Issue #181)", () => {
+    const styled = "\x1b[38;5;111mabc\x1b[39m";
+    expect(markMatches(styled, "111", match, current, -1)).toBe(styled);
+    expect(markMatches(styled, "38", match, current, -1)).toBe(styled);
+  });
 });
 
 describe("searchLines", () => {
@@ -253,6 +269,23 @@ describe("searchLines", () => {
 
   it("returns no matches for an empty query", () => {
     expect(searchLines(["abc"], "")).toEqual([]);
+  });
+
+  it("never matches inside escape sequences (Issue #181)", () => {
+    const styled = "\x1b[38;5;111mconst name\x1b[39m";
+    // "m" occurs once in the visible text and twice in the escape bytes;
+    // only the visible one may match.
+    const matches = searchLines([styled], "m");
+    expect(matches.map((m) => styled.slice(m.start, m.end))).toEqual(["m"]);
+    expect(searchLines([styled], "111")).toEqual([]);
+    expect(searchLines([styled], "38")).toEqual([]);
+  });
+
+  it("treats a sequence cut off at the end of the line as non-text (Issue #181)", () => {
+    // A byte-capped read can end mid-sequence; a terminal keeps consuming it,
+    // so nothing in the tail is readable text.
+    const styled = "abc\x1b[31";
+    expect(searchLines([styled], "31")).toEqual([]);
   });
 });
 
