@@ -493,6 +493,55 @@ describe("git integration on a scratch repository", () => {
     }
   });
 
+  it("does not cache git-missing from an ENOENT whose cwd is gone (Issue #186)", async () => {
+    // gitBinaryPresent is module state earlier tests have already cached as
+    // true, so drive a fresh module instance.
+    vi.resetModules();
+    const fresh = await import("../git");
+    const gone = join(tmpdir(), "pi-nav-gone-186");
+    const spy = vi.spyOn(fresh.gitRunner, "execFile").mockImplementation((...args: any[]) => {
+      const cb = args[args.length - 1];
+      const err = new Error("spawn git ENOENT") as Error & { code?: string };
+      err.code = "ENOENT";
+      cb(err, "", "");
+      return {} as any;
+    });
+    try {
+      // A missing cwd is transient, never cached as "git missing" …
+      expect(await fresh.isGitAvailable(gone)).toBe(false);
+      // … so the next probe spawns again and can still succeed.
+      spy.mockImplementation((...args: any[]) => {
+        args[args.length - 1](null, "git version 2.0.0", "");
+        return {} as any;
+      });
+      expect(await fresh.isGitAvailable(repo)).toBe(true);
+    } finally {
+      spy.mockRestore();
+      vi.resetModules();
+    }
+  });
+
+  it("still caches git-missing when the binary is absent and the cwd exists (Issue #047)", async () => {
+    vi.resetModules();
+    const fresh = await import("../git");
+    const spy = vi.spyOn(fresh.gitRunner, "execFile").mockImplementation((...args: any[]) => {
+      const cb = args[args.length - 1];
+      const err = new Error("spawn git ENOENT") as Error & { code?: string };
+      err.code = "ENOENT";
+      cb(err, "", "");
+      return {} as any;
+    });
+    try {
+      expect(await fresh.isGitAvailable(tmpdir())).toBe(false);
+      spy.mockClear();
+      expect(await fresh.isGitAvailable(tmpdir())).toBe(false);
+      expect(spy).not.toHaveBeenCalled(); // cached: no further spawn
+    } finally {
+      spy.mockRestore();
+      vi.resetModules();
+    }
+  });
+
   it("reports detached HEAD when checked out on a commit (Issue #096)", async () => {
     await writeFile(join(repo, "a.txt"), "hello\n");
     await commit(repo, "first");

@@ -18,6 +18,7 @@
  */
 
 import * as childProcess from "node:child_process";
+import { stat } from "node:fs/promises";
 
 import { truncateUtf8ToBytes } from "./bytes";
 import { GIT_HISTORY_COUNT, GIT_TIMEOUT_MS, MAX_HIGHLIGHT_BYTES, MAX_HIGHLIGHT_LINES } from "./constants";
@@ -79,9 +80,14 @@ async function runGit(cwd: string, args: string[]): Promise<GitResult> {
     });
     return { status: "ok", stdout };
   } catch (error) {
-    // A spawn ENOENT means the git binary itself is not on PATH.
-    // Cache false to avoid spawning every tick (Issue #047).
     if (error && typeof error === "object" && (error as { code?: unknown }).code === "ENOENT") {
+      // Node reports ENOENT with the same shape for a missing git binary and a
+      // missing spawn cwd (path is the command, not the cwd), so verify the
+      // cwd before blaming the binary: a deleted or renamed worktree is
+      // transient and must not permanently disable git (Issue #186).
+      if (!(await cwdIsDirectory(cwd))) return { status: "error" };
+      // A spawn ENOENT with the cwd present means the git binary is not on
+      // PATH. Cache false to avoid spawning every tick (Issue #047).
       gitBinaryPresent = false;
       return { status: "missing" };
     }
@@ -97,6 +103,15 @@ async function runGit(cwd: string, args: string[]): Promise<GitResult> {
   }
 }
 
+/** Does the spawn cwd exist as a directory? (Issue #186) */
+async function cwdIsDirectory(cwd: string): Promise<boolean> {
+  try {
+    return (await stat(cwd)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /** One-time (per process, until invalidated) check whether the git binary is reachable. */
 export async function isGitAvailable(cwd: string): Promise<boolean> {
   if (gitBinaryPresent !== null) return gitBinaryPresent;
@@ -109,8 +124,10 @@ export async function isGitAvailable(cwd: string): Promise<boolean> {
     gitBinaryPresent = false;
     return false;
   }
-  // Transient failure (timeout, permissions): do not cache false permanently (Issue #047).
-  gitBinaryPresent = null;
+  // Transient failure (timeout, permissions, missing cwd): report false
+  // without caching a verdict (Issues #047, #186). No write here — the field
+  // is null on this path by construction, and writing null could clobber a
+  // concurrent probe's `true`.
   return false;
 }
 
