@@ -942,6 +942,10 @@ export function createKittyProbeState(): KittyProbeState {
  * - "pending": not settled yet (wait for more input; never consume)
  * - "foreign": this chunk does not belong to our probe's reply (consume=false)
  * - "ok" | "error": our probe's reply completed (the caller may consume)
+ *
+ * A chunk may carry several exchanges: complete foreign replies are skipped
+ * and the scan continues, so our own reply is not lost when it follows one in
+ * the same chunk (Issue #193).
  */
 export function consumeKittyProbeReply(
   state: KittyProbeState,
@@ -949,37 +953,46 @@ export function consumeKittyProbeReply(
   id: number,
 ): "ok" | "error" | "pending" | "foreign" {
   state.buffer += data;
-  const start = state.buffer.indexOf("\x1b_G");
-  if (start === -1) {
-    if (state.buffer.length > 8192) state.buffer = "";
-    return "foreign";
-  }
-  const head = state.buffer.slice(start);
-  const match = head.match(/^\x1b_Gi=(\d+);(.*)$/s);
-  if (!match) {
-    // A different kitty exchange (or a partial one): keep it in the buffer
-    // only while it could still become our reply.
-    if (!/^\x1b_Gi=\d+;/.test(head) && head.length > 128) state.buffer = "";
-    return "pending";
-  }
-  const matchId = Number(match[1]);
-  if (matchId !== id) {
+  for (;;) {
+    const start = state.buffer.indexOf("\x1b_G");
+    if (start === -1) {
+      if (state.buffer.length > 8192) state.buffer = "";
+      return "foreign";
+    }
+    const head = state.buffer.slice(start);
+    const match = head.match(/^\x1b_Gi=(\d+);(.*)$/s);
+    if (!match) {
+      // A different kitty exchange (or a partial one): keep it in the buffer
+      // only while it could still become our reply.
+      if (!/^\x1b_Gi=\d+;/.test(head) && head.length > 128) state.buffer = "";
+      return "pending";
+    }
+    const matchId = Number(match[1]);
+    const body = match[2] ?? "";
+    const term = body.indexOf("\x1b\\");
+    const bel = body.indexOf("\x07");
+    const end = term === -1 ? bel : term;
+    if (matchId !== id) {
+      if (end === -1) {
+        // The foreign exchange is still incomplete: wait for its terminator.
+        if (body.length > 4096) state.buffer = "";
+        return "pending";
+      }
+      // Advance past the complete foreign exchange and re-scan: our own reply
+      // may follow in the same chunk (Issue #193).
+      state.buffer = body.slice(end + (term === -1 ? 1 : 2));
+      continue;
+    }
+    if (end === -1) {
+      // Our id but no terminator yet: wait for the rest of the chunk.
+      if (body.length > 4096) state.buffer = "";
+      return "pending";
+    }
     state.buffer = "";
-    return "foreign";
+    const text = body.slice(0, end).trim();
+    // Anything but the literal "OK" is the protocol's error message.
+    return text === "OK" ? "ok" : "error";
   }
-  const body = match[2] ?? "";
-  const term = body.indexOf("\x1b\\");
-  const bel = body.indexOf("\x07");
-  const end = term === -1 ? bel : term;
-  if (end === -1) {
-    // Our id but no terminator yet: wait for the rest of the chunk.
-    if (body.length > 4096) state.buffer = "";
-    return "pending";
-  }
-  state.buffer = "";
-  const text = body.slice(0, end).trim();
-  // Anything but the literal "OK" is the protocol's error message.
-  return text === "OK" ? "ok" : "error";
 }
 
 export interface NativeRenderCtx {
@@ -1238,7 +1251,11 @@ export async function runNativeRender(
 /**
  * Pane-bounded chafa geometry (spec §7.2, rev. 2 amendments 2–3). The pane is
  * the hard cap; the pi-chafa cellWidth preference is honored whenever the
- * pane is wider. Rejects panes below IMAGE_CELLS_MIN / IMAGE_ROWS_MIN.
+ * pane is wider. `maxRows` caps the height further, but only down to
+ * IMAGE_ROWS_MIN: below that floor the floor wins, so a degenerate render is
+ * impossible and the clamp can never invert (the precedence is pinned by the
+ * sub-floor maxRows test; Issue #193).
+ * Rejects panes below IMAGE_CELLS_MIN / IMAGE_ROWS_MIN.
  */
 export function resolveChafaGeometry(input: {
   paneCols: number;
@@ -1254,6 +1271,8 @@ export function resolveChafaGeometry(input: {
     IMAGE_CELLS_MIN,
     IMAGE_CELLS_MAX,
   );
+  // The floor wins over a sub-floor maxRows (Issue #193): the clamp needs a
+  // non-inverted range, and IMAGE_ROWS_MIN is the minimum viable render.
   const upperRows = Math.max(IMAGE_ROWS_MIN, input.maxRows);
   const rows = clamp(
     Math.min(input.maxRows, input.paneRows),

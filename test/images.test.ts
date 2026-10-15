@@ -1379,6 +1379,22 @@ describe("kitty protocol probe helpers (Issue #101, #116)", () => {
     // The buffer resets, so our own reply still matches afterwards.
     expect(consumeKittyProbeReply(state, "\x1b_Gi=7;OK\x1b\\", 7)).toBe("ok");
   });
+  it("skips a complete foreign reply and still matches ours in the same chunk (Issue #193)", () => {
+    // ESC-ST-terminated foreign reply followed by ours in one chunk: the
+    // foreign exchange must be skipped, not thrown away with our reply.
+    expect(
+      consumeKittyProbeReply(createKittyProbeState(), "\x1b_Gi=8;OK\x1b\\\x1b_Gi=7;OK\x1b\\", 7),
+    ).toBe("ok");
+    // BEL-terminated foreign reply, and a foreign error message.
+    expect(
+      consumeKittyProbeReply(createKittyProbeState(), "\x1b_Gi=8;boom\x07\x1b_Gi=7;OK\x07", 7),
+    ).toBe("ok");
+    // A foreign exchange split across chunks keeps its remainder buffered and
+    // waits for the terminator instead of clearing the shared buffer.
+    const split = createKittyProbeState();
+    expect(consumeKittyProbeReply(split, "\x1b_Gi=8;OK", 7)).toBe("pending");
+    expect(consumeKittyProbeReply(split, "\x1b\\\x1b_Gi=7;OK\x1b\\", 7)).toBe("ok");
+  });
 });
 
 describe("resolveChafaGeometry", () => {
