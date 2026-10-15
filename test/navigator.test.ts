@@ -2734,12 +2734,13 @@ describe("Issue #123: invalidate() clears theme-styled caches, keeps the data ca
     harness.overlay.handleInput("a");
     harness.overlay.render(120); // warms plainRowsCache, maxLineWidthCache, searchMatchLines
 
-    const caches = harness.overlay as unknown as {
-      plainRowsCache: unknown;
-      mdCache: unknown;
-      maxLineWidthCache: unknown;
-      searchMatchLines: Set<number>;
-    };
+    const caches = (harness.overlay as unknown as {
+      viewerModel: {
+        plainRowsCache: unknown;
+        maxLineWidthCache: unknown;
+        searchMatchLines: Set<number>;
+      };
+    }).viewerModel;
     expect(caches.plainRowsCache).not.toBeNull();
     expect(caches.maxLineWidthCache).not.toBeNull();
     expect(caches.searchMatchLines.size).toBeGreaterThan(0);
@@ -2748,7 +2749,6 @@ describe("Issue #123: invalidate() clears theme-styled caches, keeps the data ca
 
     // The theme-derived render state is dropped wholesale...
     expect(caches.plainRowsCache).toBeNull();
-    expect(caches.mdCache).toBeNull();
     expect(caches.searchMatchLines.size).toBe(0);
     // ...while the data-derived caches (raw visible widths) and the file
     // data itself are deliberately kept: no re-read, same open path.

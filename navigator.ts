@@ -12,13 +12,11 @@
  * pure and the async work stays in `session.ts` (Issue #140).
  */
 
-import { copyToClipboard, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { copyToClipboard } from "@earendil-works/pi-coding-agent";
 import {
   decodeKittyPrintable,
   Key,
-  Markdown,
   matchesKey,
-  wrapTextWithAnsi,
   type Focusable,
   type KeybindingsManager,
 } from "@earendil-works/pi-tui";
@@ -29,18 +27,10 @@ import {
   IMAGE_CELLS_MIN,
   IMAGE_EXTENSIONS,
   IMAGE_ROWS_MIN,
-  MINIMAP_DIVIDER_WIDTH,
-  MINIMAP_MIN_CONTENT_WIDTH,
   MIN_OVERLAY_HEIGHT,
   MIN_OVERLAY_WIDTH,
 } from "./constants";
 import { restyleDiffViewerFile } from "./diff";
-import {
-  buildMinimap,
-  type MinimapEncoding,
-  type MinimapPalette,
-  type MinimapSketch,
-} from "./minimap_view";
 import type { NavigatorMinimapEncoding, NavigatorMinimapPalette } from "./settings";
 import { NAVIGATOR_KEYBINDINGS } from "./help";
 import { buildFilesHeader, buildFileRow, buildFilesRows, filesEmptyRow } from "./files_view";
@@ -78,34 +68,25 @@ import type {
   InputMode,
   NavigatorLayout,
   OpenTarget,
-  SearchMatch,
   ViewerFile,
   ViewerScrollWindow,
 } from "./types";
 import {
-  computeRows,
   extOf,
-  markMatches,
-  maxLineWidth,
   restyleViewerFile,
   sameTarget,
-  searchLines,
   targetOf,
   targetPath,
-  type DisplayRow,
   type LoadFileOptions,
 } from "./viewer";
 import {
   buildFilterBar,
   canRenderMarkdown,
-  paneContentArea,
-  paneContentWidth,
   renderViewerPane,
-  viewerWindow,
-  type ViewerContent,
   type ViewerPaneView,
   type ViewerWindow,
 } from "./viewer_view";
+import { ViewerModel } from "./viewer_model";
 
 export interface NavigatorOptions {
   cwd: string;
@@ -251,48 +232,17 @@ export class NavigatorOverlay implements Focusable {
   private viewRenderMarkdown = false;
   private diskChanged = false;
 
-  private searchQuery = "";
-  private searchMatches: SearchMatch[] = [];
-  private searchIndex = 0;
-  private searchJump = false;
-  // Search matches are recomputed lazily: `searchDirty` is set when the open
-  // file's content changes under an active query; `recomputeSearchIfNeeded`
-  // then (and only then) reruns `searchLines`. `searchMatchLines` backs the
-  // O(1) per-line membership test in `markedWindow` (was O(lines×matches)).
-  private searchDirty = false;
-  private searchMatchLines: Set<number> = new Set();
-  // Bumped whenever the search results or the current match change, so the
-  // occurrence cache can key off it.
-  private searchVersion = 0;
-  // The current match's occurrence on its own line (Issue #025), cached per
-  // searchVersion so the markdown path does not re-filter the match list on
-  // every render (Issue #168).
-  private occurrenceCache: { version: number; value: number } | null = null;
-
-  // Viewer render caches. The top-level `render()` cache is wiped by every
-  // `touch()` (every keystroke), so without these the viewer path re-derives
-  // the whole file's max line width and wrapped display rows on every
-  // keypress. Each cache is keyed on the stable `viewFile` reference (which
-  // only changes when a file is (re)opened) plus the inputs that actually
-  // affect its output; search marking is applied per render to the visible
-  // window instead of being cached whole-file (Issue #168).
-  private maxLineWidthCache: { file: ViewerFile; value: number } | null = null;
   /**
-   * Issue #168: the unmarked wrap, keyed on the stable `file` reference,
-   * width and wrap flag. Shared by the body rows, the search-marking pass and
-   * the minimap texts, so the file is wrapped once per cache miss however
-   * many consumers read it.
+   * The viewer's derived state — the render caches, the markdown renderer and
+   * the search derivation — behind one render/invalidate owner (Issue #169).
+   * The overlay routes input and owns scroll, focus and settings; it never
+   * names a viewer cache.
    */
-  private plainRowsCache: { file: ViewerFile; width: number; wrap: boolean; rows: DisplayRow[] } | null =
-    null;
-  private mdRenderer: Markdown | null = null;
-  private mdCache: { file: ViewerFile; width: number; lines: string[] } | null = null;
+  private viewerModel: ViewerModel;
   /**
    * Viewer minimap (Issue #165). `viewMinimapOn` is the session toggle (`v`),
    * seeded from the setting like `viewWrap`; the setting's `off` beats it. The
-   * text cache mirrors `plainRowsCache`/`mdCache`: one entry, keyed on the file
-   * reference plus the width/wrap/mode that produced it, so the sketch below
-   * keys on a stable array identity and a scroll never rebuilds anything.
+   * model above owns the text/sketch caches.
    */
   private viewMinimap: NavigatorMinimapEncoding = "braille";
   private viewMinimapColors: NavigatorMinimapPalette = "mono";
@@ -300,25 +250,6 @@ export class NavigatorOverlay implements Focusable {
   private viewMinimapOn = true;
   /** True when the last pass rendered a map (drives the border-thumb rule). */
   private viewerMapActive = false;
-  private mapTextsCache: {
-    file: ViewerFile;
-    width: number;
-    wrap: boolean;
-    renderMarkdown: boolean;
-    texts: string[];
-  } | null = null;
-  /** One sketch, keyed by exactly the inputs that shape it (the texts array's
-   *  identity covers reload, the `m` toggle and a restyle). */
-  private sketchCache: {
-    texts: readonly string[];
-    area: number;
-    width: number;
-    encoding: MinimapEncoding;
-    palette: MinimapPalette;
-    diff: boolean;
-    themeKey: string;
-    sketch: MinimapSketch | null;
-  } | null = null;
   // Row-model memos. Each is keyed on exactly the inputs that affect its
   // output (object references + primitives), so a single render pass that
   // calls filesRows()/gitRows()/gitNavRows() several times builds each array
@@ -394,6 +325,10 @@ export class NavigatorOverlay implements Focusable {
     // pane set, the initial focus, and the render geometry for this overlay.
     this.layout = options.initialLayout ?? "files-git-viewer";
     this.focus = initialFocus(this.layout);
+    this.viewerModel = new ViewerModel({
+      theme: () => this.T,
+      styleKey: () => this.styleKey(),
+    });
   }
 
   // ── Public API ──
@@ -520,11 +455,7 @@ export class NavigatorOverlay implements Focusable {
 
   /** Observable search state for tests and diagnostics (Issue #093). */
   getSearchState(): { query: string; index: number; total: number } {
-    return {
-      query: this.searchQuery,
-      index: this.searchIndex,
-      total: this.searchMatches.length,
-    };
+    return this.viewerModel.getState();
   }
 
   /** Reload the displayed target, keeping scroll position. Used by "r". */
@@ -559,9 +490,7 @@ export class NavigatorOverlay implements Focusable {
         // The `i` toggle is session-only and scoped to one open file (D8);
         // it has no meaning for a commit diff.
         if (target.kind === "file") this.imageAsCard = false;
-        this.searchQuery = "";
-        this.searchMatches = [];
-        this.searchIndex = 0;
+        this.viewerModel.setQuery("");
       }
     }
     this.touch();
@@ -588,11 +517,11 @@ export class NavigatorOverlay implements Focusable {
       }
       if (this.disposed || this.loadSeq !== seq) return;
       this.viewFile = file;
-      this.mdCache = null;
-      // New content: an active query must be re-scanned on next render. The
-      // plainRowsCache/maxLineWidth caches key on the `viewFile` reference, so
-      // the new object invalidates them automatically.
-      this.searchDirty = true;
+      // New content: rendered lines drop and an active query re-scans on the
+      // next render. The model's caches key on the `viewFile` reference, so
+      // the new object invalidates the rest automatically.
+      this.viewerModel.invalidate("content");
+      this.viewerModel.setSource(file, this.viewRenderMarkdown);
       this.diskChanged = false;
       if (!keepScroll || !same) {
         this.viewScroll = 0;
@@ -613,8 +542,8 @@ export class NavigatorOverlay implements Focusable {
       } else {
         this.viewFile = { kind: "error", relPath: target.relPath, lines: [], message: "unexpected read failure" };
       }
-      this.mdCache = null;
-      this.searchDirty = true;
+      this.viewerModel.invalidate("content");
+      this.viewerModel.setSource(this.viewFile, this.viewRenderMarkdown);
     } finally {
       if (!this.disposed && this.loadSeq === seq) {
         this.viewLoading = false;
@@ -675,20 +604,15 @@ export class NavigatorOverlay implements Focusable {
     // that bakes the theme in, so the next render re-derives it against the
     // theme now in force:
     //  - cachedLines/cachedWidth: the composed frame (styled strings);
-    //  - plainRowsCache: the wrapped theme-styled display rows (the marked
-    //    window is derived per render);
-    //  - mdCache/mdRenderer: rendered markdown (the renderer captures the
-    //    markdown theme at construction, so it must be rebuilt too);
-    //  - searchMatches/searchMatchLines/searchDirty/searchVersion: search
-    //    state derived from the styled lines (recomputed on the next render;
-    //    searchIndex is deliberately kept — the current match keeps its
-    //    place across a theme switch).
-    // Deliberately kept: the DATA-derived state. maxLineWidthCache holds raw
-    // visible line widths (ANSI escapes are zero-width, so it is
-    // theme-independent), filesRows/gitRows/gitNavRows caches hold plain
-    // row models, and the file-content cache lives in session.ts (viewerCache)
-    // — re-reading and re-hashing files is the expensive part, and the
-    // derivation above is all that must be redone to repaint.
+    //  - the viewer model's theme-styled state: the wrapped rows, the rendered
+    //    markdown (its renderer captures the markdown theme at construction),
+    //    the minimap texts/sketch and the search results. The current match
+    //    keeps its index across a theme switch; the results re-scan.
+    // Deliberately kept: the DATA-derived state — the raw visible line widths
+    // (ANSI escapes are zero-width, so they are theme-independent), the
+    // files/git row models, and the file-content cache in session.ts
+    // (viewerCache): re-reading and re-hashing files is the expensive part,
+    // and the derivation above is all that must be redone to repaint.
     //
     // Issues #136/#141: a theme switch also changes the tokens baked into
     // the open file's or diff's lines. Restyle it from the retained source
@@ -699,15 +623,7 @@ export class NavigatorOverlay implements Focusable {
     this.restyleOpenFile();
     this.cachedWidth = undefined;
     this.cachedLines = undefined;
-    this.plainRowsCache = null;
-    this.mdCache = null;
-    this.mdRenderer = null;
-    this.mapTextsCache = null;
-    this.sketchCache = null;
-    this.searchMatches = [];
-    this.searchMatchLines.clear();
-    this.searchDirty = true;
-    this.searchVersion++;
+    this.viewerModel.invalidate("theme");
   }
 
   // ── Row models ──
@@ -867,27 +783,20 @@ export class NavigatorOverlay implements Focusable {
 
   private handleSearchInput(data: string): void {
     if (this.matchesCancel(data)) {
-      this.searchQuery = "";
-      this.searchMatches = [];
+      this.viewerModel.setQuery("");
       this.mode = "normal";
     } else if (matchesKey(data, Key.enter)) {
       this.mode = "normal";
     } else if (matchesKey(data, Key.backspace)) {
-      this.searchQuery = deleteLastCodePoint(this.searchQuery);
-      this.recomputeSearch();
-      this.searchIndex = 0;
-      this.searchJump = true;
+      this.viewerModel.setQuery(deleteLastCodePoint(this.viewerModel.query));
     } else if (matchesKey(data, Key.down) || matchesKey(data, Key.ctrl("n"))) {
-      this.cycleSearch(1);
+      this.viewerModel.cycle(1);
     } else if (matchesKey(data, Key.up) || matchesKey(data, Key.ctrl("p"))) {
-      this.cycleSearch(-1);
+      this.viewerModel.cycle(-1);
     } else {
       const printable = printableText(data);
       if (printable) {
-        this.searchQuery += printable;
-        this.recomputeSearch();
-        this.searchIndex = 0;
-        this.searchJump = true;
+        this.viewerModel.setQuery(this.viewerModel.query + printable);
       }
     }
     this.touch();
@@ -920,9 +829,8 @@ export class NavigatorOverlay implements Focusable {
         this.touch();
         return;
       }
-      if (this.searchQuery) {
-        this.searchQuery = "";
-        this.searchMatches = [];
+      if (this.viewerModel.query) {
+        this.viewerModel.setQuery("");
         this.touch();
         return;
       }
@@ -1129,15 +1037,13 @@ export class NavigatorOverlay implements Focusable {
         return;
       }
       this.mode = "search";
-      this.searchQuery = "";
-      this.searchMatches = [];
-      this.searchIndex = 0;
+      this.viewerModel.setQuery("");
     } else if (data === "n") {
       if (renderedImage) return;
-      this.cycleSearch(1);
+      this.viewerModel.cycle(1);
     } else if (data === "N") {
       if (renderedImage) return;
-      this.cycleSearch(-1);
+      this.viewerModel.cycle(-1);
     } else if (data === "w") {
       if (renderedImage) return;
       if (this.viewRenderMarkdown && canRenderMarkdown(this.viewFile)) {
@@ -1152,21 +1058,15 @@ export class NavigatorOverlay implements Focusable {
       // shows the map again.
       if (renderedImage) return;
       this.viewMinimapOn = !this.viewMinimapOn;
-      this.sketchCache = null;
+      this.viewerModel.invalidate("minimap");
       this.touch();
       return;
     } else if (data === "m") {
       if (canRenderMarkdown(this.viewFile)) {
         this.viewRenderMarkdown = !this.viewRenderMarkdown;
         this.viewHscroll = 0; // rendered mode is wrap-only
-
-        // Full cache invalidation protocol:
-        this.plainRowsCache = null;
-        this.mdCache = null;
-        this.searchDirty = true;
-        this.searchMatches = [];
-        this.searchMatchLines.clear();
-        this.searchVersion++;
+        this.viewerModel.invalidate("markdown");
+        this.viewerModel.setSource(this.viewFile, this.viewRenderMarkdown);
 
         this.touch();
       }
@@ -1216,62 +1116,6 @@ export class NavigatorOverlay implements Focusable {
   }
 
   // ── Actions ──
-
-  private getRenderedMarkdownLines(file: ViewerFile, width: number): string[] {
-    if (width <= 0) return [];
-    if (this.mdCache && this.mdCache.file === file && this.mdCache.width === width) {
-      return this.mdCache.lines;
-    }
-    if (!this.mdRenderer) {
-      this.mdRenderer = new Markdown("", 0, 0, getMarkdownTheme());
-    }
-    this.mdRenderer.setText(file.rawText ?? "");
-    const rawLines = this.mdRenderer.render(width);
-
-    // Width safety clamp: pad to width and prevent bright ellipsis leakage
-    const lines = rawLines.map((line) => padTo(line, width));
-
-    this.mdCache = { file, width, lines };
-    this.searchDirty = true;
-    return lines;
-  }
-
-  private markRenderedLineMatches(
-    line: string,
-    lineIdx: number,
-    currentMatch: SearchMatch | undefined,
-    currentOccurrenceOnLine: number,
-  ): string {
-    const occ = currentMatch && lineIdx === currentMatch.line ? currentOccurrenceOnLine : -1;
-    return markMatches(line, this.searchQuery, this.T.searchMatch, this.T.searchCurrent, occ);
-  }
-
-  private recomputeSearch(): void {
-    if (this.viewRenderMarkdown && canRenderMarkdown(this.viewFile) && this.mdCache) {
-      this.recomputeSearchOnLines(this.mdCache.lines);
-      return;
-    }
-    const lines = this.viewFile?.lines ?? [];
-    this.recomputeSearchOnLines(lines);
-  }
-
-  private recomputeSearchOnLines(lines: string[]): void {
-    this.searchMatches = searchLines(lines, this.searchQuery);
-    this.searchMatchLines = new Set(this.searchMatches.map((m) => m.line));
-    if (this.searchIndex >= this.searchMatches.length) {
-      this.searchIndex = Math.max(0, this.searchMatches.length - 1);
-    }
-    this.searchVersion++;
-    this.searchDirty = false;
-  }
-
-  private cycleSearch(delta: number): void {
-    if (this.searchMatches.length === 0) return;
-    const count = this.searchMatches.length;
-    this.searchIndex = (this.searchIndex + delta + count) % count;
-    this.searchVersion++;
-    this.searchJump = true;
-  }
 
   /**
    * Identity of a cursor-navigable git row (Issue #124): file rows anchor by
@@ -1632,213 +1476,40 @@ export class NavigatorOverlay implements Focusable {
     const isSwitching =
       this.viewLoading && this.viewTarget !== null && !sameTarget(this.viewTarget, targetOf(this.viewFile));
     const file = isSwitching ? null : this.viewFile;
-
-    const canRender = canRenderMarkdown(file);
-    const useRendered = canRender && this.viewRenderMarkdown;
-
-    const { contentW, digits } = paneContentWidth(file, useRendered, rightW);
-
     const area = paneArea(body);
-    // Issue #165: the map's row domain is the CONTENT area — the body rows
-    // the text actually occupies — not the pane's outer area. A notice row
-    // (truncated head, commit diff, disk change) shifts every block and must
-    // rebuild the sketch (§4.7), so the content area is computed once here and
-    // used for the fold, the gate and the band alike.
-    const { noticeRows, contentArea } = file
-        ? paneContentArea(area, file, this.diskChanged)
-        : { noticeRows: 0, contentArea: area };
-    // Issue #165: decide the map before any body computation, so the row width
-    // is settled once and the decision never costs a second render of the same
-    // content (the #054 guarantee: markdown renders once per pass).
-    //
-    // The gate is the file's own line count, which is exact when wrap is off
-    // (`n` IS the line count) and a sound-enough signal otherwise: a file whose
-    // wrapped or rendered rows exceed the pane almost always has more source
-    // lines than the pane has rows. Small files that overflow only because of
-    // wrapping or of markdown expanding get no map — §11 'Risks' records the
-    // trade-off and why the exact test costs a second markdown render.
-    let mapW = 0;
-    let minimap: { sketch: MinimapSketch; width: number } | null = null;
-    if (
-      file &&
-      this.viewMinimap !== "off" &&
-      this.viewMinimapOn &&
-      contentW - this.viewMinimapWidth - MINIMAP_DIVIDER_WIDTH >= MINIMAP_MIN_CONTENT_WIDTH &&
-      (file.lines.length > contentArea || (this.viewWrap && !useRendered))
-    ) {
-      const texts = this.minimapTexts(
-        file,
-        contentW - this.viewMinimapWidth - MINIMAP_DIVIDER_WIDTH,
-        useRendered,
-      );
-      if (texts.length > contentArea) {
-        const sketch = this.viewerSketch(texts, contentArea, this.viewMinimapWidth, file.kind === "diff");
-        if (sketch) {
-          mapW = this.viewMinimapWidth;
-          minimap = { sketch, width: mapW };
-        }
-      }
-    }
-    // The divider is carved with the map (one column), so the visible text
-    // width is the pane's content width minus the map's footprint.
-    const rowsW = contentW - (mapW > 0 ? mapW + MINIMAP_DIVIDER_WIDTH : 0);
+
+    // Issue #169: the model owns the derived render state — caches, markdown
+    // rendering, the search derivation and the content/window composition.
+    // The class hands it this pass's inputs and writes back the one window.
+    const out = this.viewerModel.render({
+      file,
+      rightW,
+      bodyArea: area,
+      wrap: this.viewWrap,
+      renderMarkdown: this.viewRenderMarkdown,
+      diskChanged: this.diskChanged,
+      imageCard: this.imageAsCard,
+      minimap: {
+        encoding: this.viewMinimap,
+        palette: this.viewMinimapColors,
+        width: this.viewMinimapWidth,
+        on: this.viewMinimapOn,
+      },
+      scroll: this.viewScroll,
+      hscroll: this.viewHscroll,
+    });
+    this.applyWindow(out.window);
     // The map's band IS the viewer's position indicator while it shows
-    // (Issue #165): the frame's border thumb is suppressed in render()
-    // so two cues cannot drift apart over the same window.
-    this.viewerMapActive = minimap !== null;
-
-    const mdLines = useRendered && file ? this.getRenderedMarkdownLines(file, rowsW) : null;
-    if (mdLines) {
-      this.recomputeSearchIfNeeded(mdLines);
-    } else {
-      this.recomputeSearchIfNeeded();
-    }
-
-    // Pane snapshot for chafa geometry. The chafa branch has no gutter, so
-    // the pane is the full right panel width (rev. 2 amendment 3). Pure
+    // (Issue #165): the frame's border thumb is suppressed in render() so two
+    // cues cannot drift apart over the same window.
+    this.viewerMapActive = out.mapActive;
+    // Pane snapshot for chafa geometry. The chafa branch has no gutter, so the
+    // pane is the full right panel width (rev. 2 amendment 3). Pure
     // bookkeeping — no user-visible state is touched during render (Issue
     // #053).
     this.lastViewerLayout = { cols: rightW, rows: area };
 
-    // Precompute the content the pure renderer lays out. Every cache write,
-    // clamp and searchJump mutation stays here; the pure viewer renderer only
-    // pads and joins the already-computed rows. Issue #149: one
-    // discriminated `ViewerContent` replaces the parallel nullable channel
-    // locals — the class fills the slot once, in the branches below.
-    let content: ViewerContent = { kind: "none" };
-    // Issue #147: every branch below assigns this window and writes it back
-    // to the scroll fields, so the window is the single writer for them (the
-    // old top-of-method reset is gone). The `ViewerPaneView` record at the
-    // end consumes the window — moving the record above the branch that
-    // produces it is a compile error (definite assignment), which is what
-    // makes #065's offset contract structural instead of remembered.
-    let viewerWin: ViewerWindow;
-
-    if (file) {
-      const verdict =
-        file.kind === "image" && file.imageVerdict?.kind === "rendered" ? file.imageVerdict : null;
-      const renderedImage =
-        verdict !== null && verdict.lines.length > 0 && !this.imageAsCard;
-      const isCard =
-        file.kind === "binary" ||
-        file.kind === "error" ||
-        (file.kind === "image" && !renderedImage);
-
-      if (verdict !== null && renderedImage) {
-        // Render branch: no gutter, no wrap, no hscroll, no search (§7.5).
-        // Chafa clamps exactly like the text path (render-time clamp keeps
-        // the frame valid between a resize and its debounced reflow, D10);
-        // a native image is a terminal-anchored placement, so scroll is
-        // pinned to 0 (D9) — through the window, which keeps the pin exact.
-        // Images carry no scrollbar window: their rows are pre-styled blocks,
-        // not a scrollable readout.
-        viewerWin = viewerWindow({
-          requestedScroll: verdict.renderer === "native" ? 0 : this.viewScroll,
-          requestedHscroll: this.viewHscroll,
-          total: verdict.lines.length,
-          count: area,
-        });
-        this.viewScroll = viewerWin.viewScroll;
-        this.viewHscroll = viewerWin.hscroll;
-        this.viewerScrollWindow = viewerWin.scrollWindow;
-        content = { kind: "image-lines", lines: verdict.lines };
-      } else if (!isCard) {
-        if (useRendered && mdLines) {
-          if (this.searchJump && this.searchMatches.length > 0) {
-            const currentMatch = this.searchMatches[this.searchIndex];
-            if (currentMatch) {
-              this.viewScroll = Math.max(0, currentMatch.line - Math.floor(contentArea / 2));
-            }
-            this.searchJump = false;
-          }
-          // Issue #137 §3/§4, #147: one window positions the content, the
-          // header readout and the border scrollbar; a pane whose content
-          // fits (`total <= count`) gets no scrollbar window.
-          viewerWin = viewerWindow({
-            requestedScroll: this.viewScroll,
-            requestedHscroll: this.viewHscroll,
-            total: mdLines.length,
-            count: contentArea,
-            rowOffset: 1 + noticeRows,
-          });
-          this.viewScroll = viewerWin.viewScroll;
-          this.viewHscroll = viewerWin.hscroll;
-          this.viewerScrollWindow = viewerWin.scrollWindow;
-
-          const currentMatch =
-            this.searchMatches.length > 0
-              ? this.searchMatches[Math.min(this.searchIndex, this.searchMatches.length - 1)]
-              : undefined;
-          const currentOccurrenceOnLine = this.currentOccurrenceIndex();
-
-          // Pre-style the rendered-markdown content rows: per-line search
-          // marking stays in the class (markRenderedLineMatches), the pure
-          // renderer just pads the pre-styled results.
-          const rows: Array<string | null> = [];
-          for (let i = 0; i < contentArea; i++) {
-            const lineIdx = viewerWin.viewScroll + i;
-            const rawLine = mdLines[lineIdx];
-            if (rawLine === undefined) {
-              rows.push(null);
-              continue;
-            }
-            let styledLine = rawLine;
-            if (this.searchQuery && this.searchMatches.length > 0 && this.searchMatchLines.has(lineIdx)) {
-              styledLine = this.markRenderedLineMatches(styledLine, lineIdx, currentMatch, currentOccurrenceOnLine);
-            }
-            rows.push(styledLine);
-          }
-          content = { kind: "markdown", rows };
-        } else {
-          // Issue #168: the plain wrap is cached once and shared with the
-          // minimap; search marking happens on the visible window after the
-          // clamp, so neither a scroll nor a search keystroke re-wraps the
-          // file. `maxLineWidth` depends only on visible width, which search
-          // marking does not change, so it is cached on the stable `file`
-          // reference. Issue #147: the rows do not read the hscroll offset
-          // (styled text is sliced at render time), so computing them before
-          // the window's hscroll clamp is byte-identical to clamping first.
-          const maxH = Math.max(0, this.cachedMaxLineWidth(file) - rowsW);
-          const plain = this.cachedPlainRows(file, rowsW, this.viewWrap);
-          if (this.searchJump && this.searchMatches.length > 0) {
-            const currentMatch = this.searchMatches[this.searchIndex];
-            const target = plain.findIndex((row) => row.line === currentMatch?.line);
-            if (target >= 0) this.viewScroll = Math.max(0, target - Math.floor(contentArea / 2));
-            this.searchJump = false;
-          }
-          viewerWin = viewerWindow({
-            requestedScroll: this.viewScroll,
-            requestedHscroll: this.viewHscroll,
-            total: plain.length,
-            count: contentArea,
-            maxHscroll: maxH,
-            rowOffset: 1 + noticeRows,
-          });
-          this.viewScroll = viewerWin.viewScroll;
-          this.viewHscroll = viewerWin.hscroll;
-          this.viewerScrollWindow = viewerWin.scrollWindow;
-          const rows = this.markedWindow(file, plain, viewerWin.viewScroll, contentArea, rowsW, this.viewWrap);
-          content = { kind: "display", rows };
-        }
-      } else {
-        // Metadata/binary/error card: nothing scrolls, so the window is a
-        // pass-through — no clamp, no scrollbar.
-        viewerWin = viewerWindow({ requestedScroll: this.viewScroll, requestedHscroll: this.viewHscroll });
-        this.viewScroll = viewerWin.viewScroll;
-        this.viewHscroll = viewerWin.hscroll;
-        this.viewerScrollWindow = viewerWin.scrollWindow;
-        content = { kind: "card" };
-      }
-    } else {
-      // Loading / no file: the same pass-through window keeps every path's
-      // assignment uniform.
-      viewerWin = viewerWindow({ requestedScroll: this.viewScroll, requestedHscroll: this.viewHscroll });
-      this.viewScroll = viewerWin.viewScroll;
-      this.viewHscroll = viewerWin.hscroll;
-      this.viewerScrollWindow = viewerWin.scrollWindow;
-    }
-
-    const scrollWindow = viewerWin.scrollWindow;
+    const scrollWindow = out.window.scrollWindow;
     const view: ViewerPaneView = {
       theme: this.T,
       focus: this.focus,
@@ -1851,9 +1522,9 @@ export class NavigatorOverlay implements Focusable {
       diskChanged: this.diskChanged,
       searchMode: this.mode === "search",
       renderMarkdown: this.viewRenderMarkdown,
-      content,
-      digits,
-      viewScroll: viewerWin.viewScroll,
+      content: out.content,
+      digits: out.digits,
+      viewScroll: out.window.viewScroll,
       // Issue #137 §3: derived from the same clamped window the body rows
       // were drawn at, so the readout cannot disagree with the content.
       scrollInfo: scrollWindow
@@ -1864,198 +1535,30 @@ export class NavigatorOverlay implements Focusable {
           }
         : null,
       wrap: this.viewWrap,
-      // Post-clamp by construction (Issue #065, #147): the branch above ran
-      // this offset through `viewerWin`, and the body rows are drawn from
-      // that same window, so the badge reports the offset the rows were
-      // rendered at. Moving this record above the window assignment fails to
-      // compile.
-      hscroll: viewerWin.hscroll,
+      // Post-clamp by construction (Issue #065, #147): the model ran this
+      // offset through the one window, and the body rows are drawn from that
+      // same window, so the badge reports the offset the rows were rendered
+      // at.
+      hscroll: out.window.hscroll,
       imageSupport: this.imageSupport,
       imageGeometry: this.currentImageGeometry(),
-      minimap,
-      searchQuery: this.searchQuery,
-      searchMatches: this.searchMatches,
-      searchIndex: this.searchIndex,
+      minimap: out.minimap,
+      searchQuery: this.viewerModel.query,
+      searchMatches: this.viewerModel.matches,
+      searchIndex: this.viewerModel.matchIndex,
     };
     return renderViewerPane(view, rightW, area);
   }
 
-  private recomputeSearchIfNeeded(lines?: string[]): void {
-    if (!this.searchQuery) {
-      if (this.searchMatches.length > 0) {
-        this.searchMatches = [];
-        this.searchMatchLines = new Set();
-        this.searchVersion++;
-      }
-      this.searchDirty = false;
-      return;
-    }
-    // Only rerun the full-file scan when the result may be stale (file content
-    // changed under an active query). Keystrokes that change the query call
-    // `recomputeSearch` directly and clear the dirty flag, so a plain render —
-    // e.g. scrolling or moving the cursor — no longer re-scans the file.
-    if (this.searchDirty) {
-      if (lines) {
-        this.recomputeSearchOnLines(lines);
-      } else {
-        this.recomputeSearch();
-      }
-    }
-  }
-
   /**
-   * The current match's 0-based occurrence on its own line, so markMatches
-   * highlights the Nth occurrence rather than always the first (Issue #025).
-   * Cached per searchVersion (Issue #168).
+   * One writer for the scroll state (Issue #169): the window the body rows
+   * were drawn at is the only source of the vertical offset, the horizontal
+   * offset and the border scrollbar.
    */
-  private currentOccurrenceIndex(): number {
-    if (this.occurrenceCache?.version === this.searchVersion) return this.occurrenceCache.value;
-    const currentMatch = this.searchMatches[Math.min(this.searchIndex, this.searchMatches.length - 1)];
-    const value = currentMatch
-      ? this.searchMatches.filter((m) => m.line === currentMatch.line && m.start < currentMatch.start).length
-      : -1;
-    this.occurrenceCache = { version: this.searchVersion, value };
-    return value;
+  private applyWindow(win: ViewerWindow): void {
+    this.viewScroll = win.viewScroll;
+    this.viewHscroll = win.hscroll;
+    this.viewerScrollWindow = win.scrollWindow;
   }
 
-  private cachedMaxLineWidth(file: ViewerFile): number {
-    if (this.maxLineWidthCache && this.maxLineWidthCache.file === file) return this.maxLineWidthCache.value;
-    const value = maxLineWidth(file);
-    this.maxLineWidthCache = { file, value };
-    return value;
-  }
-
-  /**
-   * The map's row texts for one width (Issue #165): the **unmarked** twin of
-   * the body rows, memoised so the sketch can key on a stable array identity
-   * (a fresh array per render would rebuild the sketch on every scroll).
-   * `file.lines` is the wrap-off source and is already stable per file. The
-   * wrapped source is the body's shared plain wrap (Issue #168), so the map
-   * never wraps the file a second time.
-   */
-  private minimapTexts(file: ViewerFile, width: number, renderMarkdown: boolean): string[] {
-    const c = this.mapTextsCache;
-    if (
-      c &&
-      c.file === file &&
-      c.width === width &&
-      c.wrap === this.viewWrap &&
-      c.renderMarkdown === renderMarkdown
-    ) {
-      return c.texts;
-    }
-    let texts: string[];
-    if (renderMarkdown) texts = this.getRenderedMarkdownLines(file, width);
-    else if (this.viewWrap) texts = this.cachedPlainRows(file, width, true).map((row) => row.text);
-    else texts = file.lines;
-    this.mapTextsCache = { file, width, wrap: this.viewWrap, renderMarkdown, texts };
-    return texts;
-  }
-
-  /**
-   * One sketch for the current texts, size, palette and theme (Issue #165).
-   * The texts array's identity already covers a reload, the `m` toggle and a
-   * restyle; the other components cover resize, the `v`/setting toggles and a
-   * theme switch (through the same style key the file is restyled under).
-   */
-  private viewerSketch(
-    texts: readonly string[],
-    area: number,
-    width: number,
-    diff: boolean,
-  ): MinimapSketch | null {
-    const encoding: MinimapEncoding = this.viewMinimap === "bars" ? "bars" : "braille";
-    const palette: MinimapPalette = this.viewMinimapColors;
-    const themeKey = this.styleKey();
-    const c = this.sketchCache;
-    if (
-      c &&
-      c.texts === texts &&
-      c.area === area &&
-      c.width === width &&
-      c.encoding === encoding &&
-      c.palette === palette &&
-      c.diff === diff &&
-      c.themeKey === themeKey
-    ) {
-      return c.sketch;
-    }
-    const sketch = buildMinimap({ texts, area, width, encoding, palette, diff, theme: this.T });
-    this.sketchCache = { texts, area, width, encoding, palette, diff, themeKey, sketch };
-    return sketch;
-  }
-
-  /**
-   * The unmarked wrap (Issue #168): one entry keyed on the stable `file`
-   * reference, width and wrap flag.
-   */
-  private cachedPlainRows(file: ViewerFile, width: number, wrap: boolean): DisplayRow[] {
-    const c = this.plainRowsCache;
-    if (c && c.file === file && c.width === width && c.wrap === wrap) return c.rows;
-    let rows: DisplayRow[];
-    if (wrap) {
-      rows = computeRows(file, width, true, 0);
-    } else {
-      rows = [];
-      for (let i = 0; i < file.lines.length; i++) {
-        const line = file.lines[i];
-        if (line !== undefined) rows.push({ line: i, text: line });
-      }
-    }
-    this.plainRowsCache = { file, width, wrap, rows };
-    return rows;
-  }
-
-  /**
-   * The display rows to draw: the plain wrap with the rows visible in the
-   * window marked (Issue #168). Only the window's rows are marked — a
-   * keystroke never touches the rest of the file — while the returned array
-   * stays full-length so the pane's own windowing is unchanged. A whole
-   * source line is marked and split at the plain wrap's chunk boundaries, so
-   * a match spanning a boundary stays highlighted on both chunks.
-   */
-  private markedWindow(
-    file: ViewerFile,
-    plain: DisplayRow[],
-    start: number,
-    count: number,
-    width: number,
-    wrap: boolean,
-  ): DisplayRow[] {
-    if (!this.searchQuery || this.searchMatches.length === 0) return plain;
-    const rows = plain.slice();
-    const matchLines = this.searchMatchLines;
-    const currentMatch = this.searchMatches[Math.min(this.searchIndex, this.searchMatches.length - 1)];
-    const occurrence = this.currentOccurrenceIndex();
-    const end = Math.min(plain.length, start + Math.max(0, count));
-    let v = Math.max(0, start);
-    while (v < end) {
-      // A run is one source line: its first row and, when wrapped, its
-      // continuation rows. The run may start above the window, so walk back to
-      // find the chunk offset that maps a row to its marked chunk.
-      let runStart = v;
-      while (runStart > 0 && plain[runStart - 1]?.line === null) runStart -= 1;
-      const line = plain[runStart]?.line;
-      const marked =
-        line !== null && line !== undefined && matchLines.has(line)
-          ? markMatches(
-              file.lines[line] ?? "",
-              this.searchQuery,
-              this.T.searchMatch,
-              this.T.searchCurrent,
-              line === currentMatch?.line ? occurrence : -1,
-            )
-          : null;
-      const chunks = marked !== null && wrap ? wrapTextWithAnsi(marked, width) : null;
-      do {
-        const row = plain[v];
-        if (row !== undefined && marked !== null) {
-          const text = chunks ? (chunks[v - runStart] ?? row.text) : marked;
-          if (text !== row.text) rows[v] = { line: row.line, text };
-        }
-        v += 1;
-      } while (v < end && plain[v]?.line === null);
-    }
-    return rows;
-  }
 }

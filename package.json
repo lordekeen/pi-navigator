@@ -49,6 +49,7 @@
     "git_view.ts",
     "help_view.ts",
     "viewer_view.ts",
+    "viewer_model.ts",
     "minimap_view.ts",
     "assets/",
     "LICENSE",

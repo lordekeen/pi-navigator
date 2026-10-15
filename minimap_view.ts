@@ -42,6 +42,10 @@ export interface MinimapSketch {
   readonly blocks: readonly MinimapBlock[];
   /** One styled, exactly `width`-wide row per block (no band painted). */
   readonly rows: readonly string[];
+  /** The area the fold was built for (Issue #169): the band's window height,
+   *  so `renderMinimap` consumes the fold's own window and cannot be called
+   *  with a differing one. */
+  readonly area: number;
 }
 
 export interface MinimapInput {
@@ -288,7 +292,7 @@ export function buildMinimap(input: MinimapInput): MinimapSketch | null {
     rows.push(fitWidth(paint(barArt(range.first, range.last, columns, width)), width));
   }
 
-  return { blocks, rows };
+  return { blocks, rows, area };
 }
 
 /**

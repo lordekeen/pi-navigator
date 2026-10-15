@@ -271,7 +271,7 @@ export function renderViewerPane(view: ViewerPaneView, width: number, area: numb
   const divider = dividerW > 0 ? T.frame("\u2502") : "";
   const bodyWidth = Math.max(0, width - mapWidth - dividerW);
   const mapRows = view.minimap
-    ? renderMinimap(view.minimap.sketch, view.viewScroll, contentArea, T)
+    ? renderMinimap(view.minimap.sketch, view.viewScroll, view.minimap.sketch.area, T)
     : null;
   const withMap = (row: string, i: number): string =>
     mapRows

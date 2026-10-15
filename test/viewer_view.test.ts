@@ -532,11 +532,12 @@ describe("viewerWindow (Issue #147)", () => {
 });
 
 describe("viewer minimap composition (Issue #165)", () => {
-  /** A tiny sketch stand-in: the pane only reads `blocks` and `rows`. */
+  /** A tiny sketch stand-in: the pane only reads `blocks`, `rows` and `area`. */
   function sketch(n: number): MinimapSketch {
     return {
       blocks: Array.from({ length: n }, (_, i) => ({ start: i, end: i + 1 })),
       rows: Array.from({ length: n }, (_, i) => `<map${i}>`),
+      area: n,
     };
   }
 
