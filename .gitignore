@@ -6,3 +6,8 @@ node_modules/
 # Local-only development trees (issue tracker, plans, specs, mockups) — never published
 /docs/
 /mockups/
+# Local secrets and artifacts — never committed
+.env
+.env.*
+*.local
+coverage/

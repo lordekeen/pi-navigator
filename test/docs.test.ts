@@ -91,6 +91,19 @@ describe("documentation guards (Issue #115)", () => {
     expect(manual).toContain("github.ref == 'refs/heads/main'");
   });
 
+  it("keeps the publish workflows hardened (Issue #197)", () => {
+    // A manual dispatch and an automatic release stage through one
+    // concurrency group, every job is bounded, and Node reinstalls draw on
+    // the npm cache.
+    const release = readFileSync(join(repoRoot, ".github/workflows/release-please.yml"), "utf8");
+    expect(release).toContain("group: npm-publish");
+    for (const name of ["release-please.yml", "publish-manual.yml"]) {
+      const workflow = readFileSync(join(repoRoot, ".github/workflows", name), "utf8");
+      expect(workflow, `${name} must bound its jobs`).toContain("timeout-minutes:");
+      expect(workflow, `${name} must cache npm downloads`).toContain("cache: npm");
+    }
+  });
+
   it("does not reintroduce a hand-maintained case count", () => {
     // A case count is only honest for the commit that wrote it; historical ones
     // belong in the resolution record of the original issue, not in current docs.
