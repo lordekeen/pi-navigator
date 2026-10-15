@@ -1264,6 +1264,39 @@ describe("createSession: reflow clock (Issue #144)", () => {
     session.dispose();
   });
 
+  it("falls back to the displayed image while a non-image load is in flight (Issue #182)", async () => {
+    vi.useFakeTimers();
+    writeFileSync(join(dir, "notes.txt"), "notes");
+    const { session, sink, loadFile } = makeSession();
+    sink.getOpenTarget.mockReturnValue(TARGET);
+    sink.getImageView.mockReturnValue({ rendered: true, asCard: false });
+
+    // Park a text load in flight so the in-flight target shadows the displayed
+    // image; the support landing must still arm the displayed image's reflow.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    loadFile.mockImplementationOnce(async (_absPath, relPath) => {
+      await gate;
+      return { kind: "text", relPath, sizeBytes: 5, lineCount: 1, lines: ["x"], mtimeMs: 1 };
+    });
+    const pending = session.loadFile("notes.txt");
+
+    ctl.support = "chafa";
+    session.refresh();
+    await flushTicks();
+    await vi.advanceTimersByTimeAsync(IMAGE_RESIZE_DEBOUNCE_MS * 2);
+    expect(sink.reflowOpenImage).not.toHaveBeenCalled(); // re-armed, load in flight
+
+    release();
+    await pending;
+    await flushTicks();
+    await vi.advanceTimersByTimeAsync(IMAGE_RESIZE_DEBOUNCE_MS);
+    expect(sink.reflowOpenImage).toHaveBeenCalledTimes(1);
+    session.dispose();
+  });
+
   it("imageViewChanged debounces one timer, ignores repeats, and is inert without a tier", async () => {
     vi.useFakeTimers();
     const { session, sink } = makeSession();

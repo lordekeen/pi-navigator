@@ -518,12 +518,15 @@ export function createSession(deps: SessionDeps): NavigatorSession {
     // Issue #117 follow-up: every load owns one controller and supersedes
     // the previous load's render — including a cache hit, a text file, or
     // a failed stat, so a stale chafa child or native render never
-    // outlives the view that requested it. Issue #144: the load also
+    // outlives the view that requested it. Issue #144: an image load also
     // publishes its target while in flight (the reflow arming reads it) and
     // releases the controller on completion, so a non-null `currentImageLoad`
-    // means exactly "a load is running".
+    // means exactly "a load is running". Issue #182: a non-image load
+    // publishes no target — it clears the field so the arming falls back to
+    // the displayed image instead of shadowing it.
     const loadAbort = beginImageLoad();
-    const inFlightTarget: OpenTarget = { kind: "file", relPath };
+    const isImage = IMAGE_EXTENSIONS.has(extOf(relPath));
+    const inFlightTarget: OpenTarget | null = isImage ? { kind: "file", relPath } : null;
     inFlightImageTarget = inFlightTarget;
     try {
       const absPath = join(cwd, relPath);
@@ -542,7 +545,6 @@ export function createSession(deps: SessionDeps): NavigatorSession {
         return deps.loadFile(absPath, relPath);
       }
       const image = opts?.image;
-      const isImage = IMAGE_EXTENSIONS.has(extOf(relPath));
       const s = imageSupport;
       // One decision per load (Issue #144): the snapshot + pane geometry
       // build ONE pipeline up front; its plan supplies the attempts, and the
