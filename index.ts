@@ -73,50 +73,69 @@ type TuiLike = {
  */
 const KITTY_PROBE_TIMEOUT_MS = 250;
 
+/**
+ * The probe handle (Issue #185): the cached probe getter the session awaits,
+ * plus the cancel the overlay's cleanup calls so closing before the terminal
+ * answers leaves no input listener or timer behind. Cancelling settles a
+ * pending probe as "no-reply" — the conservative verdict.
+ */
+export interface TuiKittyProbe {
+  (): Promise<KittyProbeVerdict>;
+  cancel(): void;
+}
+
 export function makeTuiKittyDecodeProbe(
   tui: TuiLike,
   opts?: { timeoutMs?: number; cache?: { result?: Promise<KittyProbeVerdict> } },
-): () => Promise<KittyProbeVerdict> {
+): TuiKittyProbe {
   const timeoutMs = opts?.timeoutMs ?? KITTY_PROBE_TIMEOUT_MS;
   // Injectable cache is a test seam only: production creates a fresh object
   // per overlay invocation so error verdicts do not persist across sessions.
   const cache: { result?: Promise<KittyProbeVerdict> } = opts?.cache ?? {};
-  return () => {
-    if (cache.result !== undefined) return cache.result;
-    const probe = new Promise<KittyProbeVerdict>((resolve) => {
-      const id = Math.floor(Math.random() * 0xffffffff) + 1;
-      const query = buildKittyProbeQuery(id);
-      const state: KittyProbeState = createKittyProbeState();
-      let settled = false;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      let unsubscribe: (() => void) | undefined;
-      const settle = (verdict: KittyProbeVerdict): void => {
-        if (settled) return;
-        settled = true;
-        if (timer !== undefined) clearTimeout(timer);
-        unsubscribe?.();
-        resolve(verdict);
-      };
-      timer = setTimeout(() => settle("no-reply"), timeoutMs);
-      unsubscribe = tui.addInputListener((data) => {
-        if (settled) return undefined;
-        const verdict = consumeKittyProbeReply(state, data, id);
-        if (verdict === "ok" || verdict === "error") {
-          settle(verdict);
-          // Consume the completing chunk: it is the reply to our own query,
-          // nothing for the key decoder. Partial chunks are left alone.
-          return { consume: true };
-        }
-        return undefined;
+  // Issue #185: the pending probe's settle hook, so cancel() can release its
+  // listener and timer when the overlay closes before the terminal answers.
+  let cancelPending: (() => void) | null = null;
+  return Object.assign(
+    (): Promise<KittyProbeVerdict> => {
+      if (cache.result !== undefined) return cache.result;
+      const probe = new Promise<KittyProbeVerdict>((resolve) => {
+        const id = Math.floor(Math.random() * 0xffffffff) + 1;
+        const query = buildKittyProbeQuery(id);
+        const state: KittyProbeState = createKittyProbeState();
+        let settled = false;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let unsubscribe: (() => void) | undefined;
+        const settle = (verdict: KittyProbeVerdict): void => {
+          if (settled) return;
+          settled = true;
+          if (timer !== undefined) clearTimeout(timer);
+          unsubscribe?.();
+          cancelPending = null;
+          resolve(verdict);
+        };
+        timer = setTimeout(() => settle("no-reply"), timeoutMs);
+        unsubscribe = tui.addInputListener((data) => {
+          if (settled) return undefined;
+          const verdict = consumeKittyProbeReply(state, data, id);
+          if (verdict === "ok" || verdict === "error") {
+            settle(verdict);
+            // Consume the completing chunk: it is the reply to our own query,
+            // nothing for the key decoder. Partial chunks are left alone.
+            return { consume: true };
+          }
+          return undefined;
+        });
+        cancelPending = () => settle("no-reply");
+        // Write through the TUI's terminal so the query is ordered with
+        // renders; the reply arrives on the same input stream the listener
+        // watches — the same pattern as pi-tui's own terminal queries.
+        tui.terminal.write(query);
       });
-      // Write through the TUI's terminal so the query is ordered with
-      // renders; the reply arrives on the same input stream the listener
-      // watches — the same pattern as pi-tui's own terminal queries.
-      tui.terminal.write(query);
-    });
-    cache.result = probe;
-    return probe;
-  };
+      cache.result = probe;
+      return probe;
+    },
+    { cancel: (): void => cancelPending?.() },
+  );
 }
 
 /**
@@ -336,6 +355,24 @@ async function runNavigator(
   ctx: ExtensionContext | ExtensionCommandContext,
   layoutOverride?: NavigatorLayout,
 ): Promise<void> {
+  // Issue #185: the /navigator entry never rejects. A throwing overlay factory
+  // or a failing session start is reported to the user instead of surfacing as
+  // an unhandled rejection.
+  try {
+    await openNavigatorOverlay(pi, ctx, layoutOverride);
+  } catch (error) {
+    ctx.ui.notify(
+      `pi-navigator: ${error instanceof Error ? error.message : String(error)}`,
+      "error",
+    );
+  }
+}
+
+async function openNavigatorOverlay(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext | ExtensionCommandContext,
+  layoutOverride?: NavigatorLayout,
+): Promise<void> {
   // Issue #122: `mode` is the capability that matters for a custom component.
   // RPC has hasUI=true but ctx.ui.custom is a host stub, and json/print have
   // hasUI=false while notify is a no-op. notify still forwards in RPC, so the
@@ -426,6 +463,9 @@ async function runNavigator(
 
       /** Stop everything this overlay owns. Safe to call more than once. */
       const cleanup = (): void => {
+        // Issue #185: release the probe's input listener and timer before the
+        // overlay goes away, so an early close cannot swallow later input.
+        kittyProbe.cancel();
         session.dispose();
         overlay.dispose();
       };

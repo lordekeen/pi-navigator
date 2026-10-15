@@ -259,6 +259,18 @@ describe("extension lifecycle & routing (Issue #095)", () => {
     expect(ctx.ui.custom).not.toHaveBeenCalled();
   });
 
+  it("notifies as an error when opening the overlay fails (Issue #185)", async () => {
+    const { pi, commands } = mockPi();
+    registerNavigatorExtension(pi);
+    const { ctx, notifications } = mockCtx();
+    ctx.ui.custom.mockRejectedValueOnce(new Error("factory boom"));
+
+    await commands.get("navigator").handler("", ctx);
+
+    // The entry point reports the failure instead of rejecting.
+    expect(notifications).toEqual([{ msg: "pi-navigator: factory boom", level: "error" }]);
+  });
+
   it("refuses the overlay in json and print modes via the tui-mode clause (#122)", async () => {
     for (const mode of ["json", "print"] as const) {
       const { pi, commands } = mockPi();
@@ -614,6 +626,25 @@ describe("makeTuiKittyDecodeProbe (Issue #101, #116)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("cancel() settles a pending probe, unsubscribes, and ignores a late reply (Issue #185)", async () => {
+    const { tui, writes, emit, isSubscribed } = fakeTui();
+    const probe = makeTuiKittyDecodeProbe(tui);
+    const pending = probe();
+    expect(isSubscribed()).toBe(true);
+
+    // Overlay closed before the terminal answered: the probe is released and
+    // settles with the conservative verdict.
+    probe.cancel();
+    probe.cancel(); // idempotent
+    await expect(pending).resolves.toBe("no-reply");
+    expect(isSubscribed()).toBe(false);
+
+    // The listener is gone, so even a matching reply after cancellation is
+    // not consumed by a dead overlay.
+    const id = /i=(\d+)/.exec(writes[0] ?? "")?.[1];
+    expect(emit(`\x1b_Gi=${id};OK\x1b\\`)).toBeUndefined();
   });
 
   it("caches the result: a second call reuses the first promise (Issue #116)", async () => {
