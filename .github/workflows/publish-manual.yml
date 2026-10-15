@@ -2,7 +2,8 @@
 # verification suite. Normally this happens automatically via release-please.yml
 # when a GitHub release is created. Staged versions need maintainer approval
 # with 2FA before they go live (`npm stage approve <stage-id>`). Requires
-# NPM_TOKEN (a staging-capable granular token).
+# NPM_TOKEN as a secret of the `npm-publish` environment (a staging-capable
+# granular token).
 #
 # Staging requires the package to already exist on npm; the first-ever publish
 # (v0.16.0) was direct and manual with `npm publish --access public`.
@@ -12,6 +13,11 @@
 #
 # Security: actions pinned to full commit SHAs, least-privilege job
 # permissions, credential-less checkout, staging serialized via concurrency.
+# The job additionally runs only from `main`, through the `npm-publish`
+# environment: its deployment branch policy pins the deployment to `main` and
+# its required reviewer gates the NPM_TOKEN-bearing step. That boundary lives in
+# repository settings, so — unlike the ref guard below — a dispatched ref that
+# edits this file cannot remove it.
 name: manual-publish
 
 on:
@@ -23,7 +29,10 @@ concurrency:
 
 jobs:
   publish:
+    # Belt-and-braces: the environment's branch policy is the real boundary.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    environment: npm-publish
     permissions:
       contents: read
     steps:

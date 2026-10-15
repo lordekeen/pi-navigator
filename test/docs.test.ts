@@ -75,6 +75,22 @@ describe("documentation guards (Issue #115)", () => {
     }
   });
 
+  it("keeps the npm publish jobs behind the npm-publish environment (Issue #183)", () => {
+    // The token-bearing jobs must go through the protected environment: its
+    // required reviewer gates the staging step, and its `main` branch policy is
+    // the boundary that survives a dispatched ref that edits the workflow file.
+    // Reference: github.com/lordekeen/pi-navigator/issues/183.
+    for (const name of ["release-please.yml", "publish-manual.yml"]) {
+      const workflow = readFileSync(join(repoRoot, ".github/workflows", name), "utf8");
+      if (workflow.includes("secrets.NPM_TOKEN")) {
+        expect(workflow, `${name} must gate its token on the environment`).toContain("environment: npm-publish");
+      }
+    }
+    // The emergency path is also main-only: a branch dispatch must skip the job.
+    const manual = readFileSync(join(repoRoot, ".github/workflows/publish-manual.yml"), "utf8");
+    expect(manual).toContain("github.ref == 'refs/heads/main'");
+  });
+
   it("does not reintroduce a hand-maintained case count", () => {
     // A case count is only honest for the commit that wrote it; historical ones
     // belong in the resolution record of the original issue, not in current docs.

@@ -3,7 +3,9 @@
 # package on npm with `npm stage publish`. Staging needs no 2FA, so it works in
 # CI; a maintainer then approves the staged version with 2FA (`npm stage approve
 # <stage-id>`, or the Staged Packages tab on npmjs.com) before it goes live.
-# Requires the NPM_TOKEN repository secret (a staging-capable granular token).
+# Requires NPM_TOKEN as a secret of the `npm-publish` environment (a
+# staging-capable granular token): the `publish` job pauses for the
+# environment's required reviewer before the token-bearing staging step runs.
 #
 # The FIRST publish (v0.16.0) was direct and manual: a package that does not
 # exist on the registry yet cannot be staged, so there was nothing for this job
@@ -14,7 +16,9 @@
 #
 # Security: every action is pinned to a full commit SHA (not a mutable tag),
 # permissions are least-privilege per job, and checkout drops the GitHub
-# credentials before build/stage steps run.
+# credentials before build/stage steps run. The publish job goes through the
+# `npm-publish` environment (required reviewer, `main`-only branch policy), so
+# NPM_TOKEN is an environment secret that no other ref's workflow can read.
 name: release-please
 
 on:
@@ -45,6 +49,7 @@ jobs:
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-latest
+    environment: npm-publish
     permissions:
       contents: read
     steps:

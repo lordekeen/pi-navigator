@@ -127,13 +127,13 @@ The package is published to npm as `@lordekeen/pi-navigator`. Two workflows in `
 
 1. `release-please` maintains a release PR from conventional commits (version bump + `CHANGELOG.md`).
 2. Merging that PR creates the GitHub release and tag — **the merge alone does not publish to npm**; nothing is live yet.
-3. Creating the release triggers the `publish` job, which stages the new version with `npm stage publish` (no 2FA in CI).
+3. Creating the release triggers the `publish` job in the **`npm-publish` environment**: a maintainer approves the GitHub deployment, then the job stages the new version with `npm stage publish` (no 2FA in CI).
 4. A maintainer approves with 2FA — `npm stage approve <stage-id>`, or npmjs.com -> Staged Packages tab -> Approve — and only then is it live.
 
 - The **first-ever publish (v0.16.0) was direct and manual** (`npm publish --access public`): a package that does not exist on the registry yet cannot be staged. Staging takes over from the next version.
-- `NPM_TOKEN` (repo secret) is a **staging-capable granular token** — correct and intentional. Do not "fix" it into a direct-publish token; staging is the intended flow, not a workaround.
+- `NPM_TOKEN` is a **staging-capable granular token** — correct and intentional. Do not "fix" it into a direct-publish token; staging is the intended flow, not a workaround. It is an **environment secret of `npm-publish`** (not a repo secret), so a workflow on any other ref cannot read it. The environment's required reviewer is the maintainer with **self-review allowed** — the same person triggers and approves; do not enable "prevent self-reviews", a solo repo would deadlock. Its deployment branch policy allows `main` only, which is the ref guard that survives a dispatched ref editing the workflow file (Issue #183).
 - The publish jobs must run on **Node 24**: `npm stage publish` needs npm CLI >= 11.15.0, and Node 22 bundles npm 10.x (Node 24 bundles npm 11.x).
-- `manual-publish` (`gh workflow run manual-publish`) stages the current `main` version on demand.
+- `manual-publish` (`gh workflow run manual-publish`) stages the current `main` version on demand; it is main-only (ref guard) and goes through the same environment gate.
 - Before claiming a release shipped: `npm view @lordekeen/pi-navigator version` must show the new version. A successful staging run is not a publish.
 - The npmjs.com README renders asynchronously and is only refreshed by a **new version publish** — editing `README.md` alone never updates the package page, so README changes must ride a version bump.
 - General mechanics (staged publishing, version floors, GitHub Actions failures): the `npm-release-automation` skill.
