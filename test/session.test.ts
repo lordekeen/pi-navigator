@@ -1529,6 +1529,48 @@ describe("createSession: dispose", () => {
     expect(ctl.gitReads).toBe(1);
     expect(sink.setGitState).toHaveBeenCalledTimes(1); // no further sink traffic
   });
+
+  it("stops cleanly when disposed while a refresh is awaiting git (Issue #221)", async () => {
+    // With respectGitignore off the tick reads the ignored listing right after
+    // its git read, so "the abandoned tick did no further work" is observable
+    // at the very guard under test.
+    const offSettings: NavigatorSettings = {
+      ...settings,
+      tree: { ...settings.tree, respectGitignore: false },
+    };
+    ctl.gitState = makeGitState();
+    ctl.treeProbe = "probe-1";
+    ctl.tracked = ["src/a.ts"];
+    vi.useFakeTimers();
+    const timers = installTimerLog();
+    const { session, sink } = makeSession({ settings: offSettings });
+
+    // Park the tick's git read on the same deferred the single-flight test
+    // uses: disposal must land while the read it awaits is still open.
+    let releaseGit!: () => void;
+    ctl.gitRelease = new Promise<void>((resolve) => {
+      releaseGit = resolve;
+    });
+
+    session.refresh();
+    await flushTicks();
+    expect(ctl.gitReads).toBe(1); // the read is parked, nothing has landed
+
+    // Disposing mid-refresh closes the tick: the parked read resolves into a
+    // session that must abandon it before any further read or any state
+    // reaches the sink, and the poll must stay down.
+    session.dispose();
+    const timersBefore = timers.length;
+    const rendersBefore = sink.requestRender.mock.calls.length;
+    releaseGit();
+    await flushTicks();
+
+    expect(ctl.ignoredReads).toBe(0); // stopped before the next read
+    expect(sink.setTree).not.toHaveBeenCalled();
+    expect(sink.setGitState).not.toHaveBeenCalled();
+    expect(sink.requestRender).toHaveBeenCalledTimes(rendersBefore); // no abandoned-tick render
+    expect(timers.length).toBe(timersBefore); // no further poll was armed
+  });
 });
 
 describe("createSession: loadCommit (v3 commit detail)", () => {
