@@ -984,6 +984,63 @@ describe("git pane keys", () => {
     expect(after).not.toContain("\u25be aaa1111"); // aaa's subtree collapsed (marker back to ▸)
   });
 
+  it("steps out of a nested commit-child to its own expanded ancestor (Issue #211)", () => {
+    const harness = makeHarness();
+    withTree(harness, ["a.ts"]);
+    withGit(harness, {
+      unstaged: [],
+      staged: [],
+      history: [
+        { shortHash: "aaa1111", parents: ["bbb2222"], dateRel: "1h ago", subject: "top" },
+        { shortHash: "bbb2222", parents: ["ccc3333"], dateRel: "2h ago", subject: "mid" },
+        { shortHash: "ccc3333", parents: [], dateRel: "3h ago", subject: "base" },
+      ],
+    });
+    const overlay = harness.overlay;
+    overlay.handleInput(KEYS.tab); // focus git; cursor on the top commit
+    overlay.handleInput("l"); // expand aaa1111 -> bbb2222 (depth 1)
+    overlay.handleInput("j"); // -> bbb2222 (commit-child)
+    overlay.handleInput("l"); // expand bbb2222 -> ccc3333 (depth 2, the grandchild)
+    overlay.handleInput("j"); // -> bbb2222's flat copy
+    overlay.handleInput("j"); // -> ccc3333 (commit-child, depth 2)
+    // h steps out to the nearest expanded ancestor — here the depth-1 child
+    // bbb2222, itself a commit-child row (the #211 nested-anchor case), not the
+    // top-level aaa1111.
+    overlay.handleInput("h");
+    const plain = (s: string) => strip(s).replace(/\u2502/g, "").replace(/\s+$/, "");
+    const selected = overlay.render(120).map(plain).find((l) => l.includes("\u25b6") && l.includes("bbb2222"));
+    expect(selected).toBeDefined();
+    // The depth-1 child row carries a 2-space indent under the arrow (four
+    // leading cells before the marker); the flat copy would render unindented.
+    expect(selected).toContain("\u25b6   \u25be bbb2222");
+  });
+
+  it("collapses a nested child's family and steps out to the top-level anchor (Issue #211)", () => {
+    const harness = makeHarness();
+    withTree(harness, ["a.ts"]);
+    withGit(harness, {
+      unstaged: [],
+      staged: [],
+      history: [
+        { shortHash: "aaa1111", parents: ["bbb2222"], dateRel: "1h ago", subject: "top" },
+        { shortHash: "bbb2222", parents: ["ccc3333"], dateRel: "2h ago", subject: "mid" },
+        { shortHash: "ccc3333", parents: [], dateRel: "3h ago", subject: "base" },
+      ],
+    });
+    const overlay = harness.overlay;
+    overlay.handleInput(KEYS.tab); // focus git
+    overlay.handleInput("l"); // expand aaa1111 -> bbb2222 (depth 1)
+    overlay.handleInput("j"); // -> bbb2222 (commit-child)
+    overlay.handleInput("l"); // expand bbb2222 -> ccc3333 (depth 2)
+    // h with bbb2222 under the cursor: collapse its own family, then step out to
+    // its top-level anchor aaa1111 (the was-expanded path).
+    overlay.handleInput("h");
+    const plain = (s: string) => strip(s).replace(/\u2502/g, "").replace(/\s+$/, "");
+    const after = overlay.render(120).map(plain).join("\n");
+    expect(after).not.toContain("\u25be bbb2222"); // bbb's subtree collapsed (marker back to ▸)
+    expect(after).toContain("\u25b6 \u25be aaa1111"); // cursor stepped out to the top-level anchor
+  });
+
   it("shows the depth-cap notice instead of expanding past the ceiling (v3)", () => {
     const harness = makeHarness();
     withTree(harness, ["a.ts"]);
@@ -1249,6 +1306,26 @@ describe("copy (y)", () => {
     harness.overlay.handleInput("y");
     await Promise.resolve();
     expect(copyToClipboard).toHaveBeenCalledWith("abc1234");
+  });
+
+  it("copies the hash from a commit-child row (Issue #211)", async () => {
+    const harness = makeHarness();
+    withTree(harness, ["a.ts"]);
+    withGit(harness, {
+      unstaged: [],
+      staged: [],
+      history: [
+        { shortHash: "bbb2222", parents: ["aaa1111"], dateRel: "2h ago", subject: "child" },
+        { shortHash: "aaa1111", parents: [], dateRel: "3h ago", subject: "root" },
+      ],
+    });
+    const overlay = harness.overlay;
+    overlay.handleInput(KEYS.tab); // focus git
+    overlay.handleInput("l"); // expand bbb2222 -> aaa1111 (commit-child)
+    overlay.handleInput("j"); // cursor on the commit-child row
+    overlay.handleInput("y");
+    await Promise.resolve();
+    expect(copyToClipboard).toHaveBeenCalledWith("aaa1111");
   });
 
   it("copies clean commit hash when focused on viewer with commit diff (Issue #049)", async () => {
