@@ -458,6 +458,34 @@ describe("git integration on a scratch repository", () => {
     expect(entries).toEqual([{ relPath: "a.ts", isDir: false, symlink: false }]);
   });
 
+  it("reads the prefix from the last line when the repo path itself contains a newline (Issue #204)", async () => {
+    // A POSIX repo path may contain a newline. `rev-parse` then prints
+    // "<toplevel>\n<prefix>\n" with a multi-line toplevel, so only a
+    // last-line parse yields the real prefix instead of a stray segment.
+    const parent = await mkdtemp(join(tmpdir(), "pi-nav-newline-"));
+    const nested = join(parent, "line\nbreak");
+    try {
+      await mkdir(join(nested, "sub"), { recursive: true });
+      await git(nested, ["init", "-q", "-b", "main"]);
+      const info = await detectRepo(join(nested, "sub"));
+      expect(info.available).toBe(true);
+      expect(info.prefix).toBe("sub/");
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a leading space in a prefix segment (Issue #204)", async () => {
+    // `.trim()` used to strip the leading space, so `stripPrefix` could not
+    // match and every tracked path below the directory was dropped.
+    await mkdir(join(repo, " sp dir"), { recursive: true });
+    const info = await detectRepo(join(repo, " sp dir"));
+    expect(info.available).toBe(true);
+    expect(info.prefix).toBe(" sp dir/");
+    // The last-line parse is pinned at the empty end too (repo root).
+    expect((await detectRepo(repo)).prefix).toBe("");
+  });
+
   it("reports history subjects and relative dates for the last commits", async () => {
     await writeFile(join(repo, "a.txt"), "1\n");
     await commit(repo, "commit one");

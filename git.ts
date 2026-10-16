@@ -144,7 +144,13 @@ export async function detectRepo(cwd: string): Promise<RepoInfo> {
   if (result.status !== "ok") {
     return { available: false, prefix: "", error: "not a git repository" };
   }
-  const prefix = (result.stdout.split("\n")[1] ?? "").trim();
+  // The prefix is the output's last line: a repository path may itself
+  // contain newlines, and a path segment may begin or end with a space, so
+  // neither `split("\n")[1]` nor `.trim()` is safe. Strip exactly the one
+  // trailing newline git writes; never trim.
+  const stdout = result.stdout.endsWith("\n") ? result.stdout.slice(0, -1) : result.stdout;
+  const lastBreak = stdout.lastIndexOf("\n");
+  const prefix = lastBreak === -1 ? "" : stdout.slice(lastBreak + 1);
   return { available: true, prefix };
 }
 
