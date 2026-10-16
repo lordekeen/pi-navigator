@@ -235,7 +235,7 @@ exercise the real wrap/width/highlighting implementations. No runtime dependenci
   than the plan's original "NodeNext" because pi loads extensions through jiti,
   which resolves the code's intentionally extensionless relative imports;
   NodeNext would demand `.js` extensions the runtime does not need.
-- `npm test` — 23 vitest suites: porcelain `-z` parsing plus a
+- `npm test` — 24 vitest suites: porcelain `-z` parsing plus a
   real-git scratch-repo integration pass, tree building/fs-walk fixtures
   (ignores, dot entries, symlink cycles), viewer caps and UTF-8 head decoding,
   the keymap reducer (escape precedence, focus cycling, copy), settings
