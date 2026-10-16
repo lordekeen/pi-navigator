@@ -14,6 +14,22 @@ export function stripAnsi(text: string): string {
   return text.replace(ANSI_PATTERN, "");
 }
 
+// C0 controls except tab and newline, DEL, C1, and the two Unicode line
+// separators — the active bytes a terminal acts on rather than prints.
+const CONTROL_PATTERN = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029]/g;
+
+/**
+ * Strip the terminal-active bytes from untrusted repo content (Issue #201):
+ * C0 controls except `\n`, DEL, C1 and the Unicode line separators, with a tab
+ * mapped to one space. Rendered rows may only carry printable text plus `\n`,
+ * so a raw ESC/BEL in a filename, commit subject or diff line — all of which
+ * the repo controls — would otherwise let content corrupt or escape the
+ * overlay. Idempotent and pure.
+ */
+export function sanitizeText(text: string): string {
+  return text.replace(/\t/g, " ").replace(CONTROL_PATTERN, "");
+}
+
 /** Visible cell width of a possibly styled string (ANSI is zero-width). */
 export function visibleTextWidth(text: string): number {
   return visibleWidth(stripAnsi(text));
