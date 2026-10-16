@@ -346,6 +346,44 @@ describe("buildFileRow", () => {
     expect(withoutIcons).not.toContain(glyph);
   });
 
+  it("renders a filename containing ESC without emitting it (Issue #201)", () => {
+    const dirtyName = "a\u001b[31mb.txt";
+    const dirtyFile = node({
+      name: dirtyName,
+      lowerName: dirtyName,
+      path: `/work/${dirtyName}`,
+      relPath: dirtyName,
+      lowerRelPath: dirtyName,
+    });
+    const dirtyDir = node({
+      name: "a\u001b[31mdir",
+      lowerName: "a\u001b[31mdir",
+      path: "/work/a\u001b[31mdir",
+      relPath: "a\u001b[31mdir",
+      lowerRelPath: "a\u001b[31mdir",
+      isDir: true,
+    });
+    // Every branch that prints a name: file, dir, and the match row's
+    // before/hit/after slices. None may leak a control byte, and each row
+    // still fills the pane to exactly leftW.
+    for (const row of [
+      { kind: "file", node: dirtyFile } as const,
+      { kind: "dir", node: dirtyDir } as const,
+    ]) {
+      const out = buildFileRow(row, false, 30, ctx());
+      expect(out, row.kind).not.toContain("\u001b");
+      expect(out, row.kind).toContain("[31m");
+      expect(visibleWidth(out), row.kind).toBe(30);
+    }
+    const dirtyRoot = node({ name: "", isDir: true, relPath: "", children: [dirtyFile] });
+    const match = buildFilesRows(dirtyRoot, "b", false).find((r) => r.kind === "match");
+    if (match === undefined) throw new Error("expected a match row");
+    const matched = buildFileRow(match, false, 30, ctx({ filterQuery: "b" }));
+    expect(matched).not.toContain("\u001b");
+    expect(matched).toContain("a[31mb.txt");
+    expect(visibleWidth(matched)).toBe(30);
+  });
+
   it("keeps every row width-safe, padded to exactly leftW when cursor-selected", () => {
     for (const leftWCase of [30, 44]) {
       for (const row of [...buildFilesRows(root, "", false), ...buildFilesRows(root, "util", false)]) {

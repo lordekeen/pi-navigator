@@ -309,6 +309,17 @@ describe("buildGitRow", () => {
     expect(visibleWidth(deep)).toBe(30);
   });
 
+  it("renders a changed-file path containing ESC without emitting it (Issue #201)", () => {
+    const dirty = "a\u001b[31mb.txt";
+    const rows = buildGitRows(gitState({ unstaged: [{ relPath: dirty, code: "M" }] }), new Set());
+    const file = rows.find((r) => r.kind === "file");
+    if (file === undefined) throw new Error("expected a file row");
+    const out = buildGitRow(file, false, 44, rowView());
+    expect(out).not.toContain("\u001b");
+    expect(out).toContain("a[31mb.txt");
+    expect(visibleWidth(out)).toBe(44);
+  });
+
   it("truncates a long group label to the pane with a visible ellipsis (Issue #113)", () => {
     const errorRow: GitRow = {
       kind: "group",

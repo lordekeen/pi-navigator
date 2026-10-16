@@ -14,7 +14,7 @@ import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import { isNativelyRenderable, type ImageSupport } from "./images";
 import type { NavigatorTheme } from "./theme";
 import type { Focus, SearchMatch, ViewerFile, ViewerScrollWindow } from "./types";
-import { hardTruncate, sliceStyled } from "./ansi";
+import { hardTruncate, sanitizeText, sliceStyled } from "./ansi";
 import { formatSize, isMarkdownPath, type DisplayRow } from "./viewer";
 import { renderMinimap, type MinimapMarks, type MinimapSketch } from "./minimap_view";
 import { FRAME_CORNERS, isImageLine, joinLeftRight, padTo, shortPath, truncateAndWidth } from "./frame";
@@ -402,8 +402,10 @@ export function buildCard(file: ViewerFile, rightW: number, area: number, view: 
   const T = view.theme;
   const title = file.kind === "image" ? "Image" : file.kind === "binary" ? "Binary file" : "Cannot read";
   const titleStyle = file.kind === "error" ? T.error : file.kind === "binary" ? T.warning : T.accent;
-  const body: string[] = [file.relPath];
-  if (file.message) body.push(file.message);
+  // Issue #201: the card is the last door before render — sanitize the path
+  // and the renderer-supplied failure detail; both are repo-controlled.
+  const body: string[] = [sanitizeText(file.relPath)];
+  if (file.message) body.push(sanitizeText(file.message));
   if (file.kind === "binary") body.push("binary content is not rendered");
   if (file.kind === "image") body.push(...imageCardHints(file, view.imageSupport, view.imageGeometry));
   if (file.kind === "error") body.push("press Tab, then pick another file");
