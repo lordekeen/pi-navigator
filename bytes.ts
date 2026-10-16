@@ -1,12 +1,35 @@
 /**
  * UTF-8 byte-boundary helpers (Issue #172): one cap shared by the viewer's
  * capped file reads and the git commit reads, so a byte budget never splits
- * a code point.
+ * a code point. (Issue #220) adds the strict decoder git's raw path listings
+ * pass through.
  */
 
 /** A byte that is a UTF-8 continuation (0b10xxxxxx). */
 function isContinuation(byte: number): boolean {
   return byte >= 0x80 && byte < 0xc0;
+}
+
+/**
+ * Strictly decode a latin1-decoded raw byte string to UTF-8 text, or null when
+ * the bytes are not valid UTF-8 (Issue #220).
+ *
+ * Input is a *raw byte string*: every code unit must be 0..255, exactly what
+ * `child_process` produces for `encoding: "latin1"` (Node maps each byte to
+ * one code point). It is not text and must never be a UTF-8-decoded string —
+ * feeding text here would misread code points above 0xFF.
+ *
+ * The round trip is the test: latin1 → bytes → UTF-8 text → bytes again. A
+ * valid sequence re-encodes byte-identically; any invalid byte becomes U+FFFD
+ * on decode, so the re-encoding differs and the result is null. This is how
+ * `git ls-files -z` and `git status --porcelain -z` paths are screened: a name
+ * with a byte the filesystem holds but UTF-8 cannot express is dropped rather
+ * than silently mangled into a path that no longer round-trips to disk.
+ */
+export function decodeStrictUtf8(latin1Bytes: string): string | null {
+  const bytes = Buffer.from(latin1Bytes, "latin1");
+  const text = bytes.toString("utf8");
+  return Buffer.from(text, "utf8").equals(bytes) ? text : null;
 }
 
 /**

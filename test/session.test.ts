@@ -47,6 +47,8 @@ const ctl = vi.hoisted(() => ({
   /** Holds the next `readGitState` open until the test resolves it (single-flight). */
   gitRelease: null as null | Promise<void>,
   trackedReads: 0,
+  // git.ts (Issue #220): non-UTF-8 records readGitTree reports as dropped.
+  treeSkipped: 0,
   // git.ts (Issue #170): how many times the session asked for repo detection.
   detectReads: 0,
   commitDiff: null as unknown,
@@ -92,15 +94,16 @@ vi.mock("../git", () => ({
   gitTreeProbe: (): string => ctl.treeProbe,
   gitCodeMap: (git: { unstaged: Array<{ relPath: string; code: string }> }): Map<string, string> =>
     new Map(git.unstaged.map((f) => [f.relPath, f.code])),
-  readGitTree: (): Promise<TreeEntry[]> => {
+  readGitTree: (): Promise<{ entries: TreeEntry[]; skipped: number }> => {
     ctl.trackedReads += 1;
-    return Promise.resolve(
-      ctl.tracked.map((relPath) => ({
+    return Promise.resolve({
+      entries: ctl.tracked.map((relPath) => ({
         relPath: relPath.replace(/\/$/, ""),
         isDir: relPath.endsWith("/"),
         symlink: false,
       })),
-    );
+      skipped: ctl.treeSkipped,
+    });
   },
   readIgnoredEntries: (): Promise<TreeEntry[]> => {
     ctl.ignoredReads += 1;
@@ -470,6 +473,7 @@ beforeEach(async () => {
   ctl.gitRelease = null;
   ctl.detectReads = 0;
   ctl.trackedReads = 0;
+  ctl.treeSkipped = 0;
   ctl.ignored = [];
   ctl.ignoredReads = 0;
   ctl.dirEntries = {};
@@ -1016,6 +1020,34 @@ describe("createSession: tree.respectGitignore (Issue #158)", () => {
       expect(ctl.lastBuildEntries.map((entry) => entry.relPath)).toEqual(["loose.log", "keep.txt"]);
       session.dispose();
     }
+  });
+});
+
+describe("createSession: non-UTF-8 git paths (Issue #220)", () => {
+  it("warns once when git dropped a path that is not valid UTF-8", async () => {
+    ctl.gitState = makeGitState();
+    ctl.treeProbe = "probe-1";
+    ctl.tracked = ["src/a.ts"];
+    ctl.treeSkipped = 1;
+    vi.useFakeTimers();
+    const { session, notifyWarning } = makeSession();
+    session.start();
+    await flushTicks();
+    expect(notifyWarning).toHaveBeenCalledTimes(1);
+    expect(notifyWarning).toHaveBeenCalledWith("1 path(s) are not valid UTF-8 and are not listed");
+    session.dispose();
+  });
+
+  it("stays quiet when nothing was dropped", async () => {
+    ctl.gitState = makeGitState();
+    ctl.treeProbe = "probe-1";
+    ctl.tracked = ["src/a.ts"];
+    vi.useFakeTimers();
+    const { session, notifyWarning } = makeSession();
+    session.start();
+    await flushTicks();
+    expect(notifyWarning).not.toHaveBeenCalled();
+    session.dispose();
   });
 });
 

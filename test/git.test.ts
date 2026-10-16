@@ -117,6 +117,23 @@ describe("parsePorcelain", () => {
     expect(out.unstaged).toEqual([{ relPath: "c.ts", code: "M" }]);
   });
 
+  it("drops a record whose path is not valid UTF-8, in every list (Issue #220)", () => {
+    // A latin1 read hands parsePorcelain raw byte strings; a path with an
+    // invalid byte is dropped rather than mangled into U+FFFD.
+    const bad = Buffer.from([0x62, 0x61, 0x64, 0xff, 0x2e, 0x74, 0x78, 0x74]).toString("latin1");
+    const out = parsePorcelain(`M  ${bad}\0 M ${bad}\0?? ${bad}\0UU ${bad}\0`, "");
+    expect(out.staged).toEqual([]);
+    expect(out.unstaged).toEqual([]);
+    expect(out.unmerged).toEqual([]);
+  });
+
+  it("still consumes an invalid rename target's source record (Issue #220)", () => {
+    const bad = Buffer.from([0xff]).toString("latin1");
+    const out = parsePorcelain(`R  moved${bad}.ts\0original.ts\0 M keep.ts\0`, "");
+    expect(out.staged).toEqual([]);
+    expect(out.unstaged).toEqual([{ relPath: "keep.ts", code: "M" }]);
+  });
+
   it("skips degenerate records", () => {
     const out = parsePorcelain("\0\0M  a.ts\0", "");
     expect(out.unstaged).toEqual([]);
@@ -246,14 +263,14 @@ describe("readGitTree (Issue #146)", () => {
 
   it("translates tracked paths through the repo prefix and drops outsiders", async () => {
     stubTracked([{ path: "sub/a.ts" }, { path: "other/x.ts" }]);
-    const entries = await readGitTree("/work", stateOf(), { available: true, prefix: "sub/" });
+    const { entries } = await readGitTree("/work", stateOf(), { available: true, prefix: "sub/" });
     expect(entries).toEqual([{ relPath: "a.ts", isDir: false, symlink: false }]);
   });
 
   it("merges untracked records after tracked ones, `?? dir/` becoming a slash-free isDir entry", async () => {
     stubTracked([{ path: "a.ts" }]);
     const porcelain = parsePorcelain("?? brandnew/\0?? loose.txt\0", "");
-    const entries = await readGitTree("/work", stateOf({ unstaged: porcelain.unstaged }), INFO);
+    const { entries } = await readGitTree("/work", stateOf({ unstaged: porcelain.unstaged }), INFO);
     expect(entries).toEqual([
       { relPath: "a.ts", isDir: false, symlink: false },
       { relPath: "brandnew", isDir: true, symlink: false },
@@ -263,7 +280,7 @@ describe("readGitTree (Issue #146)", () => {
 
   it("dedupes by relPath with tracked-first precedence", async () => {
     stubTracked([{ path: "dup.ts" }]);
-    const entries = await readGitTree(
+    const { entries } = await readGitTree(
       "/work",
       stateOf({ unstaged: [{ relPath: "dup.ts", code: "??" }] }),
       INFO,
@@ -273,7 +290,7 @@ describe("readGitTree (Issue #146)", () => {
 
   it("degrades to untracked-only when ls-files fails, never throwing", async () => {
     stubTracked(null);
-    const entries = await readGitTree(
+    const { entries } = await readGitTree(
       "/work",
       stateOf({ unstaged: [{ relPath: "new.txt", code: "??" }] }),
       INFO,
@@ -289,12 +306,33 @@ describe("readGitTree (Issue #146)", () => {
       { mode: "120000", path: "link" },
       { mode: "100644", path: "f.txt" },
     ]);
-    const entries = await readGitTree("/work", stateOf(), INFO);
+    const { entries } = await readGitTree("/work", stateOf(), INFO);
     expect(entries).toEqual([
       { relPath: "submod", isDir: true, symlink: false },
       { relPath: "link", isDir: false, symlink: true },
       { relPath: "f.txt", isDir: false, symlink: false },
     ]);
+  });
+
+  it("drops a tracked path that is not valid UTF-8 and reports the drop (Issue #220)", async () => {
+    // git ls-files -z emits the raw filename bytes. Without a strict decode
+    // the 0xFF byte came back as U+FFFD, so the tree showed a name the disk
+    // does not have and every later lookup for it failed silently.
+    const bad = Buffer.from([0x62, 0x61, 0x64, 0xff, 0x2e, 0x74, 0x78, 0x74]).toString("latin1");
+    stubTracked([{ path: "good.txt" }, { path: bad }]);
+    const { entries, skipped } = await readGitTree("/work", stateOf(), INFO);
+    expect(entries).toEqual([{ relPath: "good.txt", isDir: false, symlink: false }]);
+    expect(skipped).toBe(1);
+  });
+
+  it("reports zero skips for a listing that is entirely valid UTF-8", async () => {
+    // The stub feeds what a latin1 read yields: the raw UTF-8 bytes of the
+    // name re-read as latin1 ("ümlaut.txt" → "Ã¼mlaut.txt").
+    const bytes = Buffer.from("ümlaut.txt", "utf8").toString("latin1");
+    stubTracked([{ path: bytes }]);
+    const { entries, skipped } = await readGitTree("/work", stateOf(), INFO);
+    expect(entries).toEqual([{ relPath: "ümlaut.txt", isDir: false, symlink: false }]);
+    expect(skipped).toBe(0);
   });
 });
 
@@ -354,6 +392,15 @@ describe("readIgnoredEntries (Issue #158)", () => {
       { relPath: "collapsed", isDir: true, symlink: false },
       { relPath: "dup.log", isDir: false, symlink: false },
     ]);
+  });
+
+  it("drops an ignored path that is not valid UTF-8 (Issue #220)", async () => {
+    // Ignored records are display-only, so the drop is silent here; readGitTree
+    // is what counts drops (for tracked/untracked records).
+    const bad = Buffer.from([0x62, 0x61, 0x64, 0xff, 0x2e, 0x6c, 0x6f, 0x67]).toString("latin1");
+    stubIgnored(`good.log\0${bad}\0`);
+    const entries = await readIgnoredEntries("/work", INFO);
+    expect(entries).toEqual([{ relPath: "good.log", isDir: false, symlink: false }]);
   });
 
   it("degrades to an empty listing on failure or overflow, never throwing", async () => {
@@ -457,7 +504,7 @@ describe("git integration on a scratch repository", () => {
 
     const info = await detectRepo(repo);
     const state = await readGitState(repo, info);
-    const entries = await readGitTree(repo, state, info);
+    const { entries } = await readGitTree(repo, state, info);
     // ls-files order follows the byte sort; compare as sets.
     expect(entries.map((entry) => entry.relPath).sort()).toEqual(["line\nbreak.txt", "with space.txt"]);
     expect(state.unstaged).toContainEqual({ relPath: "with space.txt", code: "M" });
@@ -472,7 +519,7 @@ describe("git integration on a scratch repository", () => {
 
     const info = await detectRepo(repo);
     const state = await readGitState(repo, info);
-    const entries = await readGitTree(repo, state, info);
+    const { entries } = await readGitTree(repo, state, info);
     expect(entries).toContainEqual({ relPath: "link.txt", isDir: false, symlink: true });
     expect(entries).toContainEqual({ relPath: "target.txt", isDir: false, symlink: false });
   });
@@ -494,8 +541,29 @@ describe("git integration on a scratch repository", () => {
     // The real subdirectory cwd is the regression pin: `ls-files --full-name`
     // keeps the listing repository-root-relative, so the prefix translation
     // yields the cwd-relative path instead of dropping it (Issue #146).
-    const entries = await readGitTree(join(repo, "sub"), state, info);
+    const { entries } = await readGitTree(join(repo, "sub"), state, info);
     expect(entries).toEqual([{ relPath: "a.ts", isDir: false, symlink: false }]);
+  });
+
+  it("omits a tracked file whose name is not valid UTF-8 and reports the drop (Issue #220)", async () => {
+    // A real repo: git stores the raw 0xFF byte in the index. The tree must
+    // omit that record (not show a U+FFFD name no lookup could open) and the
+    // count must reach the caller that warns.
+    const badPath = Buffer.concat([
+      Buffer.from(join(repo, "bad")),
+      Buffer.from([0xff]),
+      Buffer.from("name.txt"),
+    ]);
+    await writeFile(badPath, "bad\n");
+    await writeFile(join(repo, "good.txt"), "good\n");
+    await commit(repo, "first");
+
+    const info = await detectRepo(repo);
+    expect(info.available).toBe(true);
+    const state = await readGitState(repo, info);
+    const { entries, skipped } = await readGitTree(repo, state, info);
+    expect(skipped).toBe(1);
+    expect(entries).toEqual([{ relPath: "good.txt", isDir: false, symlink: false }]);
   });
 
   it("reads the prefix from the last line when the repo path itself contains a newline (Issue #204)", async () => {

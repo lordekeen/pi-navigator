@@ -746,7 +746,13 @@ export function createSession(deps: SessionDeps): NavigatorSession {
       // (prefix-translated, outsiders dropped) first, then the untracked
       // `??` records, deduped tracked-first; the `?? dir/` slash is already
       // normalized to `isDir` at the porcelain boundary.
-      const base = await readGitTree(cwd, git, repo);
+      const { entries: base, skipped } = await readGitTree(cwd, git, repo);
+      // Issue #220: a path git holds but UTF-8 cannot express is dropped, not
+      // mangled. Say so once — the injected notifier dedupes per message per
+      // /navigator invocation, so a repeated tick stays quiet.
+      if (skipped > 0) {
+        deps.notifyWarning(`${skipped} path(s) are not valid UTF-8 and are not listed`);
+      }
       // Issue #058: -unormal reports an untracked directory as a single
       // `?? dir/` record (no children). Fill those subtrees with the
       // same bounded filesystem walk the fs mode uses (depth cap,
