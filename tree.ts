@@ -289,7 +289,8 @@ export function buildTree(cwd: string, entries: TreeEntry[], gitCodes: Map<strin
   const dirMap = new Map<string, FileNode>([["", root]]);
 
   const insert = (relPath: string, isDir: boolean, symlink: boolean, gitCode?: string): FileNode | null => {
-    const clean = relPath.replace(/\\/g, "/").replace(/^\.\//, "");
+    // Both sources are POSIX (`/`-separated), so a backslash is part of a name, never a separator.
+    const clean = relPath.replace(/^\.\//, "");
     const parts = clean.split("/").filter(Boolean);
     if (parts.length === 0) return null;
     if (parts.length - 1 > MAX_TREE_DEPTH) return null;

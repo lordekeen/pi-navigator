@@ -235,7 +235,7 @@ exercise the real wrap/width/highlighting implementations. No runtime dependenci
   than the plan's original "NodeNext" because pi loads extensions through jiti,
   which resolves the code's intentionally extensionless relative imports;
   NodeNext would demand `.js` extensions the runtime does not need.
-- `npm test` — 25 vitest suites: porcelain `-z` parsing plus a
+- `npm test` — 26 vitest suites: porcelain `-z` parsing plus a
   real-git scratch-repo integration pass, tree building/fs-walk fixtures
   (ignores, dot entries, symlink cycles), viewer caps and UTF-8 head decoding,
   the keymap reducer (escape precedence, focus cycling, copy), settings
@@ -243,7 +243,8 @@ exercise the real wrap/width/highlighting implementations. No runtime dependenci
   `applyFieldEdit`), the settings-menu builder and real-SettingsList
   integration, the help layout + command-routing + table-drift suites, pi-chafa
   detection/config/probe/sanitizer/geometry, the native capability ladder and
-  pi-tui encoder suite, the extracted pane view-models
+  pi-tui encoder suite, the UTF-8 byte-boundary helpers (the byte cap and the
+  strict path decoder of Issue #220), the extracted pane view-models
   (frame geometry, files/git row builders, viewer pane, `?` modal) plus the diff
   styler, theme token map and shared env parser, the notify-once factory, the session
   lifecycle (poll cadence/backoff, tree stamping, viewer-cache and abort ownership),

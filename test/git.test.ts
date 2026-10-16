@@ -6,7 +6,7 @@
 
 import * as childProcess from "node:child_process";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -80,6 +80,28 @@ describe("parsePorcelain", () => {
     expect(out.unstaged).toEqual([{ relPath: "moved.ts", code: "R" }]);
   });
 
+  it("keeps an unmerged XY pair intact in its own list (Issue #202)", () => {
+    // Porcelain v1 reports a conflict as a two-character XY code. Reading
+    // raw[0]/raw[1] as independent single letters fabricated a staged "U"
+    // AND an unstaged "U"; the pair belongs in `unmerged` whole, and
+    // nothing may land in the other two lists.
+    const { staged, unstaged, unmerged } = parsePorcelain("UU f.txt\0AA g.txt\0DU h.txt\0", "");
+    expect(unmerged.map((f) => [f.relPath, f.code])).toEqual([
+      ["f.txt", "UU"],
+      ["g.txt", "AA"],
+      ["h.txt", "DU"],
+    ]);
+    expect(staged).toEqual([]);
+    expect(unstaged).toEqual([]);
+  });
+
+  it("still splits a normal MM entry into staged + unstaged (Issue #202)", () => {
+    const { staged, unstaged, unmerged } = parsePorcelain("MM c.ts\0", "");
+    expect(staged).toEqual([{ relPath: "c.ts", code: "M" }]);
+    expect(unstaged).toEqual([{ relPath: "c.ts", code: "M" }]);
+    expect(unmerged).toEqual([]);
+  });
+
   it("translates repository-root paths to cwd-relative via the prefix", () => {
     const out = parsePorcelain("M  src/a.ts\0 M src/b.ts\0?? src/new.txt\0", "src/");
     expect(out.staged).toEqual([{ relPath: "a.ts", code: "M" }]);
@@ -93,6 +115,23 @@ describe("parsePorcelain", () => {
     const out = parsePorcelain("M  other/b.ts\0 M src/c.ts\0", "src/");
     expect(out.staged).toEqual([]);
     expect(out.unstaged).toEqual([{ relPath: "c.ts", code: "M" }]);
+  });
+
+  it("drops a record whose path is not valid UTF-8, in every list (Issue #220)", () => {
+    // A latin1 read hands parsePorcelain raw byte strings; a path with an
+    // invalid byte is dropped rather than mangled into U+FFFD.
+    const bad = Buffer.from([0x62, 0x61, 0x64, 0xff, 0x2e, 0x74, 0x78, 0x74]).toString("latin1");
+    const out = parsePorcelain(`M  ${bad}\0 M ${bad}\0?? ${bad}\0UU ${bad}\0`, "");
+    expect(out.staged).toEqual([]);
+    expect(out.unstaged).toEqual([]);
+    expect(out.unmerged).toEqual([]);
+  });
+
+  it("still consumes an invalid rename target's source record (Issue #220)", () => {
+    const bad = Buffer.from([0xff]).toString("latin1");
+    const out = parsePorcelain(`R  moved${bad}.ts\0original.ts\0 M keep.ts\0`, "");
+    expect(out.staged).toEqual([]);
+    expect(out.unstaged).toEqual([{ relPath: "keep.ts", code: "M" }]);
   });
 
   it("skips degenerate records", () => {
@@ -112,6 +151,7 @@ describe("gitCodeMap / gitTreeProbe", () => {
       behind: 0,
       unstaged: [{ relPath: "a.ts", code: "M" }],
       staged: [{ relPath: "a.ts", code: "A" }],
+      unmerged: [],
       history: [],
       refreshedAt: 0,
     };
@@ -129,6 +169,7 @@ describe("gitCodeMap / gitTreeProbe", () => {
       behind: 0,
       unstaged: [{ relPath: "brandnew", code: "??", isDir: true }],
       staged: [{ relPath: "stageddir", code: "A" }],
+      unmerged: [],
       history: [],
       refreshedAt: 0,
     };
@@ -146,6 +187,7 @@ describe("gitCodeMap / gitTreeProbe", () => {
       behind: 1,
       unstaged: [{ relPath: "b.ts", code: "M" }],
       staged: [{ relPath: "a.ts", code: "A" }],
+      unmerged: [],
       history: [],
       refreshedAt: 0,
     };
@@ -169,6 +211,7 @@ describe("readGitTree (Issue #146)", () => {
       behind: 0,
       unstaged: [],
       staged: [],
+      unmerged: [],
       history: [],
       refreshedAt: 0,
       ...overrides,
@@ -178,8 +221,18 @@ describe("readGitTree (Issue #146)", () => {
   /** Spawn argv of every stubbed invocation, newest stub session first. */
   const spawns: string[][] = [];
 
-  /** Stub the entry's `ls-files -z` spawn: emit NUL-separated paths, or fail. */
-  function stubTracked(stdout: string | null): void {
+  /**
+   * Build `ls-files --stage -z` output from records. The mode defaults to a
+   * plain blob so callers that only care about paths stay terse (Issue #219).
+   */
+  function stageOutput(records: Array<{ mode?: string; path: string }>): string {
+    return records
+      .map((record) => `${record.mode ?? "100644"} 0000000000000000000000000000000000000000 0\t${record.path}\0`)
+      .join("");
+  }
+
+  /** Stub the entry's `ls-files --stage -z` spawn: emit records, or fail. */
+  function stubTracked(records: Array<{ mode?: string; path: string }> | null): void {
     spawns.length = 0;
     vi.spyOn(gitRunner, "execFile").mockImplementation(
       ((
@@ -189,8 +242,8 @@ describe("readGitTree (Issue #146)", () => {
         callback: (error: Error | null, stdout: string, stderr: string) => void,
       ) => {
         spawns.push([...args]);
-        if (stdout === null) callback(new Error("ls-files failed"), "", "");
-        else callback(null, stdout, "");
+        if (records === null) callback(new Error("ls-files failed"), "", "");
+        else callback(null, stageOutput(records), "");
       }) as unknown as typeof gitRunner.execFile,
     );
   }
@@ -203,21 +256,21 @@ describe("readGitTree (Issue #146)", () => {
     // The flag is the invariant the prefix translation depends on: without
     // it ls-files is cwd-relative and a subdirectory cwd drops every tracked
     // path (Issue #146).
-    stubTracked("a.ts\0");
+    stubTracked([{ path: "a.ts" }]);
     await readGitTree("/work", stateOf(), INFO);
-    expect(spawns).toEqual([["ls-files", "--full-name", "-z"]]);
+    expect(spawns).toEqual([["ls-files", "--stage", "--full-name", "-z"]]);
   });
 
   it("translates tracked paths through the repo prefix and drops outsiders", async () => {
-    stubTracked("sub/a.ts\0other/x.ts\0");
-    const entries = await readGitTree("/work", stateOf(), { available: true, prefix: "sub/" });
+    stubTracked([{ path: "sub/a.ts" }, { path: "other/x.ts" }]);
+    const { entries } = await readGitTree("/work", stateOf(), { available: true, prefix: "sub/" });
     expect(entries).toEqual([{ relPath: "a.ts", isDir: false, symlink: false }]);
   });
 
   it("merges untracked records after tracked ones, `?? dir/` becoming a slash-free isDir entry", async () => {
-    stubTracked("a.ts\0");
+    stubTracked([{ path: "a.ts" }]);
     const porcelain = parsePorcelain("?? brandnew/\0?? loose.txt\0", "");
-    const entries = await readGitTree("/work", stateOf({ unstaged: porcelain.unstaged }), INFO);
+    const { entries } = await readGitTree("/work", stateOf({ unstaged: porcelain.unstaged }), INFO);
     expect(entries).toEqual([
       { relPath: "a.ts", isDir: false, symlink: false },
       { relPath: "brandnew", isDir: true, symlink: false },
@@ -226,8 +279,8 @@ describe("readGitTree (Issue #146)", () => {
   });
 
   it("dedupes by relPath with tracked-first precedence", async () => {
-    stubTracked("dup.ts\0");
-    const entries = await readGitTree(
+    stubTracked([{ path: "dup.ts" }]);
+    const { entries } = await readGitTree(
       "/work",
       stateOf({ unstaged: [{ relPath: "dup.ts", code: "??" }] }),
       INFO,
@@ -237,12 +290,49 @@ describe("readGitTree (Issue #146)", () => {
 
   it("degrades to untracked-only when ls-files fails, never throwing", async () => {
     stubTracked(null);
-    const entries = await readGitTree(
+    const { entries } = await readGitTree(
       "/work",
       stateOf({ unstaged: [{ relPath: "new.txt", code: "??" }] }),
       INFO,
     );
     expect(entries).toEqual([{ relPath: "new.txt", isDir: false, symlink: false }]);
+  });
+
+  it("types a gitlink as a directory and a symlink as a symlink (Issue #219)", async () => {
+    // 160000 is a gitlink (a submodule commit object) → the tree shows a
+    // directory row; 120000 is a symlink → the `↗` marker; 100644 a plain file.
+    stubTracked([
+      { mode: "160000", path: "submod" },
+      { mode: "120000", path: "link" },
+      { mode: "100644", path: "f.txt" },
+    ]);
+    const { entries } = await readGitTree("/work", stateOf(), INFO);
+    expect(entries).toEqual([
+      { relPath: "submod", isDir: true, symlink: false },
+      { relPath: "link", isDir: false, symlink: true },
+      { relPath: "f.txt", isDir: false, symlink: false },
+    ]);
+  });
+
+  it("drops a tracked path that is not valid UTF-8 and reports the drop (Issue #220)", async () => {
+    // git ls-files -z emits the raw filename bytes. Without a strict decode
+    // the 0xFF byte came back as U+FFFD, so the tree showed a name the disk
+    // does not have and every later lookup for it failed silently.
+    const bad = Buffer.from([0x62, 0x61, 0x64, 0xff, 0x2e, 0x74, 0x78, 0x74]).toString("latin1");
+    stubTracked([{ path: "good.txt" }, { path: bad }]);
+    const { entries, skipped } = await readGitTree("/work", stateOf(), INFO);
+    expect(entries).toEqual([{ relPath: "good.txt", isDir: false, symlink: false }]);
+    expect(skipped).toBe(1);
+  });
+
+  it("reports zero skips for a listing that is entirely valid UTF-8", async () => {
+    // The stub feeds what a latin1 read yields: the raw UTF-8 bytes of the
+    // name re-read as latin1 ("ümlaut.txt" → "Ã¼mlaut.txt").
+    const bytes = Buffer.from("ümlaut.txt", "utf8").toString("latin1");
+    stubTracked([{ path: bytes }]);
+    const { entries, skipped } = await readGitTree("/work", stateOf(), INFO);
+    expect(entries).toEqual([{ relPath: "ümlaut.txt", isDir: false, symlink: false }]);
+    expect(skipped).toBe(0);
   });
 });
 
@@ -302,6 +392,15 @@ describe("readIgnoredEntries (Issue #158)", () => {
       { relPath: "collapsed", isDir: true, symlink: false },
       { relPath: "dup.log", isDir: false, symlink: false },
     ]);
+  });
+
+  it("drops an ignored path that is not valid UTF-8 (Issue #220)", async () => {
+    // Ignored records are display-only, so the drop is silent here; readGitTree
+    // is what counts drops (for tracked/untracked records).
+    const bad = Buffer.from([0x62, 0x61, 0x64, 0xff, 0x2e, 0x6c, 0x6f, 0x67]).toString("latin1");
+    stubIgnored(`good.log\0${bad}\0`);
+    const entries = await readIgnoredEntries("/work", INFO);
+    expect(entries).toEqual([{ relPath: "good.log", isDir: false, symlink: false }]);
   });
 
   it("degrades to an empty listing on failure or overflow, never throwing", async () => {
@@ -405,10 +504,24 @@ describe("git integration on a scratch repository", () => {
 
     const info = await detectRepo(repo);
     const state = await readGitState(repo, info);
-    const entries = await readGitTree(repo, state, info);
+    const { entries } = await readGitTree(repo, state, info);
     // ls-files order follows the byte sort; compare as sets.
     expect(entries.map((entry) => entry.relPath).sort()).toEqual(["line\nbreak.txt", "with space.txt"]);
     expect(state.unstaged).toContainEqual({ relPath: "with space.txt", code: "M" });
+  });
+
+  it("reads a committed symlink's mode from git and marks it a symlink (Issue #219)", async () => {
+    // The mode is read from the index (120000), not guessed from the disk, so a
+    // broken or relative target still types correctly.
+    await writeFile(join(repo, "target.txt"), "real\n");
+    await symlink("target.txt", join(repo, "link.txt"));
+    await commit(repo, "symlink");
+
+    const info = await detectRepo(repo);
+    const state = await readGitState(repo, info);
+    const { entries } = await readGitTree(repo, state, info);
+    expect(entries).toContainEqual({ relPath: "link.txt", isDir: false, symlink: true });
+    expect(entries).toContainEqual({ relPath: "target.txt", isDir: false, symlink: false });
   });
 
   it("translates paths to the cwd prefix when reading from a subdirectory", async () => {
@@ -428,8 +541,57 @@ describe("git integration on a scratch repository", () => {
     // The real subdirectory cwd is the regression pin: `ls-files --full-name`
     // keeps the listing repository-root-relative, so the prefix translation
     // yields the cwd-relative path instead of dropping it (Issue #146).
-    const entries = await readGitTree(join(repo, "sub"), state, info);
+    const { entries } = await readGitTree(join(repo, "sub"), state, info);
     expect(entries).toEqual([{ relPath: "a.ts", isDir: false, symlink: false }]);
+  });
+
+  it("omits a tracked file whose name is not valid UTF-8 and reports the drop (Issue #220)", async () => {
+    // A real repo: git stores the raw 0xFF byte in the index. The tree must
+    // omit that record (not show a U+FFFD name no lookup could open) and the
+    // count must reach the caller that warns.
+    const badPath = Buffer.concat([
+      Buffer.from(join(repo, "bad")),
+      Buffer.from([0xff]),
+      Buffer.from("name.txt"),
+    ]);
+    await writeFile(badPath, "bad\n");
+    await writeFile(join(repo, "good.txt"), "good\n");
+    await commit(repo, "first");
+
+    const info = await detectRepo(repo);
+    expect(info.available).toBe(true);
+    const state = await readGitState(repo, info);
+    const { entries, skipped } = await readGitTree(repo, state, info);
+    expect(skipped).toBe(1);
+    expect(entries).toEqual([{ relPath: "good.txt", isDir: false, symlink: false }]);
+  });
+
+  it("reads the prefix from the last line when the repo path itself contains a newline (Issue #204)", async () => {
+    // A POSIX repo path may contain a newline. `rev-parse` then prints
+    // "<toplevel>\n<prefix>\n" with a multi-line toplevel, so only a
+    // last-line parse yields the real prefix instead of a stray segment.
+    const parent = await mkdtemp(join(tmpdir(), "pi-nav-newline-"));
+    const nested = join(parent, "line\nbreak");
+    try {
+      await mkdir(join(nested, "sub"), { recursive: true });
+      await git(nested, ["init", "-q", "-b", "main"]);
+      const info = await detectRepo(join(nested, "sub"));
+      expect(info.available).toBe(true);
+      expect(info.prefix).toBe("sub/");
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a leading space in a prefix segment (Issue #204)", async () => {
+    // `.trim()` used to strip the leading space, so `stripPrefix` could not
+    // match and every tracked path below the directory was dropped.
+    await mkdir(join(repo, " sp dir"), { recursive: true });
+    const info = await detectRepo(join(repo, " sp dir"));
+    expect(info.available).toBe(true);
+    expect(info.prefix).toBe(" sp dir/");
+    // The last-line parse is pinned at the empty end too (repo root).
+    expect((await detectRepo(repo)).prefix).toBe("");
   });
 
   it("reports history subjects and relative dates for the last commits", async () => {

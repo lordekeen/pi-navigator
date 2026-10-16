@@ -21,7 +21,7 @@ import * as childProcess from "node:child_process";
 import { stat } from "node:fs/promises";
 
 import { sanitizeText } from "./ansi";
-import { truncateUtf8ToBytes } from "./bytes";
+import { decodeStrictUtf8, truncateUtf8ToBytes } from "./bytes";
 import { GIT_HISTORY_COUNT, GIT_TIMEOUT_MS, MAX_HIGHLIGHT_BYTES, MAX_HIGHLIGHT_LINES } from "./constants";
 import type { CommitMessage } from "./diff";
 import type { TreeEntry } from "./tree";
@@ -70,13 +70,23 @@ type GitResult =
   | { status: "missing" }
   | { status: "error" };
 
-async function runGit(cwd: string, args: string[]): Promise<GitResult> {
+/**
+ * Run one git invocation. Path-bearing reads (`status --porcelain -z`,
+ * `ls-files -z`) pass `latin1` so their output survives as raw bytes and can
+ * be screened by `decodeStrictUtf8`; every other call keeps `utf8` because it
+ * carries text (log subjects, diffs, hashes), not paths (Issue #220).
+ */
+async function runGit(
+  cwd: string,
+  args: string[],
+  opts?: { latin1?: boolean },
+): Promise<GitResult> {
   try {
     const { stdout } = await execFileAsync("git", args, {
       cwd,
       timeout: GIT_TIMEOUT_MS,
       windowsHide: true,
-      encoding: "utf8",
+      encoding: opts?.latin1 ? "latin1" : "utf8",
       maxBuffer: 4 * 1024 * 1024,
     });
     return { status: "ok", stdout };
@@ -144,7 +154,13 @@ export async function detectRepo(cwd: string): Promise<RepoInfo> {
   if (result.status !== "ok") {
     return { available: false, prefix: "", error: "not a git repository" };
   }
-  const prefix = (result.stdout.split("\n")[1] ?? "").trim();
+  // The prefix is the output's last line: a repository path may itself
+  // contain newlines, and a path segment may begin or end with a space, so
+  // neither `split("\n")[1]` nor `.trim()` is safe. Strip exactly the one
+  // trailing newline git writes; never trim.
+  const stdout = result.stdout.endsWith("\n") ? result.stdout.slice(0, -1) : result.stdout;
+  const lastBreak = stdout.lastIndexOf("\n");
+  const prefix = lastBreak === -1 ? "" : stdout.slice(lastBreak + 1);
   return { available: true, prefix };
 }
 
@@ -163,9 +179,10 @@ function stripPrefix(filePath: string, prefix: string): string | null {
 export function parsePorcelain(
   text: string,
   prefix: string,
-): { unstaged: GitChangedFile[]; staged: GitChangedFile[] } {
+): { unstaged: GitChangedFile[]; staged: GitChangedFile[]; unmerged: GitChangedFile[] } {
   const unstaged: GitChangedFile[] = [];
   const staged: GitChangedFile[] = [];
+  const unmerged: GitChangedFile[] = [];
   const records = text.split(NUL);
 
   for (let index = 0; index < records.length; index++) {
@@ -173,13 +190,27 @@ export function parsePorcelain(
     if (raw.length < 4) continue;
     const x = raw[0] ?? " ";
     const y = raw[1] ?? " ";
-    const filePath = raw.slice(3);
     if (x === "R" || x === "C" || y === "R" || y === "C") {
       // The source path of a rename or copy is the next NUL-separated record.
+      // Consume it even when the target is dropped, or it would be parsed as
+      // a record of its own.
       index += 1;
     }
+    // The record is raw bytes (the read decodes latin1): a path UTF-8 cannot
+    // express is dropped rather than mangled into U+FFFD, which no later
+    // lookup could open (Issue #220).
+    const filePath = decodeStrictUtf8(raw.slice(3));
+    if (filePath === null) continue;
     const relPath = stripPrefix(filePath, prefix);
     if (!relPath) continue;
+    // Porcelain v1 reports a merge conflict as a two-character XY code.
+    // Reading raw[0]/raw[1] as independent single letters fabricated a
+    // staged "U" and an unstaged "U"; the pair is one unmerged record and
+    // must not reach `staged`/`unstaged` at all (Issue #202).
+    if (x === "U" || y === "U" || (x === "A" && y === "A") || (x === "D" && y === "D")) {
+      unmerged.push({ relPath, code: x + y });
+      continue;
+    }
     if (x === "?" && y === "?") {
       // The trailing slash is porcelain's marker for an entirely untracked
       // directory (`?? dir/`). Normalize it here — the one production
@@ -196,7 +227,7 @@ export function parsePorcelain(
     if (x !== " " && x !== "?") staged.push({ relPath, code: x });
     if (y !== " " && y !== "?") unstaged.push({ relPath, code: y });
   }
-  return { unstaged, staged };
+  return { unstaged, staged, unmerged };
 }
 
 /**
@@ -215,6 +246,7 @@ export async function readGitState(cwd: string, repo?: RepoInfo): Promise<GitSta
     behind: 0,
     unstaged: [],
     staged: [],
+    unmerged: [],
     history: [],
     refreshedAt: Date.now(),
   };
@@ -231,7 +263,7 @@ export async function readGitState(cwd: string, repo?: RepoInfo): Promise<GitSta
   const [branchRes, countsRes, statusRes, logRes] = await Promise.all([
     runGit(cwd, ["branch", "--show-current"]),
     runGit(cwd, ["rev-list", "--left-right", "--count", "@{u}...HEAD"]),
-    runGit(cwd, ["status", "--porcelain", "-unormal", "-z"]),
+    runGit(cwd, ["status", "--porcelain", "-unormal", "-z"], { latin1: true }),
     runGit(cwd, ["log", `-n${GIT_HISTORY_COUNT}`, "--date=relative", "--parents", `--pretty=format:%h%x1f%p%x1f%ad%x1f%s`]),
   ]);
 
@@ -260,7 +292,7 @@ export async function readGitState(cwd: string, repo?: RepoInfo): Promise<GitSta
   }
 
   const statusText = statusRes.status === "ok" ? statusRes.stdout : "";
-  const { unstaged, staged } = parsePorcelain(statusText, detected.prefix);
+  const { unstaged, staged, unmerged } = parsePorcelain(statusText, detected.prefix);
 
   const history: GitCommit[] = [];
   const logText = logRes.status === "ok" ? logRes.stdout : "";
@@ -292,6 +324,7 @@ export async function readGitState(cwd: string, repo?: RepoInfo): Promise<GitSta
     behind,
     unstaged,
     staged,
+    unmerged,
     history,
     error: statusFailed ? "git status failed \u2014 changes not listed (press r to retry)" : undefined,
     refreshedAt: Date.now(),
@@ -306,24 +339,64 @@ export async function readGitState(cwd: string, repo?: RepoInfo): Promise<GitSta
  * not change. Comparing this string costs nothing next to `ls-files`.
  */
 export function gitTreeProbe(state: GitState): string {
-  const files = [...state.staged, ...state.unstaged].map((file) => `${file.code} ${file.relPath}`);
+  const files = [...state.staged, ...state.unstaged, ...state.unmerged].map((file) => `${file.code} ${file.relPath}`);
   return [`${state.branch ?? ""} ${state.ahead} ${state.behind}`, ...files].join("\n");
 }
 
 /**
- * Tracked files via `git ls-files --full-name -z`. Private: `readGitTree` is
- * the one path from git to tree entries (Issue #146).
+ * Map a git index mode to a tree entry's shape. `160000` is a gitlink (a
+ * submodule: the tree must materialize it as a directory row, since the path
+ * is a directory on disk); `120000` is a symlink (`TreeEntry.symlink`, the
+ * `↗` marker); every other mode (`100644`/`100755`) is a plain file.
+ * (Issue #219.)
+ */
+function modeFlags(mode: string): { isDir: boolean; symlink: boolean } {
+  if (mode === "160000") return { isDir: true, symlink: false };
+  if (mode === "120000") return { isDir: false, symlink: true };
+  return { isDir: false, symlink: false };
+}
+
+/**
+ * Tracked files via `git ls-files --stage --full-name -z`, each record
+ * carrying its index mode. Private: `readGitTree` is the one path from git to
+ * tree entries (Issue #146).
+ *
+ * `--stage` (`-s`) prefixes every record with `<mode> <sha> <stage>` and a tab;
+ * the mode is where the entry type lives — `160000` a gitlink (submodule),
+ * `120000` a symlink, `100644`/`100755` a plain blob — and `readGitTree` maps
+ * it to `TreeEntry.isDir`/`symlink` (Issue #219).
  *
  * `--full-name` matters: without it `ls-files` prints paths relative to the
  * cwd, so from a repository subdirectory the prefix translation in
  * `readGitTree` would see no `repo.prefix` match and drop every tracked path.
  * With it the listing stays repository-root-relative, which is the invariant
  * the prefix translation relies on.
+ *
+ * The read is `latin1` (raw bytes), so each path is screened by
+ * `decodeStrictUtf8`; a path UTF-8 cannot express is dropped and counted in
+ * `skipped` (Issue #220).
  */
-async function readTrackedFiles(cwd: string): Promise<string[]> {
-  const result = await runGit(cwd, ["ls-files", "--full-name", "-z"]);
-  if (result.status !== "ok") return [];
-  return result.stdout.split(NUL).filter((line) => line.length > 0);
+async function readTrackedFiles(
+  cwd: string,
+): Promise<{ records: Array<{ mode: string; path: string }>; skipped: number }> {
+  const result = await runGit(cwd, ["ls-files", "--stage", "--full-name", "-z"], { latin1: true });
+  if (result.status !== "ok") return { records: [], skipped: 0 };
+  const records: Array<{ mode: string; path: string }> = [];
+  let skipped = 0;
+  for (const raw of result.stdout.split(NUL)) {
+    if (raw.length === 0) continue;
+    // Only the first tab separates metadata from path: a path may contain tabs.
+    const tab = raw.indexOf("\t");
+    if (tab === -1) continue; // malformed record (no --stage metadata)
+    const path = decodeStrictUtf8(raw.slice(tab + 1));
+    if (path === null) {
+      skipped += 1;
+      continue;
+    }
+    const mode = raw.slice(0, tab).trim().split(/\s+/)[0] ?? "";
+    records.push({ mode, path });
+  }
+  return { records, skipped };
 }
 
 /**
@@ -340,24 +413,34 @@ async function readTrackedFiles(cwd: string): Promise<string[]> {
  * a failed or overflowing listing degrades to `[]` (the caller then simply has
  * nothing to merge or filter), and ignored records never enter `GitState`, so
  * the git panel's staged/unstaged lists and the porcelain probe stay untouched.
+ *
+ * The read is `latin1` (raw bytes), so each path is screened by
+ * `decodeStrictUtf8`; an invalid path is dropped silently — this listing is
+ * display-only and does not join the tree's dropped-record count (Issue #220).
  */
 export async function readIgnoredEntries(cwd: string, repo: RepoInfo): Promise<TreeEntry[]> {
-  const result = await runGit(cwd, [
-    "ls-files",
-    "--others",
-    "--ignored",
-    "--exclude-standard",
-    "--directory",
-    "--full-name",
-    "-z",
-  ]);
+  const result = await runGit(
+    cwd,
+    [
+      "ls-files",
+      "--others",
+      "--ignored",
+      "--exclude-standard",
+      "--directory",
+      "--full-name",
+      "-z",
+    ],
+    { latin1: true },
+  );
   if (result.status !== "ok") return [];
   const seen = new Set<string>();
   const entries: TreeEntry[] = [];
   for (const raw of result.stdout.split(NUL)) {
     if (raw.length === 0) continue;
     const isDir = raw.endsWith("/");
-    const relPath = stripPrefix(isDir ? raw.slice(0, -1) : raw, repo.prefix);
+    const path = decodeStrictUtf8(isDir ? raw.slice(0, -1) : raw);
+    if (path === null) continue;
+    const relPath = stripPrefix(path, repo.prefix);
     if (!relPath || seen.has(relPath)) continue; // outsiders dropped, deduped
     seen.add(relPath);
     entries.push({ relPath, isDir, symlink: false });
@@ -378,16 +461,25 @@ export async function readIgnoredEntries(cwd: string, repo: RepoInfo): Promise<T
  * untracked-only, exactly as the old inline merge did. Policy stays with the
  * caller — the untracked-directory subtree fill and the empty-repo fs
  * fallback are session concerns.
+ *
+ * `skipped` counts the tracked records dropped for invalid UTF-8 (the
+ * untracked porcelain records are screened at `parsePorcelain`, the boundary
+ * that produces `git.unstaged`; the ignored listing's drops are display-only
+ * and not counted). It is what the session turns into one warning (Issue #220).
  */
-export async function readGitTree(cwd: string, git: GitState, repo: RepoInfo): Promise<TreeEntry[]> {
+export async function readGitTree(
+  cwd: string,
+  git: GitState,
+  repo: RepoInfo,
+): Promise<{ entries: TreeEntry[]; skipped: number }> {
   const tracked = await readTrackedFiles(cwd);
   const seen = new Set<string>();
   const entries: TreeEntry[] = [];
-  for (const p of tracked) {
-    const rel = stripPrefix(p, repo.prefix);
+  for (const record of tracked.records) {
+    const rel = stripPrefix(record.path, repo.prefix);
     if (!rel || seen.has(rel)) continue; // outsiders dropped
     seen.add(rel);
-    entries.push({ relPath: rel, isDir: false, symlink: false });
+    entries.push({ relPath: rel, ...modeFlags(record.mode) });
   }
   for (const file of git.unstaged) {
     if (file.code !== "??") continue;
@@ -395,7 +487,7 @@ export async function readGitTree(cwd: string, git: GitState, repo: RepoInfo): P
     seen.add(file.relPath);
     entries.push({ relPath: file.relPath, isDir: file.isDir === true, symlink: false });
   }
-  return entries;
+  return { entries, skipped: tracked.skipped };
 }
 
 /**
@@ -409,6 +501,10 @@ export function gitCodeMap(state: GitState): Map<string, string> {
   const map = new Map<string, string>();
   for (const file of state.staged) map.set(file.relPath, file.code);
   for (const file of state.unstaged) map.set(file.relPath, file.code);
+  // Unmerged last: it wins, because the conflict is the state the user must
+  // resolve, and its two-char code is the one the tree badge should show
+  // (Issue #202).
+  for (const file of state.unmerged) map.set(file.relPath, file.code);
   return map;
 }
 

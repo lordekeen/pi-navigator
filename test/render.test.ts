@@ -128,6 +128,7 @@ function makeHarness(
     behind: 1,
     unstaged: [{ relPath: "src/main.ts", code: "M" }],
     staged: [{ relPath: "package.json", code: "A" }],
+    unmerged: [],
     history: [
       { shortHash: "a1b2c3d", dateRel: "2 hours ago", subject: "add navigator overlay with a long subject line" },
       { shortHash: "e4f5a6b", dateRel: "yesterday", subject: "fix sorting" },
@@ -226,6 +227,7 @@ describe("render width safety", () => {
       behind: 0,
       unstaged: [],
       staged: [],
+      unmerged: [],
       history: [
         { shortHash: "a1b2c3d", dateRel: "2h ago", subject: "a commit subject that is long enough to need truncation in the left pane" },
       ],
@@ -248,6 +250,7 @@ describe("render width safety", () => {
       behind: 0,
       unstaged: [{ relPath: "src/a.ts", code: "M" }],
       staged: [{ relPath: "src/b.ts", code: "A" }],
+      unmerged: [],
       history: [],
       refreshedAt: 0,
     });
@@ -278,6 +281,7 @@ describe("render width safety", () => {
         behind: 0,
         unstaged: [],
         staged: [],
+        unmerged: [],
         history: [],
         error: "git status failed \u2014 changes not listed (press r to retry)",
         refreshedAt: 0,
@@ -300,6 +304,7 @@ describe("render width safety", () => {
       behind: 0,
       unstaged: [],
       staged: [],
+      unmerged: [],
       history: [
         { shortHash: "bbb2222", parents: ["aaa1111", "ccc3333"], dateRel: "2h ago", subject: "merge the feature into main with a long subject" },
         { shortHash: "aaa1111", parents: ["9998888"], dateRel: "3h ago", subject: "ancestor one with yet another long subject line" },
@@ -384,6 +389,7 @@ describe("render width safety", () => {
         { relPath: "src/utils/anotherVeryLongHelperModuleName.ts", code: "M" },
       ],
       staged: [{ relPath: "src/components/ReallyLongComponentNameHere.tsx", code: "A" }],
+      unmerged: [],
       history: [
         { shortHash: "a1b2c3d", dateRel: "2h ago", subject: "this is a very long commit subject line that will definitely need truncation in a narrow left pane" },
         { shortHash: "e4f5a6b", dateRel: "yesterday", subject: "fix: another overlong subject line describing a refactor of the module system internals" },
@@ -432,7 +438,7 @@ describe("render width safety", () => {
     cardOverlay.setTree(buildTree("/work/repo", entriesFromPaths(["src/very/long/path/to/the/binary/file.bin"]), new Map()), "git");
     cardOverlay.setGitState({
       available: true, branch: "main", detached: false, ahead: 0, behind: 0,
-      unstaged: [], staged: [], history: [], refreshedAt: 0,
+      unstaged: [], staged: [], unmerged: [], history: [], refreshedAt: 0,
     });
     await cardOverlay.openRelPath("src/very/long/path/to/the/binary/file.bin");
     const cardLines = cardOverlay.render(60);
@@ -558,7 +564,7 @@ describe("render width safety", () => {
     overlay.setTree(buildTree("/work/repo", entriesFromPaths(["src/main.ts"]), new Map()), "git");
     overlay.setGitState({
       available: true, branch: "main", detached: false, ahead: 0, behind: 0,
-      unstaged: [], staged: [], history: [], refreshedAt: 0,
+      unstaged: [], staged: [], unmerged: [], history: [], refreshedAt: 0,
     });
 
     // Open the diff via the same injection the loader uses.
@@ -712,6 +718,7 @@ describe("layout modes (Issue #119)", () => {
       behind: 0,
       unstaged: [],
       staged: [],
+      unmerged: [],
       history: manyCommits,
       refreshedAt: 0,
     });
@@ -735,6 +742,7 @@ describe("layout modes (Issue #119)", () => {
       behind: 0,
       unstaged: [],
       staged: [],
+      unmerged: [],
       history: [],
       refreshedAt: 0,
     });
@@ -1253,6 +1261,7 @@ describe("E-style chrome (Issue #137)", () => {
       behind: 0,
       unstaged: [],
       staged: [],
+      unmerged: [],
       history: [],
       refreshedAt: 0,
     });
