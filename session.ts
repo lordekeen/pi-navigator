@@ -676,6 +676,13 @@ export function createSession(deps: SessionDeps): NavigatorSession {
       // in-flight image target before the displayed one (#116 fix 3).
       armReflowOnSupport(support);
       scheduleRender();
+    } catch (error) {
+      // Issue #206: resolution is fire-and-forget from start()/refresh(); a
+      // rejection here used to escape as an unhandled rejection. Report the one
+      // bounded reason and swallow it — the finally clears supportResolving so a
+      // later refresh resolves support again.
+      const detail = error instanceof Error ? error.message : "unknown error";
+      deps.notifyWarning(`image support resolution failed: ${detail}`.slice(0, 200));
     } finally {
       supportResolving = false;
     }
@@ -918,10 +925,17 @@ export function createSession(deps: SessionDeps): NavigatorSession {
       const message = error instanceof Error ? error.message : "refresh failed";
       // Notify once per distinct failure, not once per tick: a persistent
       // failure used to raise a warning every 3 s.
-      if (message !== lastError) {
-        lastError = message;
-        deps.notify(`pi-navigator: ${message}`);
+      try {
+        if (message !== lastError) {
+          lastError = message;
+          deps.notify(`pi-navigator: ${message}`);
+        }
+      } catch {
+        // Issue #206: the notification must never break the loop — the poll only
+        // reschedules while this promise keeps resolving.
       }
+      // Issue #206: a failed tick is idle growth, never a base-interval retry.
+      applyBackoff(false);
     } finally {
       inFlight = false;
     }

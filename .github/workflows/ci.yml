@@ -1,0 +1,52 @@
+# Verification gate: typecheck + full Vitest suite on every pull request and on
+# every push to `main`. Before this existed, nothing ran the suite on a PR — a
+# broken branch could merge and only surface when release-please cut a release.
+# The PR trigger blocks the break before merge; the `main` push re-verifies what
+# actually landed (and is what branch protection can require).
+#
+# Two Node versions, deliberately: Node 22 is the package's `engines` floor, so
+# the floor must typecheck and pass; Node 24 is what the publish pipeline runs,
+# so the shipped runtime must too. A regression that only bites one of them
+# would otherwise reach release.
+#
+# Security: every action is pinned to a full commit SHA (not a mutable tag),
+# permissions are least-privilege (contents: read — this workflow only reads the
+# repo), checkout drops the GitHub credentials before build/test steps run, the
+# job is timeout-bounded, superseded runs on the same ref are cancelled, and
+# Node reinstalls draw on the npm cache.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    # Display name is what branch protection sees as the required checks:
+    # `typecheck + tests (22)` and `typecheck + tests (24)`.
+    name: typecheck + tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      # pi-lens-ignore: line-length
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test

@@ -44,6 +44,8 @@ const ctl = vi.hoisted(() => ({
   treeProbe: "",
   tracked: [] as string[],
   gitReads: 0,
+  /** Holds the next `readGitState` open until the test resolves it (single-flight). */
+  gitRelease: null as null | Promise<void>,
   trackedReads: 0,
   // git.ts (Issue #170): how many times the session asked for repo detection.
   detectReads: 0,
@@ -64,6 +66,8 @@ const ctl = vi.hoisted(() => ({
   // images.ts (mocked seams)
   support: "deferred" as "deferred" | "chafa" | "native",
   supportResolved: 0,
+  /** Makes the harness capabilities accessor throw inside resolveImageSupport (Issue #206). */
+  capabilitiesThrow: false,
   chafaCalls: [] as Array<{ path: string; signal: AbortSignal }>,
   /** Releases the captured chafa child callback (null until one is spawned). */
   chafaRelease: null as null | (() => void),
@@ -76,7 +80,14 @@ vi.mock("../git", () => ({
   },
   readGitState: (_cwd: string, _repo: RepoInfo): Promise<GitState> => {
     ctl.gitReads += 1;
-    return ctl.gitError ? Promise.reject(ctl.gitError) : Promise.resolve(ctl.gitState as GitState);
+    if (ctl.gitError) return Promise.reject(ctl.gitError);
+    const gate = ctl.gitRelease;
+    if (gate !== null) {
+      // Armed read: park until the test resolves the deferred (single-flight).
+      ctl.gitRelease = null;
+      return gate.then(() => ctl.gitState as GitState);
+    }
+    return Promise.resolve(ctl.gitState as GitState);
   },
   gitTreeProbe: (): string => ctl.treeProbe,
   gitCodeMap: (git: { unstaged: Array<{ relPath: string; code: string }> }): Map<string, string> =>
@@ -150,7 +161,15 @@ vi.mock("../images", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../images")>();
   return {
     ...actual,
-    resolveImageSupport: async () => {
+    resolveImageSupport: async (
+      _api: PiChafaApi,
+      _paths: unknown,
+      _settings: unknown,
+      deps?: { capabilities?: () => { images: unknown } },
+    ) => {
+      // The harness's capabilities accessor runs where the real resolver's
+      // native ladder would: a throwing one rejects the whole resolution (#206).
+      deps?.capabilities?.();
       ctl.supportResolved += 1;
       if (ctl.support === "deferred") return actual.makeDeferredImageSupport("off");
       if (ctl.support === "chafa") {
@@ -374,7 +393,10 @@ function makeSession(overrides: Partial<SessionDeps> = {}): Harness {
     notify,
     notifyWarning,
     kittyProbe: () => Promise.resolve<KittyProbeVerdict>("no-reply"),
-    capabilities: () => ({ images: null }),
+    capabilities: () => {
+      if (ctl.capabilitiesThrow) throw new Error("capabilities exploded");
+      return { images: null };
+    },
     pi: fakePi,
     sink,
     ...overrides,
@@ -444,6 +466,7 @@ beforeEach(async () => {
   ctl.treeProbe = "";
   ctl.tracked = [];
   ctl.gitReads = 0;
+  ctl.gitRelease = null;
   ctl.detectReads = 0;
   ctl.trackedReads = 0;
   ctl.ignored = [];
@@ -459,6 +482,7 @@ beforeEach(async () => {
   ctl.codeStamps = 0;
   ctl.support = "deferred";
   ctl.supportResolved = 0;
+  ctl.capabilitiesThrow = false;
   ctl.chafaCalls = [];
   ctl.chafaRelease = null;
 });
@@ -527,6 +551,46 @@ describe("createSession: start + refresh data flow", () => {
     expect(ctl.detectReads).toBe(2);
     await runUntil(dueAt(timer(timers, 3)));
     expect(ctl.detectReads).toBe(2);
+  });
+
+  it("drops a tick that fires while the previous refresh is still awaiting git (single-flight, Issue #221)", async () => {
+    ctl.gitState = makeGitState();
+    ctl.treeProbe = "probe-1";
+    ctl.tracked = ["src/a.ts"];
+    vi.useFakeTimers();
+    const { session, sink } = makeSession();
+
+    // Park the first tick's git read on a deferred: while it is still awaiting
+    // git, the session's `inFlight` gate must make the next tick a no-op so the
+    // porcelain read can never race itself (Issue #221).
+    let releaseGit!: () => void;
+    ctl.gitRelease = new Promise<void>((resolve) => {
+      releaseGit = resolve;
+    });
+
+    session.refresh();
+    await flushTicks();
+    expect(ctl.gitReads).toBe(1); // the first read is parked
+
+    // A refresh that lands mid-flight is dropped, not queued: exactly one git
+    // read, and the sink has nothing from the unfinished tick.
+    session.refresh();
+    await flushTicks();
+    expect(ctl.gitReads).toBe(1);
+    expect(sink.setGitState).not.toHaveBeenCalled();
+
+    // Releasing the parked read lands the first tick's state exactly once...
+    releaseGit();
+    await flushTicks();
+    expect(sink.setGitState).toHaveBeenCalledTimes(1);
+    expect(sink.setGitState.mock.calls[0]?.[0]).toMatchObject({ branch: "main" });
+
+    // ...and the guard is not sticky: a later tick reads git again.
+    session.refresh();
+    await flushTicks();
+    expect(ctl.gitReads).toBe(2);
+    expect(sink.setGitState).toHaveBeenCalledTimes(2);
+    session.dispose();
   });
 });
 
@@ -1397,6 +1461,57 @@ describe("createSession: refresh error dedupe", () => {
   });
 });
 
+describe("createSession: a throwing notify or support resolution must not stop polling (Issue #206)", () => {
+  it("keeps polling when the error notification itself throws (Issue #206)", async () => {
+    ctl.gitError = new Error("boom");
+    vi.useFakeTimers();
+    const timers = installTimerLog();
+    // A notify that throws is exactly the hole: the tick fails (so it notifies)
+    // and the throw used to reject the whole refresh, killing the poll.
+    const notify = vi.fn(() => {
+      throw new Error("notify failed");
+    });
+    const { session, sink } = makeSession({ notify });
+    session.start();
+    await flushTicks();
+    expect(sink.setGitState).not.toHaveBeenCalled(); // the tick still failed
+
+    // The same failure repeats: the dedupe must still report it exactly once.
+    session.refresh();
+    await flushTicks();
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith("pi-navigator: boom");
+
+    // Both failed ticks rescheduled the poll despite the throw (and backed off
+    // from the base interval instead of retrying it).
+    expect(timers.length).toBeGreaterThan(1);
+    expect(timers[0]?.delay).toBe(REFRESH_INTERVAL_MS + 2000);
+    session.dispose();
+  });
+
+  it("survives a throwing support resolution and keeps resolving later (Issue #206)", async () => {
+    ctl.gitState = makeGitState();
+    ctl.treeProbe = "probe-1";
+    ctl.tracked = ["src/a.ts"];
+    ctl.capabilitiesThrow = true; // capabilities() runs inside resolveImageSupport
+    vi.useFakeTimers();
+    const { session, notifyWarning } = makeSession();
+    session.start(); // start() returns void: the guard is the absence of an unhandled rejection
+    await flushTicks();
+    expect(ctl.supportResolved).toBe(0); // the resolution threw
+    expect(notifyWarning).toHaveBeenCalledWith(
+      "image support resolution failed: capabilities exploded",
+    );
+
+    ctl.capabilitiesThrow = false;
+    session.refresh();
+    await flushTicks();
+    // The finally reset supportResolving, so later resolutions still run.
+    expect(ctl.supportResolved).toBe(1);
+    session.dispose();
+  });
+});
+
 describe("createSession: dispose", () => {
   it("stops the poll and is safe to call twice", async () => {
     ctl.gitState = makeGitState();
@@ -1413,6 +1528,48 @@ describe("createSession: dispose", () => {
     await vi.advanceTimersByTimeAsync(MAX_POLL_INTERVAL_MS * 5);
     expect(ctl.gitReads).toBe(1);
     expect(sink.setGitState).toHaveBeenCalledTimes(1); // no further sink traffic
+  });
+
+  it("stops cleanly when disposed while a refresh is awaiting git (Issue #221)", async () => {
+    // With respectGitignore off the tick reads the ignored listing right after
+    // its git read, so "the abandoned tick did no further work" is observable
+    // at the very guard under test.
+    const offSettings: NavigatorSettings = {
+      ...settings,
+      tree: { ...settings.tree, respectGitignore: false },
+    };
+    ctl.gitState = makeGitState();
+    ctl.treeProbe = "probe-1";
+    ctl.tracked = ["src/a.ts"];
+    vi.useFakeTimers();
+    const timers = installTimerLog();
+    const { session, sink } = makeSession({ settings: offSettings });
+
+    // Park the tick's git read on the same deferred the single-flight test
+    // uses: disposal must land while the read it awaits is still open.
+    let releaseGit!: () => void;
+    ctl.gitRelease = new Promise<void>((resolve) => {
+      releaseGit = resolve;
+    });
+
+    session.refresh();
+    await flushTicks();
+    expect(ctl.gitReads).toBe(1); // the read is parked, nothing has landed
+
+    // Disposing mid-refresh closes the tick: the parked read resolves into a
+    // session that must abandon it before any further read or any state
+    // reaches the sink, and the poll must stay down.
+    session.dispose();
+    const timersBefore = timers.length;
+    const rendersBefore = sink.requestRender.mock.calls.length;
+    releaseGit();
+    await flushTicks();
+
+    expect(ctl.ignoredReads).toBe(0); // stopped before the next read
+    expect(sink.setTree).not.toHaveBeenCalled();
+    expect(sink.setGitState).not.toHaveBeenCalled();
+    expect(sink.requestRender).toHaveBeenCalledTimes(rendersBefore); // no abandoned-tick render
+    expect(timers.length).toBe(timersBefore); // no further poll was armed
   });
 });
 
