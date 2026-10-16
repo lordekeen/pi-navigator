@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.18.2](https://github.com/lordekeen/pi-navigator/compare/v0.18.1...v0.18.2) (2026-10-16)
+
+
+### Bug Fixes
+
+* **git:** correct porcelain, prefixes, gitlinks, path bytes and git-pane keys ([#202](https://github.com/lordekeen/pi-navigator/issues/202), [#203](https://github.com/lordekeen/pi-navigator/issues/203), [#204](https://github.com/lordekeen/pi-navigator/issues/204), [#211](https://github.com/lordekeen/pi-navigator/issues/211), [#219](https://github.com/lordekeen/pi-navigator/issues/219), [#220](https://github.com/lordekeen/pi-navigator/issues/220)) ([#231](https://github.com/lordekeen/pi-navigator/issues/231)) ([837823b](https://github.com/lordekeen/pi-navigator/commit/837823b54a684ddf6da84017f23ae74b4adf6393))
+* **panels:** sanitize repo-controlled content before it reaches a row ([#201](https://github.com/lordekeen/pi-navigator/issues/201), [#216](https://github.com/lordekeen/pi-navigator/issues/216)) ([#229](https://github.com/lordekeen/pi-navigator/issues/229)) ([8425b1a](https://github.com/lordekeen/pi-navigator/commit/8425b1a816ce7b74e51fa47bb0a634fe8b111186))
+
 ## [0.18.1](https://github.com/lordekeen/pi-navigator/compare/v0.18.0...v0.18.1) (2026-10-15)
 
 
