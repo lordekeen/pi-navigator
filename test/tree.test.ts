@@ -87,11 +87,30 @@ describe("buildTree", () => {
     expect(empty?.children).toEqual([]);
   });
 
-  it("normalizes backslashes and leading ./", () => {
+  it("strips a leading ./ but keeps a literal backslash in the name (Issue #203)", () => {
     const tree = buildTree(CWD, entries(["a\\b.txt", "./c.txt"]), new Map());
-    const a = tree.children.find((n) => n.name === "a");
-    expect(a?.children[0]?.relPath).toBe("a/b.txt");
+    expect(tree.children.find((n) => n.name === "a\\b.txt")?.relPath).toBe("a\\b.txt");
     expect(tree.children.find((n) => n.name === "c.txt")?.relPath).toBe("c.txt");
+  });
+
+  it("keeps a POSIX filename containing a backslash as one file row (Issue #203)", () => {
+    const root = buildTree("/w", [{ relPath: "a\\b.txt", isDir: false, symlink: false }], new Map());
+    const rows = flattenVisible(root, true);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.node.isDir).toBe(false);
+    expect(rows[0]?.node.name).toBe("a\\b.txt");
+    expect(rows[0]?.node.relPath).toBe("a\\b.txt");
+  });
+
+  it("still splits real POSIX separators into directories and a file (Issue #203)", () => {
+    const root = buildTree("/w", [{ relPath: "src/nested/x.ts", isDir: false, symlink: false }], new Map());
+    reapplyExpansion(root, new Set(["src", "src/nested"]), 0);
+    const rows = flattenVisible(root, true);
+    expect(rows.map((r) => [r.node.relPath, r.node.depth])).toEqual([
+      ["src", 0],
+      ["src/nested", 1],
+      ["src/nested/x.ts", 2],
+    ]);
   });
 
   it("caps path depth at MAX_TREE_DEPTH", () => {
