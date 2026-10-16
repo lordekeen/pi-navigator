@@ -44,6 +44,8 @@ const ctl = vi.hoisted(() => ({
   treeProbe: "",
   tracked: [] as string[],
   gitReads: 0,
+  /** Holds the next `readGitState` open until the test resolves it (single-flight). */
+  gitRelease: null as null | Promise<void>,
   trackedReads: 0,
   // git.ts (Issue #170): how many times the session asked for repo detection.
   detectReads: 0,
@@ -76,7 +78,14 @@ vi.mock("../git", () => ({
   },
   readGitState: (_cwd: string, _repo: RepoInfo): Promise<GitState> => {
     ctl.gitReads += 1;
-    return ctl.gitError ? Promise.reject(ctl.gitError) : Promise.resolve(ctl.gitState as GitState);
+    if (ctl.gitError) return Promise.reject(ctl.gitError);
+    const gate = ctl.gitRelease;
+    if (gate !== null) {
+      // Armed read: park until the test resolves the deferred (single-flight).
+      ctl.gitRelease = null;
+      return gate.then(() => ctl.gitState as GitState);
+    }
+    return Promise.resolve(ctl.gitState as GitState);
   },
   gitTreeProbe: (): string => ctl.treeProbe,
   gitCodeMap: (git: { unstaged: Array<{ relPath: string; code: string }> }): Map<string, string> =>
@@ -444,6 +453,7 @@ beforeEach(async () => {
   ctl.treeProbe = "";
   ctl.tracked = [];
   ctl.gitReads = 0;
+  ctl.gitRelease = null;
   ctl.detectReads = 0;
   ctl.trackedReads = 0;
   ctl.ignored = [];
@@ -527,6 +537,46 @@ describe("createSession: start + refresh data flow", () => {
     expect(ctl.detectReads).toBe(2);
     await runUntil(dueAt(timer(timers, 3)));
     expect(ctl.detectReads).toBe(2);
+  });
+
+  it("drops a tick that fires while the previous refresh is still awaiting git (single-flight, Issue #221)", async () => {
+    ctl.gitState = makeGitState();
+    ctl.treeProbe = "probe-1";
+    ctl.tracked = ["src/a.ts"];
+    vi.useFakeTimers();
+    const { session, sink } = makeSession();
+
+    // Park the first tick's git read on a deferred: while it is still awaiting
+    // git, the session's `inFlight` gate must make the next tick a no-op so the
+    // porcelain read can never race itself (Issue #221).
+    let releaseGit!: () => void;
+    ctl.gitRelease = new Promise<void>((resolve) => {
+      releaseGit = resolve;
+    });
+
+    session.refresh();
+    await flushTicks();
+    expect(ctl.gitReads).toBe(1); // the first read is parked
+
+    // A refresh that lands mid-flight is dropped, not queued: exactly one git
+    // read, and the sink has nothing from the unfinished tick.
+    session.refresh();
+    await flushTicks();
+    expect(ctl.gitReads).toBe(1);
+    expect(sink.setGitState).not.toHaveBeenCalled();
+
+    // Releasing the parked read lands the first tick's state exactly once...
+    releaseGit();
+    await flushTicks();
+    expect(sink.setGitState).toHaveBeenCalledTimes(1);
+    expect(sink.setGitState.mock.calls[0]?.[0]).toMatchObject({ branch: "main" });
+
+    // ...and the guard is not sticky: a later tick reads git again.
+    session.refresh();
+    await flushTicks();
+    expect(ctl.gitReads).toBe(2);
+    expect(sink.setGitState).toHaveBeenCalledTimes(2);
+    session.dispose();
   });
 });
 
