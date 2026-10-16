@@ -66,6 +66,8 @@ const ctl = vi.hoisted(() => ({
   // images.ts (mocked seams)
   support: "deferred" as "deferred" | "chafa" | "native",
   supportResolved: 0,
+  /** Makes the harness capabilities accessor throw inside resolveImageSupport (Issue #206). */
+  capabilitiesThrow: false,
   chafaCalls: [] as Array<{ path: string; signal: AbortSignal }>,
   /** Releases the captured chafa child callback (null until one is spawned). */
   chafaRelease: null as null | (() => void),
@@ -159,7 +161,15 @@ vi.mock("../images", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../images")>();
   return {
     ...actual,
-    resolveImageSupport: async () => {
+    resolveImageSupport: async (
+      _api: PiChafaApi,
+      _paths: unknown,
+      _settings: unknown,
+      deps?: { capabilities?: () => { images: unknown } },
+    ) => {
+      // The harness's capabilities accessor runs where the real resolver's
+      // native ladder would: a throwing one rejects the whole resolution (#206).
+      deps?.capabilities?.();
       ctl.supportResolved += 1;
       if (ctl.support === "deferred") return actual.makeDeferredImageSupport("off");
       if (ctl.support === "chafa") {
@@ -383,7 +393,10 @@ function makeSession(overrides: Partial<SessionDeps> = {}): Harness {
     notify,
     notifyWarning,
     kittyProbe: () => Promise.resolve<KittyProbeVerdict>("no-reply"),
-    capabilities: () => ({ images: null }),
+    capabilities: () => {
+      if (ctl.capabilitiesThrow) throw new Error("capabilities exploded");
+      return { images: null };
+    },
     pi: fakePi,
     sink,
     ...overrides,
@@ -469,6 +482,7 @@ beforeEach(async () => {
   ctl.codeStamps = 0;
   ctl.support = "deferred";
   ctl.supportResolved = 0;
+  ctl.capabilitiesThrow = false;
   ctl.chafaCalls = [];
   ctl.chafaRelease = null;
 });
@@ -1444,6 +1458,57 @@ describe("createSession: refresh error dedupe", () => {
     session.refresh();
     await flushTicks();
     expect(notify).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("createSession: a throwing notify or support resolution must not stop polling (Issue #206)", () => {
+  it("keeps polling when the error notification itself throws (Issue #206)", async () => {
+    ctl.gitError = new Error("boom");
+    vi.useFakeTimers();
+    const timers = installTimerLog();
+    // A notify that throws is exactly the hole: the tick fails (so it notifies)
+    // and the throw used to reject the whole refresh, killing the poll.
+    const notify = vi.fn(() => {
+      throw new Error("notify failed");
+    });
+    const { session, sink } = makeSession({ notify });
+    session.start();
+    await flushTicks();
+    expect(sink.setGitState).not.toHaveBeenCalled(); // the tick still failed
+
+    // The same failure repeats: the dedupe must still report it exactly once.
+    session.refresh();
+    await flushTicks();
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith("pi-navigator: boom");
+
+    // Both failed ticks rescheduled the poll despite the throw (and backed off
+    // from the base interval instead of retrying it).
+    expect(timers.length).toBeGreaterThan(1);
+    expect(timers[0]?.delay).toBe(REFRESH_INTERVAL_MS + 2000);
+    session.dispose();
+  });
+
+  it("survives a throwing support resolution and keeps resolving later (Issue #206)", async () => {
+    ctl.gitState = makeGitState();
+    ctl.treeProbe = "probe-1";
+    ctl.tracked = ["src/a.ts"];
+    ctl.capabilitiesThrow = true; // capabilities() runs inside resolveImageSupport
+    vi.useFakeTimers();
+    const { session, notifyWarning } = makeSession();
+    session.start(); // start() returns void: the guard is the absence of an unhandled rejection
+    await flushTicks();
+    expect(ctl.supportResolved).toBe(0); // the resolution threw
+    expect(notifyWarning).toHaveBeenCalledWith(
+      "image support resolution failed: capabilities exploded",
+    );
+
+    ctl.capabilitiesThrow = false;
+    session.refresh();
+    await flushTicks();
+    // The finally reset supportResolving, so later resolutions still run.
+    expect(ctl.supportResolved).toBe(1);
+    session.dispose();
   });
 });
 
