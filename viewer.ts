@@ -29,7 +29,7 @@ import {
   MAX_LINE_COUNT_BYTES,
   TAB_WIDTH,
 } from "./constants";
-import { escapeSpans, sliceStyled, visibleTextWidth } from "./ansi";
+import { escapeSpans, sanitizeText, sliceStyled, visibleTextWidth } from "./ansi";
 import { truncateUtf8ToBytes } from "./bytes";
 import { type ImageAttemptRenderer, type RenderOutcome } from "./images";
 import type { SearchMatch, ViewerFile } from "./types";
@@ -446,6 +446,13 @@ export async function loadFile(
   // repo's own .ts sources among them) otherwise hit this on every opened
   // file. \r\n is folded to \n first so no line gains a spurious blank.
   raw = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+  // Repo-controlled content is untrusted: strip the terminal-active bytes
+  // (C0 except `\n`, DEL, C1, `\u2028`/`\u2029`, with `\t` mapped to a space)
+  // here, before tab expansion and highlighting, so `lines`, `rawText` and the
+  // retained `styleText` a restyle re-runs on are all built from the same
+  // control-free string (Issue #201).
+  raw = sanitizeText(raw);
 
   const expanded = expandTabs(raw);
   const allLines = expanded.split("\n");
