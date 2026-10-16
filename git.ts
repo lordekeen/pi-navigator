@@ -328,8 +328,27 @@ export function gitTreeProbe(state: GitState): string {
 }
 
 /**
- * Tracked files via `git ls-files --full-name -z`. Private: `readGitTree` is
- * the one path from git to tree entries (Issue #146).
+ * Map a git index mode to a tree entry's shape. `160000` is a gitlink (a
+ * submodule: the tree must materialize it as a directory row, since the path
+ * is a directory on disk); `120000` is a symlink (`TreeEntry.symlink`, the
+ * `↗` marker); every other mode (`100644`/`100755`) is a plain file.
+ * (Issue #219.)
+ */
+function modeFlags(mode: string): { isDir: boolean; symlink: boolean } {
+  if (mode === "160000") return { isDir: true, symlink: false };
+  if (mode === "120000") return { isDir: false, symlink: true };
+  return { isDir: false, symlink: false };
+}
+
+/**
+ * Tracked files via `git ls-files --stage --full-name -z`, each record
+ * carrying its index mode. Private: `readGitTree` is the one path from git to
+ * tree entries (Issue #146).
+ *
+ * `--stage` (`-s`) prefixes every record with `<mode> <sha> <stage>` and a tab;
+ * the mode is where the entry type lives — `160000` a gitlink (submodule),
+ * `120000` a symlink, `100644`/`100755` a plain blob — and `readGitTree` maps
+ * it to `TreeEntry.isDir`/`symlink` (Issue #219).
  *
  * `--full-name` matters: without it `ls-files` prints paths relative to the
  * cwd, so from a repository subdirectory the prefix translation in
@@ -337,10 +356,19 @@ export function gitTreeProbe(state: GitState): string {
  * With it the listing stays repository-root-relative, which is the invariant
  * the prefix translation relies on.
  */
-async function readTrackedFiles(cwd: string): Promise<string[]> {
-  const result = await runGit(cwd, ["ls-files", "--full-name", "-z"]);
+async function readTrackedFiles(cwd: string): Promise<Array<{ mode: string; path: string }>> {
+  const result = await runGit(cwd, ["ls-files", "--stage", "--full-name", "-z"]);
   if (result.status !== "ok") return [];
-  return result.stdout.split(NUL).filter((line) => line.length > 0);
+  const records: Array<{ mode: string; path: string }> = [];
+  for (const raw of result.stdout.split(NUL)) {
+    if (raw.length === 0) continue;
+    // Only the first tab separates metadata from path: a path may contain tabs.
+    const tab = raw.indexOf("\t");
+    if (tab === -1) continue; // malformed record (no --stage metadata)
+    const mode = raw.slice(0, tab).trim().split(/\s+/)[0] ?? "";
+    records.push({ mode, path: raw.slice(tab + 1) });
+  }
+  return records;
 }
 
 /**
@@ -400,11 +428,11 @@ export async function readGitTree(cwd: string, git: GitState, repo: RepoInfo): P
   const tracked = await readTrackedFiles(cwd);
   const seen = new Set<string>();
   const entries: TreeEntry[] = [];
-  for (const p of tracked) {
-    const rel = stripPrefix(p, repo.prefix);
+  for (const record of tracked) {
+    const rel = stripPrefix(record.path, repo.prefix);
     if (!rel || seen.has(rel)) continue; // outsiders dropped
     seen.add(rel);
-    entries.push({ relPath: rel, isDir: false, symlink: false });
+    entries.push({ relPath: rel, ...modeFlags(record.mode) });
   }
   for (const file of git.unstaged) {
     if (file.code !== "??") continue;
