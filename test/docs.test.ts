@@ -23,6 +23,19 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const readme = readFileSync(join(repoRoot, "README.md"), "utf8");
 const agents = readFileSync(join(repoRoot, "AGENTS.md"), "utf8");
 
+/**
+ * Shipped root modules: every `*.ts` file at the repository root except the
+ * Vitest config (dev-only, never published). One enumeration for both halves of
+ * the publish surface — the `package.json` `files` guard and the
+ * `tsconfig.include` guard.
+ */
+function rootModules(): string[] {
+  return readdirSync(repoRoot)
+    .filter((name) => name.endsWith(".ts"))
+    .filter((name) => name !== "vitest.config.ts")
+    .sort();
+}
+
 /** Test files vitest collects, as basenames without the `.test.ts` suffix. */
 function suiteNames(): string[] {
   return readdirSync(join(repoRoot, "test"))
@@ -52,10 +65,7 @@ describe("documentation guards (Issue #115)", () => {
     const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as { files: string[] };
     // Every publishable root module must be allowlisted, or the published
     // tarball cannot load (the `session.ts` gap of Issue #140/#151).
-    const rootModules = readdirSync(repoRoot)
-      .filter((name) => name.endsWith(".ts"))
-      .filter((name) => name !== "vitest.config.ts");
-    for (const module of rootModules) {
+    for (const module of rootModules()) {
       expect(pkg.files, `${module} is missing from package.json "files"`).toContain(module);
     }
     // Deletion direction: a stale entry means `files` promises a file that
@@ -138,6 +148,20 @@ describe("ci.yml (Issue #210)", () => {
     expect(workflow).toContain("npm run typecheck");
     expect(workflow).toContain("npm test");
     expect(workflow).toContain("cancel-in-progress: true");
+  });
+});
+
+describe("shipped module config (Issue #227)", () => {
+  it("typechecks every shipped root module by listing it in tsconfig.include", () => {
+    // Issue #227: ansi.ts, bytes.ts, open_target.ts and viewer_model.ts shipped
+    // in `package.json` `files` but not in `tsconfig.include`, so `tsc --noEmit`
+    // never read them — a type error in one passed CI and reached the published
+    // tarball. The package.json `files` half of the same invariant is the guard
+    // above (Issues #037, #151); together they pin every shipped module in both.
+    const tsconfig = JSON.parse(readFileSync(join(repoRoot, "tsconfig.json"), "utf8")) as { include: string[] };
+    for (const module of rootModules()) {
+      expect(tsconfig.include, `${module} is missing from tsconfig.include`).toContain(module);
+    }
   });
 });
 
