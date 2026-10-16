@@ -730,11 +730,16 @@ describe("git integration on a scratch repository", () => {
     expect(diff.notice).toMatch(/1 file/);
   });
 
-  it("preserves commit subject containing unit separator (Issue #043)", async () => {
+  it("keeps the full subject text but strips the unit separator at the ingest boundary (Issues #043, #201)", async () => {
+    // Issue #043 pinned that the log parser must not TRUNCATE a subject at the
+    // field separator; Issue #201 supersedes the raw byte itself. The subject's
+    // text survives intact, but the C0 separator byte is stripped at the git
+    // boundary so it can never reach a rendered row.
     await writeFile(join(repo, "unit.txt"), "unit");
     await commit(repo, "feat\x1fwith\x1fseparator");
     const state = await readGitState(repo);
-    expect(state.history[0]?.subject).toBe("feat\x1fwith\x1fseparator");
+    expect(state.history[0]?.subject).toBe("featwithseparator");
+    expect(state.history[0]?.subject).not.toContain("\x1f");
   });
 
   it("caps a commit diff body on BYTES, never splitting a UTF-8 character (Issue #060 finding 5)", async () => {
@@ -883,5 +888,68 @@ describe("git integration on a scratch repository", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+// ── Sanitization at the git ingest boundary (Issue #201) ──
+
+describe("git metadata sanitization at the ingest boundary (Issue #201)", () => {
+  const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/;
+  const REPO: RepoInfo = { available: true, prefix: "" };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** Stub the four concurrent readGitState spawns with fake stdout. */
+  function stubState(stdout: { branch?: string; log?: string }): void {
+    vi.spyOn(gitRunner, "execFile").mockImplementation((...args: any[]) => {
+      const gitArgs = args[1] as string[];
+      const cb = args[args.length - 1];
+      if (gitArgs[0] === "branch") cb(null, stdout.branch ?? "main\n", "");
+      else if (gitArgs[0] === "rev-list") cb(null, "0\t0\n", "");
+      else if (gitArgs[0] === "status") cb(null, "", "");
+      else if (gitArgs[0] === "log") cb(null, stdout.log ?? "", "");
+      else cb(null, "", "");
+      return {} as any;
+    });
+  }
+
+  it("strips ESC/BEL/NEL from a commit subject parsed out of git log (Issue #201)", async () => {
+    stubState({
+      log: "abc1234\u001f\u001f2 minutes ago\u001fsubject\u001b[31mRED\u0007\u0085green\u001b]8;;http://x\u0007LINK\n",
+    });
+    const state = await readGitState("/tmp/pi-nav-unused", REPO);
+    expect(state.history[0]?.subject).toBe("subject[31mREDgreen]8;;http://xLINK");
+    expect(state.history[0]?.subject).not.toMatch(CONTROL);
+  });
+
+  it("strips a control byte from the branch name (Issue #201)", async () => {
+    stubState({ branch: "ma\u001bin\n" });
+    const state = await readGitState("/tmp/pi-nav-unused", REPO);
+    expect(state.branch).toBe("main");
+    expect(state.detached).toBe(false);
+  });
+
+  it("strips a lone CR from the message subject and escapes from diff lines (Issue #201)", async () => {
+    vi.spyOn(gitRunner, "execFile").mockImplementation((...args: any[]) => {
+      const gitArgs = args[1] as string[];
+      const cb = args[args.length - 1];
+      const has = (flag: string): boolean => gitArgs.includes(flag);
+      if (has("--verify")) cb(null, "abcdef1234567890\n", "");
+      else if (has("--pretty=format:%p")) cb(null, "1111111\n", "");
+      else if (has("--pretty=format:%B")) cb(null, "first\rsecond\n", "");
+      else if (has("--numstat")) cb(null, "1\t0\tx.txt\n", "");
+      else if (has("--first-parent"))
+        cb(null, "diff --git a/x.txt b/x.txt\n+\u001b[31mred\u0007line\n+plain\n", "");
+      else cb(null, "", "");
+      return {} as any;
+    });
+    const diff = await readCommitDiff("/tmp/pi-nav-unused", "abcdef1");
+    expect(diff.message.subject).toBe("first");
+    expect(diff.message.subject).not.toContain("\r");
+    expect(diff.message.body).toEqual(["second"]);
+    expect(diff.lines.length).toBeGreaterThan(0);
+    expect(diff.lines.every((line) => !CONTROL.test(line))).toBe(true);
   });
 });

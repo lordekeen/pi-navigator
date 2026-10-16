@@ -420,6 +420,46 @@ describe("loadFile", () => {
     expect(file.lineCount).toBe(2);
   });
 
+  it("strips control characters from file content before highlighting (Issue #201)", async () => {
+    // File content is repo-controlled and reaches rendered rows verbatim (the
+    // unknown-language path is literally `text.split("\n")`), so an ESC/BEL/
+    // OSC-8 inside a file would otherwise corrupt or escape the overlay.
+    // Sanitization runs after tab expansion and before highlighting, so lines
+    // and the retained styleText derive from the same control-free string,
+    // while rawText stays the sanitized source with its tabs intact.
+    highlightLog.inputs.length = 0;
+    const content = "--\x1b[31mred\x07\x1b]8;;http://x\x07L\x1b]8;;\x07\nnext\rline\n";
+    const sanitized = "--[31mred]8;;http://xL]8;;\nnext\nline\n";
+    const control = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029]/;
+
+    // A markdown extension the highlighter has no language for (`.mdx`): its
+    // rows are plain `split("\n")`, so any control byte would survive verbatim.
+    const mdPath = join(dir, "notes.mdx");
+    await writeFile(mdPath, content);
+    const md = await loadFile(mdPath, "notes.mdx");
+    expect(md.kind).toBe("text");
+    expect(md.lines.join("\n")).toBe(sanitized);
+    expect(md.lines.join("\n")).not.toMatch(control);
+    expect(md.rawText).toBe(sanitized);
+
+    // A highlighted file: the retained pre-highlight source the restyler
+    // re-runs on must be the sanitized text, and the highlighter must be handed
+    // that same string (proven independently by the input log).
+    const tsPath = join(dir, "code.ts");
+    await writeFile(tsPath, content);
+    const ts = await loadFile(tsPath, "code.ts", { styleKey: "key-A" });
+    expect(ts.styleText).toBe(sanitized);
+    expect(ts.styleText).not.toMatch(control);
+    expect(highlightLog.inputs.at(-1)).toBe(sanitized);
+
+    // A restyle re-runs the highlighter on that retained source and emits only
+    // the highlighter's own SGR — no BEL/OSC byte survives the round trip.
+    const restyled = restyleViewerFile(ts, "key-B");
+    expect(highlightLog.inputs.at(-1)).toBe(sanitized);
+    expect(restyled.lines.join("\n")).not.toMatch(/[\x07\u009b]|\x1b\]/);
+    expect(stripAnsi(restyled.lines.join("\n"))).not.toMatch(control);
+  });
+
   it("loads a small text file with highlighted lines and a line count", async () => {
     const path = join(dir, "sample.ts");
     await writeFile(path, "// comment\nconst x = 1;"); // no trailing newline: exactly 2 lines
@@ -505,6 +545,9 @@ describe("loadFile", () => {
     await writeFile(path, content);
     const file = await loadFile(path, "doc.md");
     expect(file.kind).toBe("text");
+    // Issue #201 sanitizes the retained source but leaves its tabs alone: the
+    // markdown renderer owns tab semantics, while a rendered row never sees a
+    // raw tab (tabs are expanded before the row text is sanitized).
     expect(file.rawText).toBe("# Title\n\t- Item with tab\n");
     expect(file.rawText).toContain("\t");
     expect(file.lines[1]).not.toContain("\t");

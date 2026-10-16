@@ -13,7 +13,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { FAMILY_MAX_ROWS } from "./constants";
 import type { NavigatorTheme } from "./theme";
 import type { Focus, GitChangedFile, GitCommit, GitRow, GitState } from "./types";
-import { hardTruncate } from "./ansi";
+import { hardTruncate, sanitizeText } from "./ansi";
 import { joinLeftRight, leftBudget, padTo, truncateAndWidth } from "./frame";
 
 /**
@@ -243,7 +243,10 @@ export function buildGitRow(row: GitRow, selected: boolean, leftW: number, view:
     const nameStyle = selected ? T.text : row.staged ? T.success : T.warning;
     const badge = " " + codeText(row.code, T);
     const room = Math.max(4, leftW - 2 - visibleWidth(badge));
-    const fit = truncateAndWidth(nameStyle(row.relPath), room);
+    // Issue #201: row.relPath stays byte-identical as the row's identity
+    // (gitRowIdentity / openRelPath / alignFilesCursor); only the styled
+    // display copy is sanitized, at this render boundary.
+    const fit = truncateAndWidth(nameStyle(sanitizeText(row.relPath)), room);
     const gap = Math.max(0, leftW - 2 - fit.width - visibleWidth(badge));
     line = arrow + fit.text + " ".repeat(gap) + badge;
   } else {

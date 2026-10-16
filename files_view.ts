@@ -15,6 +15,7 @@ import type { FileNode, FilesRow, Focus } from "./types";
 import { mapExtensionToIcon } from "./icons";
 import { joinLeftRight, padTo, truncateAndWidth } from "./frame";
 import { codeText } from "./git_view";
+import { sanitizeText } from "./ansi";
 
 export interface FilesViewContext {
   theme: NavigatorTheme;
@@ -88,15 +89,18 @@ export function buildFileRow(row: FilesRow, isCursor: boolean, leftW: number, ct
 
   if (row.kind === "match") {
     const prefixRaw = row.prefix.length > 18 ? "\u2026" + row.prefix.slice(-18) : row.prefix;
-    const prefix = T.dim(prefixRaw);
+    // Issue #201: a file/directory name is repo content handed to a theme
+    // channel; sanitize each slice at the render site. Never touch
+    // row.node.name/relPath themselves — relPath is an identity key.
+    const prefix = T.dim(sanitizeText(prefixRaw));
     const name = row.node.name;
     if (row.nameIndex >= 0 && ctx.filterQuery) {
-      const before = name.slice(0, row.nameIndex);
-      const hit = name.slice(row.nameIndex, row.nameIndex + ctx.filterQuery.length);
-      const after = name.slice(row.nameIndex + ctx.filterQuery.length);
+      const before = sanitizeText(name.slice(0, row.nameIndex));
+      const hit = sanitizeText(name.slice(row.nameIndex, row.nameIndex + ctx.filterQuery.length));
+      const after = sanitizeText(name.slice(row.nameIndex + ctx.filterQuery.length));
       body = icon(T.dim) + prefix + T.text(before) + T.warning(T.bold(hit)) + T.text(after);
     } else {
-      body = icon(T.dim) + prefix + T.text(name);
+      body = icon(T.dim) + prefix + T.text(sanitizeText(name));
     }
     if (row.node.gitCode) badge = " " + codeText(row.node.gitCode, T);
   } else if (row.node.isDir) {
@@ -104,7 +108,7 @@ export function buildFileRow(row: FilesRow, isCursor: boolean, leftW: number, ct
     const indent = "  ".repeat(Math.max(0, row.node.depth));
     const changed = hasChanges(row.node);
     const nameStyle = changed ? T.warning : row.node.hidden ? T.dim : T.muted;
-    const label = row.node.name + (row.node.isSymlink ? T.dim(" \u2197") : "");
+    const label = sanitizeText(row.node.name) + (row.node.isSymlink ? T.dim(" \u2197") : "");
     // Issue #031: icon sits after the indent so it moves with depth and
     // stays glued to the marker/name it belongs to, instead of floating at
     // a fixed left column that desynchronizes from the indented label.
@@ -131,7 +135,7 @@ export function buildFileRow(row: FilesRow, isCursor: boolean, leftW: number, ct
     if (isOpen) nameStyle = (text: string) => T.accent(T.bold(text));
     else if (row.node.hidden) nameStyle = (text: string) => T.dim(text);
     else if (row.node.gitCode === "??" || row.node.gitCode === "!!") nameStyle = (text: string) => T.dim(text);
-    const label = row.node.name + (row.node.isSymlink ? T.dim(" \u2197") : "");
+    const label = sanitizeText(row.node.name) + (row.node.isSymlink ? T.dim(" \u2197") : "");
     // Issue #031: same depth-glued icon placement as the dir branch above.
     body = T.dim(indent) + icon(nameStyle) + nameStyle(label);
     if (row.node.gitCode) badge = " " + codeText(row.node.gitCode, T);

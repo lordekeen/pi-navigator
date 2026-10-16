@@ -959,6 +959,29 @@ describe("chafa render contract through makeImagePipeline (spec §7.2)", () => {
       reason: "chafa failed (code 7)",
     });
   });
+
+  it("sanitizes control bytes out of the chafa failure detail (Issue #216)", async () => {
+    // chafa echoes the repo-controlled image path on stderr, so a file name
+    // carrying ESC/BEL reaches the image card's hint row unless the detail is
+    // sanitized at the one boundary every failure passes through.
+    const stderrExec: ExecFn = async () => {
+      const error = new Error("exit 1") as NodeJS.ErrnoException & {
+        stderr?: string;
+      };
+      error.code = "1";
+      error.stderr = "\x1b[31m/tmp/a\x07.png: cannot open file\x1b[0m";
+      throw error;
+    };
+    const out = await runChafa(stderrExec);
+    expect(out.kind).toBe("failed");
+    if (out.kind === "failed") {
+      expect(out.reason).toContain("chafa exited with an error:");
+      expect(out.reason).toContain("/tmp/a");
+      expect(out.reason).toContain(".png: cannot open file");
+      expect(out.reason).not.toContain("\u001b");
+      expect(out.reason).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/);
+    }
+  });
 });
 
 describe("makeImagePipeline (Issue #144)", () => {

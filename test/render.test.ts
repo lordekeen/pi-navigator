@@ -71,6 +71,7 @@ function makeHarness(
   enableIcons = false,
   initialLayout?: NavigatorLayout,
   loadedFile?: ViewerFile,
+  cwd = "/work/repo",
 ): Harness {
   const theme = makeNavigatorTheme({
     fg: (_color: string, text: string) => text,
@@ -81,7 +82,7 @@ function makeHarness(
   } as never);
 
   const overlay = new NavigatorOverlay({
-    cwd: "/work/repo",
+    cwd,
     theme,
     getTerminalRows: () => rows,
     requestRender: () => undefined,
@@ -149,6 +150,19 @@ function expectWidthSafe(overlay: NavigatorOverlay, width: number): string[] {
 }
 
 describe("render width safety", () => {
+  it("renders a cwd carrying an escape without leaking it, at every suite size (Issue #201)", () => {
+    const harness = makeHarness(36, false, undefined, undefined, "/work/\u001b[31mrepo\u001b[0m");
+    for (const width of [120, 100, 80]) {
+      const lines = harness.overlay.render(width);
+      const frame = lines.join("\n");
+      expect(frame, `width ${width} leaks the cwd escape`).not.toContain("\u001b[31mrepo");
+      expect(frame, `width ${width} keeps the printable bytes`).toContain("[31mrepo[0m");
+      for (let i = 0; i < lines.length; i++) {
+        expect(visibleWidth(lines[i] ?? ""), `line ${i} at width ${width}`).toBe(width);
+      }
+    }
+  });
+
   it("fits the frame at 120x36", () => {
     const harness = makeHarness(36);
     expectWidthSafe(harness.overlay, 120);

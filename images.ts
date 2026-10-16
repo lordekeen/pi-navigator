@@ -62,6 +62,7 @@ import {
 
 import type { NavigatorImageMode } from "./settings";
 import { parseTruthyEnv } from "./env";
+import { sanitizeText } from "./ansi";
 
 
 /** Effective image renderer for a session (spec §5.4, D10). */
@@ -86,11 +87,20 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-/** Bound a user-facing failure detail to IMAGE_ERROR_MAX_CHARS. */
+/**
+ * Bound a user-facing failure detail to IMAGE_ERROR_MAX_CHARS. This is the
+ * single untrusted-boundary bounder: every failure/probe detail (chafa
+ * stderr, timeouts, exit codes, probe errors) funnels through here before it
+ * reaches a rendered row, so it also strips terminal-active control bytes
+ * (Issue #216) — chafa's stderr echoes the repo-controlled image path, and an
+ * ESC/BEL in a filename would otherwise corrupt the image card's hint row.
+ * Sanitizing before the length cap keeps the stored string ≤ the cap.
+ */
 function bounded(text: string): string {
-  return text.length <= IMAGE_ERROR_MAX_CHARS
-    ? text
-    : `${text.slice(0, IMAGE_ERROR_MAX_CHARS - 1)}…`;
+  const clean = sanitizeText(text);
+  return clean.length <= IMAGE_ERROR_MAX_CHARS
+    ? clean
+    : `${clean.slice(0, IMAGE_ERROR_MAX_CHARS - 1)}…`;
 }
 
 /**

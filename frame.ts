@@ -25,7 +25,7 @@ import {
 import { visiblePanes } from "./layout";
 import type { NavigatorTheme } from "./theme";
 import type { Focus, GitState, InputMode, NavigatorLayout, ViewerScrollWindow } from "./types";
-import { hardTruncate } from "./ansi";
+import { hardTruncate, sanitizeText } from "./ansi";
 
 /**
  * Truncate a (possibly styled) string to a visible width and return both the
@@ -50,9 +50,14 @@ export function padTo(content: string, width: number): string {
 }
 
 export function shortPath(path: string, home: string): string {
-  let shortened = path;
-  if (home && (path === home || path.startsWith(home + "/"))) {
-    shortened = "~" + path.slice(home.length);
+  // Issue #201: the one display boundary shared by the title row's cwd and the
+  // viewer header's relPath, so a repo-controlled path cannot carry a control
+  // byte into a rendered cell. Order: sanitize first, then clip — the 48-cell
+  // cut can never split a control sequence (they are already gone) and the cut
+  // lands on printable text; the post-clip length stays <= 48.
+  let shortened = sanitizeText(path);
+  if (home && (shortened === home || shortened.startsWith(home + "/"))) {
+    shortened = "~" + shortened.slice(home.length);
   }
   if (shortened.length > 48) shortened = "\u2026" + shortened.slice(shortened.length - 47);
   return shortened;

@@ -20,6 +20,7 @@
 import * as childProcess from "node:child_process";
 import { stat } from "node:fs/promises";
 
+import { sanitizeText } from "./ansi";
 import { truncateUtf8ToBytes } from "./bytes";
 import { GIT_HISTORY_COUNT, GIT_TIMEOUT_MS, MAX_HIGHLIGHT_BYTES, MAX_HIGHLIGHT_LINES } from "./constants";
 import type { CommitMessage } from "./diff";
@@ -246,7 +247,7 @@ export async function readGitState(cwd: string, repo?: RepoInfo): Promise<GitSta
     };
   }
 
-  const branchName = branchRes.status === "ok" ? branchRes.stdout.trim() : "";
+  const branchName = branchRes.status === "ok" ? sanitizeText(branchRes.stdout.trim()) : "";
   const detached = branchName === "";
 
   // left count = upstream-only commits (behind), right = HEAD-only (ahead).
@@ -270,7 +271,7 @@ export async function readGitState(cwd: string, repo?: RepoInfo): Promise<GitSta
     if (!shortHash) continue;
     const parentsRaw = parts[1];
     const dateRel = parts[2];
-    const subject = parts.slice(3).join(UNIT_SEPARATOR);
+    const subject = sanitizeText(parts.slice(3).join(UNIT_SEPARATOR));
     history.push({
       shortHash,
       parents: parentsRaw ? parentsRaw.split(" ") : [],
@@ -495,6 +496,9 @@ export async function readCommitDiff(cwd: string, shortHash: string): Promise<Co
   // message degrades exactly like a huge diff (truncation notice).
   let msgText = msgRes.status === "ok" ? msgRes.stdout : "";
   msgText = msgText.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  // Repo-controlled text: strip terminal-active bytes after CR normalization
+  // so the byte cap below measures the string that is actually rendered (Issue #201).
+  msgText = sanitizeText(msgText);
   let messageTruncated = false;
   if (Buffer.byteLength(msgText, "utf8") > MAX_HIGHLIGHT_BYTES) {
     msgText = truncateUtf8ToBytes(Buffer.from(msgText, "utf8"), MAX_HIGHLIGHT_BYTES).toString("utf8");
@@ -528,6 +532,9 @@ export async function readCommitDiff(cwd: string, shortHash: string): Promise<Co
   if (binary) body = "";
 
   body = body.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  // Same boundary for the diff body: sanitize after CR normalization, before
+  // the byte cap, so a raw escape in a hunk cannot reach a rendered row (Issue #201).
+  body = sanitizeText(body);
   // Byte-true cap (Issue #060 finding 5): `body.length` counts UTF-16 code
   // units — multi-byte characters overcount the budget, and `.slice` can split
   // a surrogate pair mid-way. The shared UTF-8 cap truncates to the byte
