@@ -1001,15 +1001,19 @@ export class NavigatorOverlay implements Focusable {
       const row = rows[this.gitCursor];
       if (!row) return;
       if (row.kind === "commit" || row.kind === "commit-child") {
+        const wasExpanded = this.gitExpanded.has(row.commit.shortHash);
         this.gitExpanded.delete(row.commit.shortHash);
         this.gitTreeVersion++;
         this.touch();
         // Step out to the anchor parent like the file pane: move the cursor to
         // the row's expanded ancestor so the user lands on a row that is still
-        // visible (Issue #030 semantics). The anchor may itself be a
-        // commit-child row when the current row is a *nested* child, so both
-        // kinds qualify; take the nearest (deepest) one (Issue #211).
-        if (row.kind === "commit-child") {
+        // visible (Issue #030 semantics). Only a real collapse steps out —
+        // `h` on an already-collapsed row leaves the cursor alone, matching the
+        // files pane, where `h` on a collapsed directory does not move it. The
+        // anchor may itself be a commit-child row when the current row is a
+        // *nested* child, so both kinds qualify; take the nearest (deepest) one
+        // (Issue #211).
+        if (row.kind === "commit-child" && wasExpanded) {
           let anchorIndex = -1;
           let anchorDepth = -1;
           rows.forEach((r, i) => {

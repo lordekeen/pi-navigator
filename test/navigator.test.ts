@@ -1003,6 +1003,7 @@ describe("git pane keys", () => {
     overlay.handleInput("l"); // expand bbb2222 -> ccc3333 (depth 2, the grandchild)
     overlay.handleInput("j"); // -> bbb2222's flat copy
     overlay.handleInput("j"); // -> ccc3333 (commit-child, depth 2)
+    overlay.handleInput("l"); // expand ccc3333's own (empty) family so `h` has a real collapse
     // h steps out to the nearest expanded ancestor — here the depth-1 child
     // bbb2222, itself a commit-child row (the #211 nested-anchor case), not the
     // top-level aaa1111.
