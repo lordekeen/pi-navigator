@@ -140,3 +140,14 @@ describe("ci.yml (Issue #210)", () => {
     expect(workflow).toContain("cancel-in-progress: true");
   });
 });
+
+describe("test harness config (Issue #222)", () => {
+  it("restores mocks between tests", () => {
+    // A spy left installed by one file leaks into every test that follows in
+    // the same worker (test/session.test.ts's setTimeout spy was the recorded
+    // case), so the suite's green was order-dependent. restoreMocks resets the
+    // host between tests and keeps the harness honest.
+    const config = readFileSync(join(repoRoot, "vitest.config.ts"), "utf8");
+    expect(config).toContain("restoreMocks: true");
+  });
+});

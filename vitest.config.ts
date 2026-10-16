@@ -15,5 +15,9 @@ export default defineConfig({
   test: {
     include: ["test/**/*.test.ts"],
     environment: "node",
+    // A spy installed by one test file must not leak into the next, or the
+    // suite's green turns order-dependent (Issue #222 records the leaked
+    // setTimeout spy in test/session.test.ts).
+    restoreMocks: true,
   },
 });
