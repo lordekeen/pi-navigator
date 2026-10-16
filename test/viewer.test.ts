@@ -424,9 +424,9 @@ describe("loadFile", () => {
     // File content is repo-controlled and reaches rendered rows verbatim (the
     // unknown-language path is literally `text.split("\n")`), so an ESC/BEL/
     // OSC-8 inside a file would otherwise corrupt or escape the overlay.
-    // Sanitization runs after CR normalization and before tab expansion and
-    // highlighting, so lines, rawText and the retained styleText all derive
-    // from the same sanitized string.
+    // Sanitization runs after tab expansion and before highlighting, so lines
+    // and the retained styleText derive from the same control-free string,
+    // while rawText stays the sanitized source with its tabs intact.
     highlightLog.inputs.length = 0;
     const content = "--\x1b[31mred\x07\x1b]8;;http://x\x07L\x1b]8;;\x07\nnext\rline\n";
     const sanitized = "--[31mred]8;;http://xL]8;;\nnext\nline\n";
@@ -539,16 +539,17 @@ describe("loadFile", () => {
     expect(file.message).toBeTruthy();
   });
 
-  it("attaches sanitized rawText on markdown files (tabs become one space, Issue #201)", async () => {
+  it("attaches rawText with unexpanded tabs on markdown files", async () => {
     const path = join(dir, "doc.md");
     const content = "# Title\n\t- Item with tab\n";
     await writeFile(path, content);
     const file = await loadFile(path, "doc.md");
     expect(file.kind).toBe("text");
-    // Sanitization runs at ingestion and maps the tab to a single space before
-    // the source is retained, so rawText is control-free (Issue #201).
-    expect(file.rawText).toBe("# Title\n - Item with tab\n");
-    expect(file.rawText).not.toContain("\t");
+    // Issue #201 sanitizes the retained source but leaves its tabs alone: the
+    // markdown renderer owns tab semantics, while a rendered row never sees a
+    // raw tab (tabs are expanded before the row text is sanitized).
+    expect(file.rawText).toBe("# Title\n\t- Item with tab\n");
+    expect(file.rawText).toContain("\t");
     expect(file.lines[1]).not.toContain("\t");
   });
 
@@ -808,7 +809,7 @@ describe("loadFile", () => {
       image: { cols: 80, rows: 24 },
     });
     expect(file.kind).toBe("text");
-    expect(file.rawText).toBe("# Title\n - tab item\n"); // tab sanitized to one space (Issue #201)
+    expect(file.rawText).toBe(content);
     expect(file.imageVerdict).toBeUndefined();
   });
 });
@@ -862,13 +863,11 @@ describe("style retention and restyleViewerFile (Issue #136)", () => {
     expect(file.rawText).toBeUndefined();
   });
 
-  it("retains the sanitized pre-highlight source, not the raw file bytes (Issue #201)", async () => {
+  it("retains the tab-expanded text, not the raw source", async () => {
     const path = join(dir, "tabs.ts");
     await writeFile(path, "const x = 1;\t// tab");
     const file = await loadFile(path, "tabs.ts");
-    // The tab is mapped to one space by ingestion sanitization (Issue #201),
-    // so styleText is the sanitized source the highlighter was handed.
-    expect(file.styleText).toBe("const x = 1; // tab");
+    expect(file.styleText).toBe("const x = 1;    // tab"); // tab stop 4 from column 12
     expect(file.styleText).toBe(highlightLog.inputs.at(-1));
   });
 

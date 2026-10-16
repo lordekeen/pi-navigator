@@ -448,13 +448,15 @@ export async function loadFile(
   raw = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
   // Repo-controlled content is untrusted: strip the terminal-active bytes
-  // (C0 except `\n`, DEL, C1, `\u2028`/`\u2029`, with `\t` mapped to a space)
-  // here, before tab expansion and highlighting, so `lines`, `rawText` and the
-  // retained `styleText` a restyle re-runs on are all built from the same
-  // control-free string (Issue #201).
-  raw = sanitizeText(raw);
+  // (C0 except `\n`, DEL, C1, `\u2028`/`\u2029`) AFTER tab expansion, so tab
+  // stops stay column-accurate — the sanitizer maps `\t` to one space, so
+  // running it first would collapse every tab stop (Issue #201). `lines` and
+  // the retained `styleText` a restyle re-runs on are built from this string.
+  const expanded = sanitizeText(expandTabs(raw));
 
-  const expanded = expandTabs(raw);
+  // The markdown source keeps its tabs: its consumer (the markdown renderer)
+  // owns tab semantics, and this string is handed to it verbatim (Issue #201).
+  const rawSource = sanitizeText(raw, { keepTabs: true });
   const allLines = expanded.split("\n");
   const overLines = allLines.length > MAX_HIGHLIGHT_LINES;
 
@@ -468,7 +470,7 @@ export async function loadFile(
     // The total count is only known — and only cheap — when the whole file was
     // read (plan section 9: "total line count when cheap").
     const lineCount = completeRead && sizeBytes <= MAX_LINE_COUNT_BYTES ? allLines.length : undefined;
-    const rawText = isMarkdownPath(relPath) ? raw.split("\n").slice(0, MAX_HIGHLIGHT_LINES).join("\n") : undefined;
+    const rawText = isMarkdownPath(relPath) ? rawSource.split("\n").slice(0, MAX_HIGHLIGHT_LINES).join("\n") : undefined;
     return {
       kind: "truncated",
       relPath,
@@ -485,7 +487,7 @@ export async function loadFile(
 
   const lines = highlightLines(expanded, relPath);
   const lineCount = sizeBytes <= MAX_LINE_COUNT_BYTES ? allLines.length : undefined;
-  const rawText = isMarkdownPath(relPath) ? raw : undefined;
+  const rawText = isMarkdownPath(relPath) ? rawSource : undefined;
   return {
     kind: "text",
     relPath,
