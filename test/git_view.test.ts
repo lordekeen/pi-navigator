@@ -52,6 +52,7 @@ function gitState(partial: Partial<GitState> = {}): GitState {
     behind: 0,
     unstaged: [],
     staged: [],
+    unmerged: [],
     history: [],
     refreshedAt: 0,
     ...partial,
@@ -88,6 +89,27 @@ describe("buildGitRows", () => {
     expect(rows[4]).toEqual({ kind: "file", relPath: "c.ts", code: "A", staged: true });
     expect(rows[5]).toEqual({ kind: "group", label: "History (1)", tone: "muted" });
     expect(rows[6]).toEqual({ kind: "commit", commit: expect.objectContaining({ shortHash: "abc" }) });
+  });
+
+  it("renders one Unmerged group above the other groups with the XY pair as the badge (Issue #202)", () => {
+    // git status lists "Unmerged paths" first because a conflict is what the
+    // user must act on; the row model mirrors that order.
+    const rows = buildGitRows(
+      gitState({
+        unmerged: [{ relPath: "f.txt", code: "UU" }],
+        unstaged: [{ relPath: "a.ts", code: "M" }],
+      }),
+      new Set(),
+    );
+    expect(rows[0]).toEqual({ kind: "group", label: "Unmerged (1)", tone: "warning" });
+    expect(rows[1]).toEqual({ kind: "file", relPath: "f.txt", code: "UU", staged: false });
+    // The file row goes through the shared file-row path, so the badge shows
+    // the 2-char pair tinted with the error tone.
+    const rendered = buildGitRow(rows[1] as GitRow, false, 44, rowView({ theme: toneTheme }));
+    expect(rendered).toContain("error:UU");
+    const groups = rows.filter((row) => row.kind === "group").map((row) => row.label);
+    expect(groups[0]).toBe("Unmerged (1)");
+    expect(groups[1]).toBe("Unstaged (1)");
   });
 
   it("re-appends the slash for an untracked-directory record so the panel keeps rendering `?? dir/` (Issue #146)", () => {
@@ -364,5 +386,11 @@ describe("codeText", () => {
     expect(codeText("??", toneTheme)).toBe("dim:?"); // untracked collapses to "?"
     expect(codeText("!!", toneTheme)).toBe("dim:!"); // ignored collapses to "!"
     expect(codeText("X", toneTheme)).toBe("muted:X"); // unknown falls back to muted
+  });
+
+  it("renders every unmerged pair in the error tone (Issue #202)", () => {
+    for (const pair of ["UU", "AA", "AU", "UA", "DU", "UD", "DD"]) {
+      expect(codeText(pair, toneTheme)).toBe(`error:${pair}`);
+    }
   });
 });

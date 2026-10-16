@@ -80,6 +80,28 @@ describe("parsePorcelain", () => {
     expect(out.unstaged).toEqual([{ relPath: "moved.ts", code: "R" }]);
   });
 
+  it("keeps an unmerged XY pair intact in its own list (Issue #202)", () => {
+    // Porcelain v1 reports a conflict as a two-character XY code. Reading
+    // raw[0]/raw[1] as independent single letters fabricated a staged "U"
+    // AND an unstaged "U"; the pair belongs in `unmerged` whole, and
+    // nothing may land in the other two lists.
+    const { staged, unstaged, unmerged } = parsePorcelain("UU f.txt\0AA g.txt\0DU h.txt\0", "");
+    expect(unmerged.map((f) => [f.relPath, f.code])).toEqual([
+      ["f.txt", "UU"],
+      ["g.txt", "AA"],
+      ["h.txt", "DU"],
+    ]);
+    expect(staged).toEqual([]);
+    expect(unstaged).toEqual([]);
+  });
+
+  it("still splits a normal MM entry into staged + unstaged (Issue #202)", () => {
+    const { staged, unstaged, unmerged } = parsePorcelain("MM c.ts\0", "");
+    expect(staged).toEqual([{ relPath: "c.ts", code: "M" }]);
+    expect(unstaged).toEqual([{ relPath: "c.ts", code: "M" }]);
+    expect(unmerged).toEqual([]);
+  });
+
   it("translates repository-root paths to cwd-relative via the prefix", () => {
     const out = parsePorcelain("M  src/a.ts\0 M src/b.ts\0?? src/new.txt\0", "src/");
     expect(out.staged).toEqual([{ relPath: "a.ts", code: "M" }]);
@@ -112,6 +134,7 @@ describe("gitCodeMap / gitTreeProbe", () => {
       behind: 0,
       unstaged: [{ relPath: "a.ts", code: "M" }],
       staged: [{ relPath: "a.ts", code: "A" }],
+      unmerged: [],
       history: [],
       refreshedAt: 0,
     };
@@ -129,6 +152,7 @@ describe("gitCodeMap / gitTreeProbe", () => {
       behind: 0,
       unstaged: [{ relPath: "brandnew", code: "??", isDir: true }],
       staged: [{ relPath: "stageddir", code: "A" }],
+      unmerged: [],
       history: [],
       refreshedAt: 0,
     };
@@ -146,6 +170,7 @@ describe("gitCodeMap / gitTreeProbe", () => {
       behind: 1,
       unstaged: [{ relPath: "b.ts", code: "M" }],
       staged: [{ relPath: "a.ts", code: "A" }],
+      unmerged: [],
       history: [],
       refreshedAt: 0,
     };
@@ -169,6 +194,7 @@ describe("readGitTree (Issue #146)", () => {
       behind: 0,
       unstaged: [],
       staged: [],
+      unmerged: [],
       history: [],
       refreshedAt: 0,
       ...overrides,

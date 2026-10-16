@@ -281,6 +281,7 @@ function makeGitState(overrides: Partial<GitState> = {}): GitState {
     behind: 0,
     unstaged: [{ relPath: "src/a.ts", code: "M" }],
     staged: [],
+    unmerged: [],
     history: [{ shortHash: "abc1234", dateRel: "2 hours ago", subject: "fix things" }],
     refreshedAt: 0,
     ...overrides,

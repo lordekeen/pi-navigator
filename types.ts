@@ -99,6 +99,13 @@ export interface GitState {
   behind: number;
   unstaged: GitChangedFile[];
   staged: GitChangedFile[];
+  /**
+   * Porcelain v1 unmerged (conflict) records, whose `code` is the full XY
+   * pair (e.g. "UU"). Kept separate so the two fabricated half-codes the
+   * old single-letter split produced never reach the panel or the tree
+   * badge (Issue #202).
+   */
+  unmerged: GitChangedFile[];
   history: GitCommit[];
   /**
    * Human readable state line when the repo is unavailable, or when it is

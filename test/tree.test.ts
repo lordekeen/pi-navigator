@@ -534,6 +534,7 @@ describe("untracked directory subtree (Issue #058)", () => {
         behind: 0,
         unstaged: porcelain.unstaged,
         staged: porcelain.staged,
+        unmerged: porcelain.unmerged,
         history: [],
         refreshedAt: 0,
       };

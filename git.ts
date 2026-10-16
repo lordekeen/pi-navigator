@@ -163,9 +163,10 @@ function stripPrefix(filePath: string, prefix: string): string | null {
 export function parsePorcelain(
   text: string,
   prefix: string,
-): { unstaged: GitChangedFile[]; staged: GitChangedFile[] } {
+): { unstaged: GitChangedFile[]; staged: GitChangedFile[]; unmerged: GitChangedFile[] } {
   const unstaged: GitChangedFile[] = [];
   const staged: GitChangedFile[] = [];
+  const unmerged: GitChangedFile[] = [];
   const records = text.split(NUL);
 
   for (let index = 0; index < records.length; index++) {
@@ -180,6 +181,14 @@ export function parsePorcelain(
     }
     const relPath = stripPrefix(filePath, prefix);
     if (!relPath) continue;
+    // Porcelain v1 reports a merge conflict as a two-character XY code.
+    // Reading raw[0]/raw[1] as independent single letters fabricated a
+    // staged "U" and an unstaged "U"; the pair is one unmerged record and
+    // must not reach `staged`/`unstaged` at all (Issue #202).
+    if (x === "U" || y === "U" || (x === "A" && y === "A") || (x === "D" && y === "D")) {
+      unmerged.push({ relPath, code: x + y });
+      continue;
+    }
     if (x === "?" && y === "?") {
       // The trailing slash is porcelain's marker for an entirely untracked
       // directory (`?? dir/`). Normalize it here — the one production
@@ -196,7 +205,7 @@ export function parsePorcelain(
     if (x !== " " && x !== "?") staged.push({ relPath, code: x });
     if (y !== " " && y !== "?") unstaged.push({ relPath, code: y });
   }
-  return { unstaged, staged };
+  return { unstaged, staged, unmerged };
 }
 
 /**
@@ -215,6 +224,7 @@ export async function readGitState(cwd: string, repo?: RepoInfo): Promise<GitSta
     behind: 0,
     unstaged: [],
     staged: [],
+    unmerged: [],
     history: [],
     refreshedAt: Date.now(),
   };
@@ -260,7 +270,7 @@ export async function readGitState(cwd: string, repo?: RepoInfo): Promise<GitSta
   }
 
   const statusText = statusRes.status === "ok" ? statusRes.stdout : "";
-  const { unstaged, staged } = parsePorcelain(statusText, detected.prefix);
+  const { unstaged, staged, unmerged } = parsePorcelain(statusText, detected.prefix);
 
   const history: GitCommit[] = [];
   const logText = logRes.status === "ok" ? logRes.stdout : "";
@@ -292,6 +302,7 @@ export async function readGitState(cwd: string, repo?: RepoInfo): Promise<GitSta
     behind,
     unstaged,
     staged,
+    unmerged,
     history,
     error: statusFailed ? "git status failed \u2014 changes not listed (press r to retry)" : undefined,
     refreshedAt: Date.now(),
@@ -306,7 +317,7 @@ export async function readGitState(cwd: string, repo?: RepoInfo): Promise<GitSta
  * not change. Comparing this string costs nothing next to `ls-files`.
  */
 export function gitTreeProbe(state: GitState): string {
-  const files = [...state.staged, ...state.unstaged].map((file) => `${file.code} ${file.relPath}`);
+  const files = [...state.staged, ...state.unstaged, ...state.unmerged].map((file) => `${file.code} ${file.relPath}`);
   return [`${state.branch ?? ""} ${state.ahead} ${state.behind}`, ...files].join("\n");
 }
 
@@ -409,6 +420,10 @@ export function gitCodeMap(state: GitState): Map<string, string> {
   const map = new Map<string, string>();
   for (const file of state.staged) map.set(file.relPath, file.code);
   for (const file of state.unstaged) map.set(file.relPath, file.code);
+  // Unmerged last: it wins, because the conflict is the state the user must
+  // resolve, and its two-char code is the one the tree badge should show
+  // (Issue #202).
+  for (const file of state.unmerged) map.set(file.relPath, file.code);
   return map;
 }
 

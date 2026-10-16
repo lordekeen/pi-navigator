@@ -60,6 +60,7 @@ function gitState(partial: Partial<GitState> = {}): GitState {
     behind: 0,
     unstaged: [],
     staged: [],
+    unmerged: [],
     history: [],
     refreshedAt: 0,
     ...partial,

@@ -216,6 +216,7 @@ function withGit(harness: Harness, overrides: Partial<GitState> = {}): void {
     behind: 0,
     unstaged: [{ relPath: "src/pkg/changed.ts", code: "M" }],
     staged: [],
+    unmerged: [],
     history: [{ shortHash: "abc1234", dateRel: "2 hours ago", subject: "fix things" }],
     refreshedAt: 0,
     ...overrides,

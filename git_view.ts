@@ -37,6 +37,16 @@ export function buildGitRows(git: GitState | null, expanded: ReadonlySet<string>
     rows.push({ kind: "group", label: git?.error ?? "git unavailable", tone: "dim" });
     return rows;
   }
+  // Unmerged first, mirroring `git status`'s "Unmerged paths" section: a
+  // conflict is what the user must act on (Issue #202).
+  if (git.unmerged.length > 0) {
+    rows.push({
+      kind: "group",
+      label: `Unmerged (${git.unmerged.length})`,
+      tone: "warning",
+    });
+    for (const file of git.unmerged) rows.push({ kind: "file", relPath: changedPath(file), code: file.code, staged: false });
+  }
   if (git.unstaged.length > 0) {
     rows.push({
       kind: "group",
@@ -53,7 +63,7 @@ export function buildGitRows(git: GitState | null, expanded: ReadonlySet<string>
     });
     for (const file of git.staged) rows.push({ kind: "file", relPath: changedPath(file), code: file.code, staged: true });
   }
-  if (git.unstaged.length === 0 && git.staged.length === 0) {
+  if (git.unstaged.length === 0 && git.staged.length === 0 && git.unmerged.length === 0) {
     // A failed status read swaps the Clean row for the error so an
     // unreadable change list never masquerades as a clean tree (Issue #107).
     if (git.error) {
@@ -289,6 +299,11 @@ export function codeText(code: string, theme: NavigatorTheme): string {
   if (code === "D") return T.error(code);
   if (code === "R") return T.warning(code);
   if (code === "C") return T.success(code);
+  // Unmerged pairs read as errors: the conflict is the actionable state
+  // (Issue #202).
+  if (code === "UU" || code === "AA" || code === "AU" || code === "UA" || code === "DU" || code === "UD" || code === "DD") {
+    return T.error(code);
+  }
   if (code === "??") return T.dim("?");
   if (code === "!!") return T.dim("!");
   return T.muted(code);
