@@ -120,3 +120,23 @@ describe("documentation guards (Issue #115)", () => {
     expect(readme).not.toMatch(/badge\/status-v\d+\.\d+\.\d+/);
   });
 });
+
+describe("ci.yml (Issue #210)", () => {
+  it("gates PRs and main pushes on typecheck + tests at both supported runtimes", () => {
+    // Before this workflow, nothing gated a PR on the test suite — a broken
+    // branch could merge and only surface after release. Both triggers matter:
+    // the PR gate stops the break pre-merge, and the main push re-verifies what
+    // landed. Both supported runtimes are exercised (the `engines` floor of 22
+    // and the Node 24 the publish pipeline runs), so a regression that only
+    // bites one of them is caught at PR time rather than at release.
+    const workflow = readFileSync(join(repoRoot, ".github/workflows/ci.yml"), "utf8");
+    expect(workflow).toContain("pull_request:");
+    expect(workflow).toContain("branches: [main]");
+    expect(workflow).toContain("node-version: ${{ matrix.node }}");
+    expect(workflow).toMatch(/node:\s*\[22,\s*24\]/);
+    expect(workflow).toContain("npm ci");
+    expect(workflow).toContain("npm run typecheck");
+    expect(workflow).toContain("npm test");
+    expect(workflow).toContain("cancel-in-progress: true");
+  });
+});
