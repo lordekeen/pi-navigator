@@ -61,6 +61,22 @@ describe("documentation guards (Issue #115)", () => {
     }
   });
 
+  it("lists every shipped root module in the AGENTS.md code-layout table (Issue #209)", () => {
+    const tableRows = [...agents.matchAll(/^\| `([a-z_]+\.ts)` \|/gm)]
+      .map((match) => match[1])
+      .filter((file): file is string => Boolean(file));
+    expect(tableRows.length).toBeGreaterThan(0);
+    // Completeness direction: a shipped module with no row leaves the next
+    // agent without an owner for it (ansi.ts / bytes.ts / open_target.ts did).
+    for (const module of rootModules()) {
+      expect(tableRows, `${module} is missing from the AGENTS.md code-layout table`).toContain(module);
+    }
+    // Deletion direction: a row that names no file is stale ownership.
+    for (const file of tableRows) {
+      expect(existsSync(join(repoRoot, file)), `AGENTS.md code-layout row "${file}" does not exist on disk`).toBe(true);
+    }
+  });
+
   it("keeps the package.json files allowlist complete and on disk (Issue #151)", () => {
     const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as { files: string[] };
     // Every publishable root module must be allowlisted, or the published
