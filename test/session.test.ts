@@ -1389,7 +1389,7 @@ describe("createSession: reflow clock (Issue #144)", () => {
     session.refresh();
     await flushTicks();
 
-    void session.loadFile("img.png", { image: IMAGE_REQ });
+    const load = session.loadFile("img.png", { image: IMAGE_REQ });
     // vi.waitFor polls on real timers (safe timers are captured before fake
     // timers install) and advances the virtual clock per check, so the real-fs
     // stat → chafa spawn lands before the assertion regardless of load; the
@@ -1402,8 +1402,12 @@ describe("createSession: reflow clock (Issue #144)", () => {
     expect(sink.reflowOpenImage).not.toHaveBeenCalled(); // re-armed, not fired
 
     // Let the load settle; the re-armed timer now re-validates and fires.
+    // Await the load itself rather than a fixed number of event-loop turns:
+    // the loader's post-render stat is real fs work, and `flushTicks` lost
+    // that race under CI contention — the timer fired while the load was
+    // still in flight, re-armed, and the assertion below saw zero calls.
     ctl.chafaRelease?.();
-    await flushTicks();
+    await load;
     await vi.advanceTimersByTimeAsync(IMAGE_RESIZE_DEBOUNCE_MS);
     expect(sink.reflowOpenImage).toHaveBeenCalledTimes(1);
     session.dispose();
