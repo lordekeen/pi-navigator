@@ -43,6 +43,7 @@
     "settings_menu.ts",
     "help.ts",
     "chafa.ts",
+    "native_image.ts",
     "images.ts",
     "frame.ts",
     "layout.ts",
