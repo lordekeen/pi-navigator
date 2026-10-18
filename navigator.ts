@@ -306,6 +306,7 @@ export class NavigatorOverlay implements Focusable {
   private disposed = false;
 
   private cachedWidth: number | undefined;
+  private cachedRows: number | undefined;
   private cachedLines: string[] | undefined;
 
   /** Nerd Font icon column enabled; never read from env here (Issue #028). */
@@ -653,6 +654,7 @@ export class NavigatorOverlay implements Focusable {
     // the same object and costs nothing.
     this.restyleOpenFile();
     this.cachedWidth = undefined;
+    this.cachedRows = undefined;
     this.cachedLines = undefined;
     this.viewerModel.invalidate("theme");
   }
@@ -1248,6 +1250,7 @@ export class NavigatorOverlay implements Focusable {
 
   private touch(): void {
     this.cachedWidth = undefined;
+    this.cachedRows = undefined;
     this.cachedLines = undefined;
   }
 
@@ -1317,7 +1320,11 @@ export class NavigatorOverlay implements Focusable {
 
 
   render(width: number): string[] {
-    if (this.cachedLines && this.cachedWidth === width) return this.cachedLines;
+    // Issue #207: the frame's row count is a function of the terminal
+    // height, so a height-only resize must not hit the width-keyed cache.
+    if (this.cachedLines && this.cachedWidth === width && this.cachedRows === this.getTerminalRows()) {
+      return this.cachedLines;
+    }
     const T = this.T;
     const overlayH = overlayHeight(this.getTerminalRows());
     const innerW = Math.max(0, width - 2);
@@ -1327,6 +1334,7 @@ export class NavigatorOverlay implements Focusable {
       // the pure builder in frame.ts; every line is clipped to `width`).
       const lines = buildCompactFrame(width, T);
       this.cachedWidth = width;
+      this.cachedRows = this.getTerminalRows();
       this.cachedLines = lines;
       this.mapHit = null; // no map exists in the compact frame
       return lines;
@@ -1401,6 +1409,7 @@ export class NavigatorOverlay implements Focusable {
     }
 
     this.cachedWidth = width;
+    this.cachedRows = this.getTerminalRows();
     this.cachedLines = lines;
     return lines;
   }

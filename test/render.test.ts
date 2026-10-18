@@ -32,7 +32,7 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => ({
 
 import { mapExtensionToIcon } from "../icons";
 import { MIN_OVERLAY_HEIGHT, MIN_OVERLAY_WIDTH } from "../constants";
-import { leftColumnWidth } from "../layout";
+import { leftColumnWidth, overlayHeight } from "../layout";
 import type { NavigatorLayout } from "../types";
 import type { NavigatorSettings } from "../settings";
 import { openSettingsMenu, type SettingsMenuDeps, type SettingsMenuTheme, type SettingsMenuUi } from "../settings_menu";
@@ -67,12 +67,13 @@ interface Harness {
 }
 
 function makeHarness(
-  rows: number,
+  rows: number | (() => number),
   enableIcons = false,
   initialLayout?: NavigatorLayout,
   loadedFile?: ViewerFile,
   cwd = "/work/repo",
 ): Harness {
+  const rowsOf = typeof rows === "function" ? rows : () => rows;
   const theme = makeNavigatorTheme({
     fg: (_color: string, text: string) => text,
     bg: (_color: string, text: string) => text,
@@ -84,7 +85,7 @@ function makeHarness(
   const overlay = new NavigatorOverlay({
     cwd,
     theme,
-    getTerminalRows: () => rows,
+    getTerminalRows: rowsOf,
     requestRender: () => undefined,
     onClose: () => undefined,
     enableIcons,
@@ -137,7 +138,7 @@ function makeHarness(
   };
   overlay.setGitState(git);
 
-  return { overlay, rows };
+  return { overlay, rows: rowsOf() };
 }
 
 /** Assert every rendered line fits the requested width, at the given size. */
@@ -149,6 +150,23 @@ function expectWidthSafe(overlay: NavigatorOverlay, width: number): string[] {
   }
   return lines;
 }
+
+
+describe("render frame cache (Issue #207)", () => {
+  it("re-renders when only the terminal height changes", () => {
+    const dims = { rows: 36 };
+    const { overlay } = makeHarness(() => dims.rows);
+    const tall = overlay.render(120);
+    expect(tall).toHaveLength(overlayHeight(36));
+
+    // Same width, shorter terminal: the frame's row count changes, so a cache
+    // keyed on width alone would hand back the 36-row frame here.
+    dims.rows = 20;
+    const short = overlay.render(120);
+    expect(short).toHaveLength(overlayHeight(20));
+    expect(short.length).not.toBe(tall.length);
+  });
+});
 
 describe("render width safety", () => {
   it("renders a cwd carrying an escape without leaking it, at every suite size (Issue #201)", () => {
