@@ -110,7 +110,11 @@ export function joinLeftRight(left: string, right: string, width: number): strin
   // overflows the pane there is nothing to share: cut it deliberately and
   // skip the gap/pad path, whose tail truncation would shift it right by the
   // gap cell and slice its end (Issue #189).
-  if (rightW >= width) return hardTruncate(right, width);
+  if (rightW >= width) {
+    // Issue #217: the hard cut may give back fewer cells than asked (a wide
+    // character cannot be split), so pad the row back to its requested width.
+    return padTo(hardTruncate(right, width), width);
+  }
   const maxLeft = leftBudget(width, right);
   const leftPart = visibleWidth(left) > maxLeft ? hardTruncate(left, maxLeft) : left;
   const gap = Math.max(1, width - visibleWidth(leftPart) - rightW);

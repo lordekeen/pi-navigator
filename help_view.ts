@@ -51,7 +51,10 @@ export function composeHelp(lines: string[], innerW: number, body: number, view:
   // A fixed 66-cell cap cut the longest row's meaning even on a wide terminal
   // (#132); where the terminal is still narrower the cut stays clean (#010).
   const descNeeded = Math.max(0, ...view.helpRows.map(([, description]) => visibleWidth(description)));
-  const boxW = Math.min(innerW - 2, Math.max(66, 4 + keyW + descNeeded));
+  const boxW = Math.max(0, Math.min(innerW - 2, Math.max(66, 4 + keyW + descNeeded)));
+  // Issue #217: at absurdly narrow widths boxW can fall below 2, which made
+  // the border `repeat(boxW - 2)` throw RangeError. Clamp once, use everywhere.
+  const innerBoxW = Math.max(0, boxW - 2);
   const visibleRows = helpVisibleRows(body, view.helpRows.length);
   const boxH = visibleRows + 3;
   const startRow = Math.max(0, Math.floor((body - boxH) / 2));
@@ -60,10 +63,10 @@ export function composeHelp(lines: string[], innerW: number, body: number, view:
 
   const modal: string[] = [];
   const inner = (text: string) => {
-    const padded = padTo(text, boxW - 2);
+    const padded = padTo(text, innerBoxW);
     return T.frame("\u2502") + padded + T.frame("\u2502");
   };
-  modal.push(T.frame(FRAME_CORNERS.tl + "\u2500".repeat(boxW - 2) + FRAME_CORNERS.tr));
+  modal.push(T.frame(FRAME_CORNERS.tl + "\u2500".repeat(innerBoxW) + FRAME_CORNERS.tr));
   modal.push(inner(" " + T.accent(T.bold("pi-navigator \u2014 keys"))));
   for (let i = 0; i < visibleRows; i++) {
     const row = view.helpRows[scroll + i];
@@ -86,7 +89,7 @@ export function composeHelp(lines: string[], innerW: number, body: number, view:
     }
     modal.push(inner(" " + keyCell + " " + T.muted(descCell)));
   }
-  modal.push(T.frame(FRAME_CORNERS.bl + "\u2500".repeat(boxW - 2) + FRAME_CORNERS.br));
+  modal.push(T.frame(FRAME_CORNERS.bl + "\u2500".repeat(innerBoxW) + FRAME_CORNERS.br));
 
   for (let i = 0; i < modal.length; i++) {
     const target = 3 + startRow + i; // lines[0..2] are top, title, separator

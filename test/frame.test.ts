@@ -124,6 +124,13 @@ describe("joinLeftRight", () => {
     expect(visibleWidth(out)).toBe(10);
     expect(out.replace("\x1b[0m", "")).toBe("branch-nam");
   });
+
+  it("pads the row when the right segment alone overflows in wide cells (Issue #217)", () => {
+    // Four 2-cell chars cannot be cut to 5 cells: the hard cut keeps two
+    // (4 cells) and the row must be padded back to the requested width.
+    const out = joinLeftRight("L", "\u754c".repeat(4), 5);
+    expect(visibleWidth(out)).toBe(5);
+  });
 });
 
 describe("leftBudget (Issue #147)", () => {
