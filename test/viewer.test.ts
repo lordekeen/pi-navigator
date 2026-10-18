@@ -78,6 +78,12 @@ describe("expandTabs", () => {
     expect(expandTabs("a\tb", 2)).toBe("a b");
     expect(expandTabs("no tabs", 4)).toBe("no tabs");
   });
+
+  it("puts a tab at the next stop after a wide character (Issue #218)", () => {
+    // 界 occupies TWO terminal cells, so the tab that follows it lands after
+    // two spaces at width 4 — counting code points put it after three.
+    expect(expandTabs("\u754c\tx", 4)).toBe("\u754c  x");
+  });
 });
 
 describe("decodeUtf8Head", () => {
