@@ -116,12 +116,14 @@ export function makeTuiKittyDecodeProbe(
         timer = setTimeout(() => settle("no-reply"), timeoutMs);
         unsubscribe = tui.addInputListener((data) => {
           if (settled) return undefined;
-          const verdict = consumeKittyProbeReply(state, data, id);
-          if (verdict === "ok" || verdict === "error") {
-            settle(verdict);
-            // Consume the completing chunk: it is the reply to our own query,
-            // nothing for the key decoder. Partial chunks are left alone.
-            return { consume: true };
+          const reply = consumeKittyProbeReply(state, data, id);
+          if (reply.verdict === "ok" || reply.verdict === "error") {
+            settle(reply.verdict);
+            // Consume the completing chunk, but hand back the bytes the reply
+            // did not consume (Issue #213): a keystroke coalesced with the
+            // terminal's answer must still reach the key decoder. Partial
+            // chunks are left alone.
+            return reply.leftover ? { consume: true, data: reply.leftover } : { consume: true };
           }
           return undefined;
         });

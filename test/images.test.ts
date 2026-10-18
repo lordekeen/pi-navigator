@@ -1570,53 +1570,64 @@ describe("kitty protocol probe helpers (Issue #101, #116)", () => {
   });
 
   it("consumeKittyProbeReply matches the OK reply terminated by ESC ST", () => {
-    expect(consumeKittyProbeReply(createKittyProbeState(), "\x1b_Gi=7;OK\x1b\\", 7)).toBe("ok");
+    expect(consumeKittyProbeReply(createKittyProbeState(), "\x1b_Gi=7;OK\x1b\\", 7).verdict).toBe("ok");
   });
 
   it("consumeKittyProbeReply matches the OK reply terminated by BEL", () => {
-    expect(consumeKittyProbeReply(createKittyProbeState(), "\x1b_Gi=7;OK\x07", 7)).toBe("ok");
+    expect(consumeKittyProbeReply(createKittyProbeState(), "\x1b_Gi=7;OK\x07", 7).verdict).toBe("ok");
   });
 
   it("treats any non-OK message as an error reply", () => {
     expect(
-      consumeKittyProbeReply(createKittyProbeState(), "\x1b_Gi=7;Invalid image data\x1b\\", 7),
+      consumeKittyProbeReply(createKittyProbeState(), "\x1b_Gi=7;Invalid image data\x1b\\", 7).verdict,
     ).toBe("error");
   });
 
   it("reassembles replies split across input chunks", () => {
     const state = createKittyProbeState();
-    expect(consumeKittyProbeReply(state, "\x1b_Gi=7;O", 7)).toBe("pending");
-    expect(consumeKittyProbeReply(state, "K\x1b\\", 7)).toBe("ok");
+    expect(consumeKittyProbeReply(state, "\x1b_Gi=7;O", 7).verdict).toBe("pending");
+    expect(consumeKittyProbeReply(state, "K\x1b\\", 7).verdict).toBe("ok");
+  });
+
+  it("reports the bytes after the probe reply (Issue #213)", () => {
+    const esc = consumeKittyProbeReply(createKittyProbeState(), "\x1b_Gi=7;OK\x1b\\j", 7);
+    expect(esc.verdict).toBe("ok");
+    expect(esc.leftover).toBe("j");
+    const bel = consumeKittyProbeReply(createKittyProbeState(), "\x1b_Gi=7;OK\x07k", 7);
+    expect(bel.verdict).toBe("ok");
+    expect(bel.leftover).toBe("k");
+    // A pending/foreign chunk never carries bytes to forward.
+    expect(consumeKittyProbeReply(createKittyProbeState(), "plain", 7).leftover).toBe("");
   });
 
   it("waits for the terminator once our id is seen", () => {
     const state = createKittyProbeState();
-    expect(consumeKittyProbeReply(state, "\x1b_Gi=7;", 7)).toBe("pending");
-    expect(consumeKittyProbeReply(state, "boom\x1b\\", 7)).toBe("error");
+    expect(consumeKittyProbeReply(state, "\x1b_Gi=7;", 7).verdict).toBe("pending");
+    expect(consumeKittyProbeReply(state, "boom\x1b\\", 7).verdict).toBe("error");
   });
 
   it("ignores replies addressed to other ids and unrelated input", () => {
     const state = createKittyProbeState();
-    expect(consumeKittyProbeReply(state, "\x1b_Gi=8;OK\x1b\\", 7)).toBe("foreign");
-    expect(consumeKittyProbeReply(state, "plain keystrokes", 7)).toBe("foreign");
+    expect(consumeKittyProbeReply(state, "\x1b_Gi=8;OK\x1b\\", 7).verdict).toBe("foreign");
+    expect(consumeKittyProbeReply(state, "plain keystrokes", 7).verdict).toBe("foreign");
     // The buffer resets, so our own reply still matches afterwards.
-    expect(consumeKittyProbeReply(state, "\x1b_Gi=7;OK\x1b\\", 7)).toBe("ok");
+    expect(consumeKittyProbeReply(state, "\x1b_Gi=7;OK\x1b\\", 7).verdict).toBe("ok");
   });
   it("skips a complete foreign reply and still matches ours in the same chunk (Issue #193)", () => {
     // ESC-ST-terminated foreign reply followed by ours in one chunk: the
     // foreign exchange must be skipped, not thrown away with our reply.
     expect(
-      consumeKittyProbeReply(createKittyProbeState(), "\x1b_Gi=8;OK\x1b\\\x1b_Gi=7;OK\x1b\\", 7),
+      consumeKittyProbeReply(createKittyProbeState(), "\x1b_Gi=8;OK\x1b\\\x1b_Gi=7;OK\x1b\\", 7).verdict,
     ).toBe("ok");
     // BEL-terminated foreign reply, and a foreign error message.
     expect(
-      consumeKittyProbeReply(createKittyProbeState(), "\x1b_Gi=8;boom\x07\x1b_Gi=7;OK\x07", 7),
+      consumeKittyProbeReply(createKittyProbeState(), "\x1b_Gi=8;boom\x07\x1b_Gi=7;OK\x07", 7).verdict,
     ).toBe("ok");
     // A foreign exchange split across chunks keeps its remainder buffered and
     // waits for the terminator instead of clearing the shared buffer.
     const split = createKittyProbeState();
-    expect(consumeKittyProbeReply(split, "\x1b_Gi=8;OK", 7)).toBe("pending");
-    expect(consumeKittyProbeReply(split, "\x1b\\\x1b_Gi=7;OK\x1b\\", 7)).toBe("ok");
+    expect(consumeKittyProbeReply(split, "\x1b_Gi=8;OK", 7).verdict).toBe("pending");
+    expect(consumeKittyProbeReply(split, "\x1b\\\x1b_Gi=7;OK\x1b\\", 7).verdict).toBe("ok");
   });
 });
 

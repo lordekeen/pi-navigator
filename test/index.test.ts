@@ -598,6 +598,15 @@ describe("makeTuiKittyDecodeProbe (Issue #101, #116)", () => {
     await expect(pending).resolves.toBe("ok");
   });
 
+  it("hands a coalesced keystroke after the reply back to normal input (Issue #213)", async () => {
+    const { tui, writes, emit } = fakeTui();
+    const probe = makeTuiKittyDecodeProbe(tui);
+    const pending = probe();
+    const id = /i=(\d+)/.exec(writes[0] ?? "")?.[1];
+    expect(emit(`\x1b_Gi=${id};OK\x1b\\j`)).toEqual({ consume: true, data: "j" });
+    await expect(pending).resolves.toBe("ok");
+  });
+
   it("resolves error on an explicit terminal error reply (Issue #116)", async () => {
     const { tui, writes, emit } = fakeTui();
     const probe = makeTuiKittyDecodeProbe(tui);

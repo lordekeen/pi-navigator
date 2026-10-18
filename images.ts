@@ -947,11 +947,21 @@ export function createKittyProbeState(): KittyProbeState {
   return { buffer: "" };
 }
 
+export interface KittyProbeReply {
+  verdict: "ok" | "error" | "pending" | "foreign";
+  /** Bytes the reply did not consume (Issue #213): a keystroke coalesced with
+   *  the terminal's answer in one input chunk. Always "" unless a verdict
+   *  settled. */
+  leftover: string;
+}
+
 /**
  * Feed one raw input chunk while a probe is pending. Returns:
- * - "pending": not settled yet (wait for more input; never consume)
- * - "foreign": this chunk does not belong to our probe's reply (consume=false)
- * - "ok" | "error": our probe's reply completed (the caller may consume)
+ * - verdict "pending": not settled yet (wait for more input; never consume)
+ * - verdict "foreign": this chunk does not belong to our probe's reply
+ * - verdict "ok" | "error": our probe's reply completed (the caller may
+ *   consume) and `leftover` carries any bytes after the reply's terminator
+ *   (Issue #213).
  *
  * A chunk may carry several exchanges: complete foreign replies are skipped
  * and the scan continues, so our own reply is not lost when it follows one in
@@ -961,13 +971,13 @@ export function consumeKittyProbeReply(
   state: KittyProbeState,
   data: string,
   id: number,
-): "ok" | "error" | "pending" | "foreign" {
+): KittyProbeReply {
   state.buffer += data;
   for (;;) {
     const start = state.buffer.indexOf("\x1b_G");
     if (start === -1) {
       if (state.buffer.length > 8192) state.buffer = "";
-      return "foreign";
+      return { verdict: "foreign", leftover: "" };
     }
     const head = state.buffer.slice(start);
     const match = head.match(/^\x1b_Gi=(\d+);(.*)$/s);
@@ -975,7 +985,7 @@ export function consumeKittyProbeReply(
       // A different kitty exchange (or a partial one): keep it in the buffer
       // only while it could still become our reply.
       if (!/^\x1b_Gi=\d+;/.test(head) && head.length > 128) state.buffer = "";
-      return "pending";
+      return { verdict: "pending", leftover: "" };
     }
     const matchId = Number(match[1]);
     const body = match[2] ?? "";
@@ -986,7 +996,7 @@ export function consumeKittyProbeReply(
       if (end === -1) {
         // The foreign exchange is still incomplete: wait for its terminator.
         if (body.length > 4096) state.buffer = "";
-        return "pending";
+        return { verdict: "pending", leftover: "" };
       }
       // Advance past the complete foreign exchange and re-scan: our own reply
       // may follow in the same chunk (Issue #193).
@@ -996,12 +1006,16 @@ export function consumeKittyProbeReply(
     if (end === -1) {
       // Our id but no terminator yet: wait for the rest of the chunk.
       if (body.length > 4096) state.buffer = "";
-      return "pending";
+      return { verdict: "pending", leftover: "" };
     }
+    // The reply occupies `prefix + body[0..end) + terminator`; everything after
+    // it in the buffer belongs to the key decoder (Issue #213).
+    const prefix = head.length - body.length;
+    const leftover = state.buffer.slice(start + prefix + end + (term === -1 ? 1 : 2));
     state.buffer = "";
     const text = body.slice(0, end).trim();
     // Anything but the literal "OK" is the protocol's error message.
-    return text === "OK" ? "ok" : "error";
+    return { verdict: text === "OK" ? "ok" : "error", leftover };
   }
 }
 
