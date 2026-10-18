@@ -35,7 +35,11 @@ jobs:
     name: typecheck + tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Report both runtimes even when one fails: fail-fast cancels the sibling
+    # job, which reads as a second failure (2026-10-17: a flaky test failed on
+    # 24 and the 22 job showed as cancelled, costing two reruns to diagnose).
     strategy:
+      fail-fast: false
       matrix:
         node: [22, 24]
     steps:
