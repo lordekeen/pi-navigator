@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.4](https://github.com/lordekeen/pi-navigator/compare/v0.18.3...v0.18.4) (2026-10-18)
+
+
+### Bug Fixes
+
+* **viewer,settings:** typed commit target, exclusive settings tmp, images split ([#223](https://github.com/lordekeen/pi-navigator/issues/223), [#224](https://github.com/lordekeen/pi-navigator/issues/224), [#225](https://github.com/lordekeen/pi-navigator/issues/225), [#226](https://github.com/lordekeen/pi-navigator/issues/226), [#237](https://github.com/lordekeen/pi-navigator/issues/237)) ([#238](https://github.com/lordekeen/pi-navigator/issues/238)) ([3cc4d5f](https://github.com/lordekeen/pi-navigator/commit/3cc4d5fe90b3ceaa633b34d3df05e370ddf83052))
+
 ## [0.18.3](https://github.com/lordekeen/pi-navigator/compare/v0.18.2...v0.18.3) (2026-10-18)
 
 
