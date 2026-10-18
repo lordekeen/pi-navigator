@@ -40,7 +40,6 @@ import {
 } from "./git";
 import {
   makeDeferredImageSupport,
-  makeImagePipeline,
   NATIVE_PROTOCOL_RULES,
   resolveImageSupport,
   type ImageSupport,
@@ -49,6 +48,7 @@ import {
   type NativeProtocol,
   type PiChafaApi,
 } from "./images";
+import { makeImagePipeline } from "./image_pipeline";
 import type { NavigatorSettings } from "./settings";
 import type { NavigatorTheme } from "./theme";
 import {

@@ -44,6 +44,7 @@
     "help.ts",
     "chafa.ts",
     "native_image.ts",
+    "image_pipeline.ts",
     "images.ts",
     "frame.ts",
     "layout.ts",
