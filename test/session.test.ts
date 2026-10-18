@@ -1362,6 +1362,30 @@ describe("createSession: reflow clock (Issue #144)", () => {
     session.dispose();
   });
 
+  it("lets a newer target replace the pending arm (Issue #205)", async () => {
+    vi.useFakeTimers();
+    ctl.support = "chafa";
+    const { session, sink } = makeSession();
+    const first: OpenTarget = { kind: "file", relPath: "a.png" };
+    const second: OpenTarget = { kind: "file", relPath: "b.png" };
+    sink.getImageView.mockReturnValue({ rendered: true, asCard: false });
+
+    // The support landing arms the debounce for the then-displayed A.
+    sink.getOpenTarget.mockReturnValue(first);
+    session.refresh();
+    await flushTicks();
+
+    // The displayed image moves to B before the debounce elapses. The timer
+    // must stay single, but its pending target must become B — the old arm
+    // kept A and the fire-time target check then dropped the reflow entirely.
+    sink.getOpenTarget.mockReturnValue(second);
+    session.imageViewChanged();
+
+    await vi.advanceTimersByTimeAsync(IMAGE_RESIZE_DEBOUNCE_MS);
+    expect(sink.reflowOpenImage).toHaveBeenCalledTimes(1);
+    session.dispose();
+  });
+
   it("dispose clears a pending reflow", async () => {
     vi.useFakeTimers();
     const { session, sink } = makeSession();

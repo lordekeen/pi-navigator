@@ -32,7 +32,7 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => ({
 
 import { mapExtensionToIcon } from "../icons";
 import { MIN_OVERLAY_HEIGHT, MIN_OVERLAY_WIDTH } from "../constants";
-import { leftColumnWidth } from "../layout";
+import { leftColumnWidth, overlayHeight } from "../layout";
 import type { NavigatorLayout } from "../types";
 import type { NavigatorSettings } from "../settings";
 import { openSettingsMenu, type SettingsMenuDeps, type SettingsMenuTheme, type SettingsMenuUi } from "../settings_menu";
@@ -43,6 +43,7 @@ import { entriesFromPaths } from "./tree_fixtures";
 import type { GitState, ViewerFile } from "../types";
 import type { LoadFileOptions } from "../viewer";
 import { NavigatorOverlay } from "../navigator";
+import { ViewerModel } from "../viewer_model";
 
 const KEYS = {
   down: "\x1b[B",
@@ -67,12 +68,13 @@ interface Harness {
 }
 
 function makeHarness(
-  rows: number,
+  rows: number | (() => number),
   enableIcons = false,
   initialLayout?: NavigatorLayout,
   loadedFile?: ViewerFile,
   cwd = "/work/repo",
 ): Harness {
+  const rowsOf = typeof rows === "function" ? rows : () => rows;
   const theme = makeNavigatorTheme({
     fg: (_color: string, text: string) => text,
     bg: (_color: string, text: string) => text,
@@ -84,7 +86,7 @@ function makeHarness(
   const overlay = new NavigatorOverlay({
     cwd,
     theme,
-    getTerminalRows: () => rows,
+    getTerminalRows: rowsOf,
     requestRender: () => undefined,
     onClose: () => undefined,
     enableIcons,
@@ -137,7 +139,7 @@ function makeHarness(
   };
   overlay.setGitState(git);
 
-  return { overlay, rows };
+  return { overlay, rows: rowsOf() };
 }
 
 /** Assert every rendered line fits the requested width, at the given size. */
@@ -149,6 +151,23 @@ function expectWidthSafe(overlay: NavigatorOverlay, width: number): string[] {
   }
   return lines;
 }
+
+
+describe("render frame cache (Issue #207)", () => {
+  it("re-renders when only the terminal height changes", () => {
+    const dims = { rows: 36 };
+    const { overlay } = makeHarness(() => dims.rows);
+    const tall = overlay.render(120);
+    expect(tall).toHaveLength(overlayHeight(36));
+
+    // Same width, shorter terminal: the frame's row count changes, so a cache
+    // keyed on width alone would hand back the 36-row frame here.
+    dims.rows = 20;
+    const short = overlay.render(120);
+    expect(short).toHaveLength(overlayHeight(20));
+    expect(short.length).not.toBe(tall.length);
+  });
+});
 
 describe("render width safety", () => {
   it("renders a cwd carrying an escape without leaking it, at every suite size (Issue #201)", () => {
@@ -1451,6 +1470,55 @@ describe("viewer minimap carve (Issue #165)", () => {
         expectWidthSafe(harness.overlay, width);
       }
     }
+  });
+
+  it("builds the map marks from the current search pass (Issue #212)", () => {
+    const needleAt = (line: number): ViewerFile => ({
+      kind: "text",
+      relPath: "src/big.ts",
+      sizeBytes: 4096,
+      lineCount: 200,
+      tokens: 2048,
+      lines: Array.from({ length: 200 }, (_, i) => (i === line ? "const needle = 1;" : `const value${i} = 0;`)),
+    });
+    const theme = makeNavigatorTheme({
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+      underline: (text: string) => text,
+      inverse: (text: string) => text,
+    } as never);
+    const model = new ViewerModel({ theme: () => theme, styleKey: () => "k" });
+    const input = (file: ViewerFile) => ({
+      file,
+      rightW: 80,
+      bodyArea: 20,
+      wrap: false,
+      renderMarkdown: false,
+      diskChanged: false,
+      imageCard: false,
+      minimap: { encoding: "braille" as const, palette: "mono" as const, width: 6, on: true },
+      scroll: 0,
+      hscroll: 0,
+    });
+    const blockOf = (blocks: readonly { start: number; end: number }[], line: number): number =>
+      blocks.findIndex((block) => line >= block.start && line < block.end);
+
+    model.render(input(needleAt(5)));
+    model.setQuery("needle");
+    const first = model.render(input(needleAt(5)));
+    const blocksA = first.minimap?.sketch.blocks ?? [];
+    expect(first.minimap?.marks).not.toBeNull();
+    expect(first.minimap?.marks?.current).toBe(blockOf(blocksA, 5));
+
+    // A fresh load re-renders with different content in the SAME pass; the
+    // marks must come from that pass's re-scan, not from the previous match
+    // set (the #212 off-by-one pass).
+    model.invalidate("content");
+    const second = model.render(input(needleAt(150)));
+    const blocksB = second.minimap?.sketch.blocks ?? [];
+    expect(second.minimap?.marks?.current).toBe(blockOf(blocksB, 150));
+    expect(second.minimap?.marks?.marked[blockOf(blocksB, 5)]).toBe(false);
   });
 
   it("drops the frame's border thumb while the map's band is the cue (Issue #165)", async () => {

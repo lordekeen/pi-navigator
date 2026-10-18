@@ -425,8 +425,14 @@ export function createSession(deps: SessionDeps): NavigatorSession {
    * pending reflow absorbs every later trigger until it fires.
    */
   const armReflow = (target: OpenTarget): void => {
-    if (closed || reflowTimer !== null) return;
+    if (closed) return;
+    // Issue #205: a newer target always replaces the pending one. The timer
+    // stays single (so repeats still coalesce), but the target captured for
+    // the fire-time validation must be the newest — otherwise a geometry
+    // change that lands after the displayed image moved on validates against
+    // a stale target and drops the reflow entirely.
     pendingReflow = target;
+    if (reflowTimer !== null) return;
     reflowTimer = setTimeout(() => {
       reflowTimer = null;
       const pending = pendingReflow;

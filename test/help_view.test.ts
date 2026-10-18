@@ -51,6 +51,13 @@ describe("composeHelp", () => {
     return { lines, modified };
   }
 
+  it("composes at innerW 3 without throwing (Issue #217)", () => {
+    const lines = ["", "", "", "", "", ""];
+    expect(() =>
+      composeHelp(lines, 3, 6, { theme: identityTheme, helpRows: HELP_ROWS, helpScroll: 0 }),
+    ).not.toThrow();
+  });
+
   it("writes the box into the centered row range, every line width-safe", () => {
     const { lines, modified } = compose(9);
     // boxW = min(innerW-2, 66) = 38, visibleRows = 21, boxH = 24, startRow = 0

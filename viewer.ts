@@ -17,7 +17,7 @@
 
 import { open, readFile, stat } from "node:fs/promises";
 import { getLanguageFromPath, highlightCode } from "@earendil-works/pi-coding-agent";
-import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 import {
   BINARY_SNIFF_BYTES,
@@ -53,7 +53,9 @@ export function expandTabs(text: string, tabWidth = TAB_WIDTH): string {
         column += spaces;
       } else {
         expanded += ch;
-        column += 1;
+        // Issue #218: terminal cells, not code points — a wide character
+        // occupies two columns, a combining mark none.
+        column += visibleWidth(ch);
       }
     }
     out.push(expanded);

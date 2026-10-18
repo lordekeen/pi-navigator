@@ -306,7 +306,12 @@ export class NavigatorOverlay implements Focusable {
   private disposed = false;
 
   private cachedWidth: number | undefined;
+  private cachedRows: number | undefined;
   private cachedLines: string[] | undefined;
+  /** Last width a frame was painted at (Issue #208). Input dispatch has no
+   *  width parameter, so the left column's painted visibility is derived
+   *  from the frame the user is actually looking at. */
+  private lastWidth: number | undefined;
 
   /** Nerd Font icon column enabled; never read from env here (Issue #028). */
   private enableIcons: boolean;
@@ -653,6 +658,7 @@ export class NavigatorOverlay implements Focusable {
     // the same object and costs nothing.
     this.restyleOpenFile();
     this.cachedWidth = undefined;
+    this.cachedRows = undefined;
     this.cachedLines = undefined;
     this.viewerModel.invalidate("theme");
   }
@@ -857,7 +863,11 @@ export class NavigatorOverlay implements Focusable {
     const isShiftTab = matchesKey(data, Key.shift("tab"));
     if (isShiftTab || matchesKey(data, Key.tab)) {
       // Tab/Shift+Tab cycle only the layout's visible panes (Issue #119, D8).
-      this.focus = cycleFocus(this.focus, isShiftTab ? -1 : 1, this.layout);
+      // A hidden left column leaves only the viewer, so there is nowhere to
+      // go (Issue #208) — focus must not move into a pane nobody can see.
+      if (this.leftColumnVisible(this.lastWidth)) {
+        this.focus = cycleFocus(this.focus, isShiftTab ? -1 : 1, this.layout);
+      }
       this.touch();
       return;
     }
@@ -903,8 +913,12 @@ export class NavigatorOverlay implements Focusable {
       return;
     }
 
-    if (this.focus === "files") this.handleFilesInput(data);
-    else if (this.focus === "git") this.handleGitInput(data);
+    // Issue #208: route by the focus the frame actually shows, not by the
+    // stored `focus` — a pane hidden by `t` or a narrow terminal must not
+    // keep receiving the keys aimed at what is on screen.
+    const focus = this.effectiveFocus();
+    if (focus === "files") this.handleFilesInput(data);
+    else if (focus === "git") this.handleGitInput(data);
     else this.handleViewerInput(data);
   }
 
@@ -1211,12 +1225,13 @@ export class NavigatorOverlay implements Focusable {
 
   private async copyContext(): Promise<void> {
     let value = "";
-    if (this.focus === "git") {
+    const focus = this.effectiveFocus();
+    if (focus === "git") {
       const row = this.gitNavRows()[this.gitCursor];
       if (row?.kind === "file") value = row.relPath;
       else if (row?.kind === "commit") value = row.commit.shortHash;
       else if (row?.kind === "commit-child") value = row.commit.shortHash;
-    } else if (this.focus === "viewer") {
+    } else if (focus === "viewer") {
       // The in-flight target first: while a load runs, the displayed
       // ViewerFile still describes the previous content (Issue #142).
       const target = this.viewTarget ?? targetOf(this.viewFile);
@@ -1248,7 +1263,34 @@ export class NavigatorOverlay implements Focusable {
 
   private touch(): void {
     this.cachedWidth = undefined;
+    this.cachedRows = undefined;
     this.cachedLines = undefined;
+  }
+
+  /**
+   * Whether the left column is painted at `width` (Issue #208). `t` and a
+   * narrow terminal both hide it; input routing has to agree with the frame,
+   * not with `showLeftColumn` alone.
+   */
+  private leftColumnVisible(width: number | undefined): boolean {
+    if (!this.showLeftColumn) return false;
+    // No frame yet: nothing has been painted to disagree with, so keep the
+    // pre-#208 routing.
+    if (width === undefined) return true;
+    const innerW = Math.max(0, width - 2);
+    const body = bodyRows(overlayHeight(this.getTerminalRows()));
+    return useLeftColumn(innerW, body, true);
+  }
+
+  /**
+   * The focus the frame and input routing honor (Issue #208): a pane that is
+   * not painted cannot hold focus, so it falls back to the viewer. `focus`
+   * itself is never rewritten — widening the terminal or pressing `t` again
+   * restores the pane without a render-time focus write (Issue #053).
+   */
+  private effectiveFocus(width: number | undefined = this.lastWidth): Focus {
+    if (this.focus === "viewer") return "viewer";
+    return this.leftColumnVisible(width) ? this.focus : "viewer";
   }
 
 
@@ -1317,7 +1359,12 @@ export class NavigatorOverlay implements Focusable {
 
 
   render(width: number): string[] {
-    if (this.cachedLines && this.cachedWidth === width) return this.cachedLines;
+    this.lastWidth = width;
+    // Issue #207: the frame's row count is a function of the terminal
+    // height, so a height-only resize must not hit the width-keyed cache.
+    if (this.cachedLines && this.cachedWidth === width && this.cachedRows === this.getTerminalRows()) {
+      return this.cachedLines;
+    }
     const T = this.T;
     const overlayH = overlayHeight(this.getTerminalRows());
     const innerW = Math.max(0, width - 2);
@@ -1327,12 +1374,14 @@ export class NavigatorOverlay implements Focusable {
       // the pure builder in frame.ts; every line is clipped to `width`).
       const lines = buildCompactFrame(width, T);
       this.cachedWidth = width;
+      this.cachedRows = this.getTerminalRows();
       this.cachedLines = lines;
       this.mapHit = null; // no map exists in the compact frame
       return lines;
     }
     const body = bodyRows(overlayH);
     const withLeft = useLeftColumn(innerW, body, this.showLeftColumn);
+    const focus = this.effectiveFocus(width);
     const leftW = withLeft ? leftColumnWidth(innerW) : 0;
     const rightW = withLeft ? innerW - leftW - 1 : innerW;
     const { filesH, gitH } = layoutRows(body, this.layout);
@@ -1341,8 +1390,8 @@ export class NavigatorOverlay implements Focusable {
     // surviving group owns the full body and no separator row is drawn.
     const showSeparator = this.layout === "files-git-viewer";
 
-    const leftRows = withLeft ? this.buildLeftRows(leftW, { filesH, gitH }) : null;
-    const rightRows = this.buildRightRows(rightW, body);
+    const leftRows = withLeft ? this.buildLeftRows(leftW, { filesH, gitH }, focus) : null;
+    const rightRows = this.buildRightRows(rightW, body, focus);
     this.maybeScheduleResizeReflow();
 
     // Issue #137 §4: the frame's right border column doubles as the viewer
@@ -1368,7 +1417,7 @@ export class NavigatorOverlay implements Focusable {
         : buildFooterRow(innerW, {
             theme: T,
             mode: this.mode,
-            focus: this.focus,
+            focus,
             notice: this.notice,
             layout: this.layout,
             // Issue #135 L1: the `m` hint is dropped for files that cannot
@@ -1401,6 +1450,7 @@ export class NavigatorOverlay implements Focusable {
     }
 
     this.cachedWidth = width;
+    this.cachedRows = this.getTerminalRows();
     this.cachedLines = lines;
     return lines;
   }
@@ -1415,7 +1465,7 @@ export class NavigatorOverlay implements Focusable {
    * (filesH + placeholder + gitH = body) holds without a separate body
    * parameter.
    */
-  private buildLeftRows(leftW: number, heights: { filesH: number; gitH: number }): string[] {
+  private buildLeftRows(leftW: number, heights: { filesH: number; gitH: number }, focus: Focus): string[] {
     const rows: string[] = [];
     const panes = layoutPanes(this.layout);
 
@@ -1430,7 +1480,7 @@ export class NavigatorOverlay implements Focusable {
         filterQuery: this.filterQuery,
         openRelPath: targetPath(this.viewTarget) ?? this.viewFile?.relPath ?? null,
         filesCursor: this.filesCursor,
-        focus: this.focus,
+        focus,
       };
       rows.push(buildFilesHeader(leftW, filesRowModel.length, filesCtx));
       for (let i = 0; i < filesAreaRows; i++) {
@@ -1464,7 +1514,7 @@ export class NavigatorOverlay implements Focusable {
 
       rows.push(buildGitHeader(leftW, {
         theme: this.T,
-        focus: this.focus,
+        focus,
         git: this.git,
         treeSource: this.treeSource,
         // L3: position + overflow for the git pane's header. navRows (not the
@@ -1519,7 +1569,7 @@ export class NavigatorOverlay implements Focusable {
   }
 
 
-  private buildRightRows(rightW: number, body: number): string[] {
+  private buildRightRows(rightW: number, body: number, focus: Focus): string[] {
     const isSwitching =
       this.viewLoading && this.viewTarget !== null && !sameTarget(this.viewTarget, targetOf(this.viewFile));
     const file = isSwitching ? null : this.viewFile;
@@ -1569,7 +1619,7 @@ export class NavigatorOverlay implements Focusable {
     const scrollWindow = out.window.scrollWindow;
     const view: ViewerPaneView = {
       theme: this.T,
-      focus: this.focus,
+      focus,
       home: this.home,
       focused: this.focused,
       file,

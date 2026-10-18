@@ -256,6 +256,29 @@ describe("focus cycling", () => {
  *  accent-colored pane label reveals the focused pane under assertions. */
 const toneTheme = (color: string, text: string): string => `${color}:${text}`;
 
+describe("focus follows visibility (Issue #208)", () => {
+  it("does not route input to a left pane hidden by t", () => {
+    const harness = makeHarness();
+    withTree(harness, ["README.md", "package.json"]);
+    // Paint a frame first: input dispatch derives the left column's visibility
+    // from the width the overlay was last rendered at.
+    harness.overlay.render(120);
+    harness.overlay.handleInput("t"); // hide the left column
+    harness.overlay.handleInput(KEYS.enter); // a files-only verb
+    expect(harness.opened).toEqual([]); // the hidden pane never saw it
+  });
+
+  it("marks the viewer as focused when the left column is auto-hidden", () => {
+    const { overlay } = makeHarness(36, undefined, toneTheme);
+    const frame = overlay.render(60).join("\n");
+    // Width 60 hides the left column entirely; the footer must accent the
+    // pane that is actually painted, not the stored focus.
+    expect(frame).toContain("accent:viewer");
+    expect(frame).not.toContain("accent:files");
+    expect(frame).not.toContain("accent:git");
+  });
+});
+
 describe("layout modes (Issue #119)", () => {
   it("opens focused on the pane the layout starts with", () => {
     expect(makeHarness(36, undefined, toneTheme).overlay.render(120).join("\n")).toContain("accent:files");
