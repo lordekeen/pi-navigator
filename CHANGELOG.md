@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.18.3](https://github.com/lordekeen/pi-navigator/compare/v0.18.2...v0.18.3) (2026-10-18)
+
+
+### Bug Fixes
+
+* **test:** await the load settle in the reflow race ([#233](https://github.com/lordekeen/pi-navigator/issues/233)) ([#234](https://github.com/lordekeen/pi-navigator/issues/234)) ([0c34ca0](https://github.com/lordekeen/pi-navigator/commit/0c34ca0845ff6eeaa1b7a97ddf8348e87ab1b69a))
+* viewer and pane state (Phase 3) ([#205](https://github.com/lordekeen/pi-navigator/issues/205), [#207](https://github.com/lordekeen/pi-navigator/issues/207), [#208](https://github.com/lordekeen/pi-navigator/issues/208), [#212](https://github.com/lordekeen/pi-navigator/issues/212), [#213](https://github.com/lordekeen/pi-navigator/issues/213), [#214](https://github.com/lordekeen/pi-navigator/issues/214), [#215](https://github.com/lordekeen/pi-navigator/issues/215), [#217](https://github.com/lordekeen/pi-navigator/issues/217), [#218](https://github.com/lordekeen/pi-navigator/issues/218)) ([#236](https://github.com/lordekeen/pi-navigator/issues/236)) ([98b92af](https://github.com/lordekeen/pi-navigator/commit/98b92af03534745c0f67bd02692eb77b6c549b47))
+
 ## [0.18.2](https://github.com/lordekeen/pi-navigator/compare/v0.18.1...v0.18.2) (2026-10-16)
 
 
