@@ -14,6 +14,7 @@
  * in this module reads process.env.
  */
 
+import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 // pi-lens-ignore: TS2304
 import { dirname } from "node:path";
@@ -679,14 +680,24 @@ export function serializeNavigatorSettings(settings: NavigatorSettings): Record<
 export function writeNavigatorSettings(path: string, settings: NavigatorSettings): void {
   const dir = dirname(path);
   if (dir) mkdirSync(dir, { recursive: true });
-  const tmp = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  // Issue #226: an unpredictable temp name plus O_EXCL creation. `wx` fails
+  // rather than clobbering a path that already exists, and the UUID removes
+  // the pid+Date.now()+Math.random() guessability the old name had.
+  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  let created = false;
   let renamed = false;
   try {
-    writeFileSync(tmp, JSON.stringify(serializeNavigatorSettings(settings), null, 2), "utf8");
+    writeFileSync(tmp, JSON.stringify(serializeNavigatorSettings(settings), null, 2), {
+      encoding: "utf8",
+      flag: "wx",
+    });
+    created = true;
     renameSync(tmp, path);
     renamed = true;
   } finally {
-    if (!renamed) {
+    // Only a temp file WE created may be removed: an EEXIST from `wx` means
+    // the path belonged to someone else and must survive.
+    if (created && !renamed) {
       try {
         unlinkSync(tmp);
       } catch {

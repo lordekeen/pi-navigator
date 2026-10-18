@@ -10,7 +10,20 @@
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+/** Records every writeFileSync call so the temp-file name and flags are observable (Issue #226). */
+const fsWrites = vi.hoisted(() => ({ calls: [] as Array<{ path: string; options: unknown }> }));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    writeFileSync: ((path: string, data: string, options?: unknown) => {
+      fsWrites.calls.push({ path: String(path), options });
+      return (actual.writeFileSync as (...args: unknown[]) => void)(path, data, options);
+    }) as typeof actual.writeFileSync,
+  };
+});
 
 import {
   DEFAULT_NAVIGATOR_SETTINGS,
@@ -955,6 +968,23 @@ describe("writeNavigatorSettings", () => {
       layout: { default: "files-viewer" },
     });
     expect(readdirSync(dir)).toEqual(["pi-navigator.json"]);
+  });
+
+  it("creates the temp file exclusively under an unpredictable name (Issue #226)", () => {
+    const path = join(dir, "pi-navigator.json");
+    fsWrites.calls.length = 0;
+    expect(commitNavigatorSettings(path, fullSettings())).toMatchObject({ ok: true });
+    expect(commitNavigatorSettings(path, fullSettings({ images: { mode: "chafa" } }))).toMatchObject({
+      ok: true,
+    });
+    const temps = fsWrites.calls.filter((call) => call.path.endsWith(".tmp"));
+    expect(temps).toHaveLength(2);
+    for (const call of temps) {
+      // `wx` refuses to clobber a path that already exists.
+      expect(call.options).toMatchObject({ encoding: "utf8", flag: "wx" });
+    }
+    // Two commits never reuse the same temp path.
+    expect(temps[0]?.path).not.toBe(temps[1]?.path);
   });
 
   it("cleans up the temporary file if rename fails", () => {
