@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { decodeStrictUtf8 } from "../bytes";
+import { boundText, decodeStrictUtf8 } from "../bytes";
 
 describe("decodeStrictUtf8 (Issue #220)", () => {
   /** What a latin1-decoded raw read yields for the given UTF-8 text. */
@@ -24,5 +24,16 @@ describe("decodeStrictUtf8 (Issue #220)", () => {
     // Not a valid UTF-8 byte sequence: 0xFF is never a lead or continuation.
     const raw = Buffer.from([0x62, 0x61, 0x64, 0xff, 0x2e, 0x74, 0x78, 0x74]).toString("latin1");
     expect(decodeStrictUtf8(raw)).toBeNull();
+  });
+});
+
+describe("boundText (Issue #225)", () => {
+  it("ellipsizes past the cap and leaves shorter text untouched", () => {
+    expect(boundText("abcdef", 4)).toBe("abc\u2026");
+    expect(boundText("abcd", 4)).toBe("abcd");
+    expect(boundText("", 4)).toBe("");
+    // The result never exceeds the cap, even at degenerate caps.
+    expect(boundText("abcdef", 1)).toBe("\u2026");
+    expect(boundText("abcdef", 0)).toBe("\u2026");
   });
 });

@@ -10,7 +10,7 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 
 import type { NavigatorTheme } from "./theme";
-import { hardTruncate } from "./ansi";
+import { hardTruncate, stripAnsi } from "./ansi";
 import { FRAME_CORNERS, padTo } from "./frame";
 
 /** Help rows that fit. Shared by the input clamp and the renderer. */
@@ -84,7 +84,7 @@ export function composeHelp(lines: string[], innerW: number, body: number, view:
     const descWidth = boxW - 4 - keyW;
     let descCell = description;
     if (visibleWidth(description) > descWidth) {
-      const cut = hardTruncate(description, Math.max(1, descWidth - 1)).replace(/\x1b\[[0-9;]*m/g, "");
+      const cut = stripAnsi(hardTruncate(description, Math.max(1, descWidth - 1)));
       descCell = cut + "\u2026";
     }
     modal.push(inner(" " + keyCell + " " + T.muted(descCell)));

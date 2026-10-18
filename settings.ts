@@ -26,6 +26,7 @@ import {
   NAVIGATOR_LAYOUT_FLAG,
 } from "./constants";
 import { ICONS_ENV, parseIconMode } from "./icons";
+import { boundText } from "./bytes";
 import { parseTruthyEnv } from "./env";
 import { NAVIGATOR_LAYOUTS, type NavigatorLayout } from "./types";
 
@@ -283,10 +284,6 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
-}
-
-function bounded(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max)}…`;
 }
 
 /**
@@ -626,7 +623,7 @@ export function loadNavigatorSettings(paths: {
     raw = JSON.parse(readFileSync(paths.userPath, "utf8"));
   } catch (error) {
     if ((error as { code?: string } | null)?.code !== "ENOENT") {
-      warnings.push(`pi-navigator settings unreadable: ${bounded(String(error), 160)}`);
+      warnings.push(`pi-navigator settings unreadable: ${boundText(String(error), 160)}`);
     }
     // Missing or corrupt file: fall through to defaults.
     raw = {};
@@ -713,7 +710,7 @@ export function commitNavigatorSettings(
     writeNavigatorSettings(path, settings);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return { ok: false, error: bounded(message, 160) };
+    return { ok: false, error: boundText(message, 160) };
   }
   const reloaded = loadNavigatorSettings({ userPath: path });
   return { ok: true, settings: reloaded.settings, warnings: reloaded.warnings };

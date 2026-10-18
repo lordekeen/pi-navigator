@@ -2,8 +2,24 @@
  * UTF-8 byte-boundary helpers (Issue #172): one cap shared by the viewer's
  * capped file reads and the git commit reads, so a byte budget never splits
  * a code point. (Issue #220) adds the strict decoder git's raw path listings
- * pass through.
+ * pass through. Issue #225: also the one home for the two tiny bound
+ * primitives (`boundText`, `clamp`) the data and display modules share.
  */
+
+/**
+ * Bound a display string to `max` characters with an ellipsis (Issue #225).
+ * Callers facing untrusted text sanitize first (images.ts does), so the cap
+ * and the ellipsis arithmetic exist exactly once.
+ */
+export function boundText(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return `${text.slice(0, Math.max(0, max - 1))}\u2026`;
+}
+
+/** Clamp `value` into the inclusive range [min, max]. */
+export function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
 
 /** A byte that is a UTF-8 continuation (0b10xxxxxx). */
 function isContinuation(byte: number): boolean {

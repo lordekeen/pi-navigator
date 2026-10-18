@@ -209,6 +209,19 @@ export const LEFT_COLUMN_MAX = 44;
 /** Below this inner width the left column is hidden (toggle with t). */
 export const LEFT_COLUMN_HIDE_BELOW = 72;
 
+/** Left column gates (Issue #225): the body rows and viewer width it needs. */
+export const LEFT_COLUMN_MIN_BODY_ROWS = 8;
+export const LEFT_COLUMN_MIN_VIEWER_WIDTH = 30;
+
+/**
+ * Files/git split inside the left column (Issue #225): the files share of the
+ * body, its floor, and the floor used once the git pane is squeezed to
+ * GIT_MIN_ROWS.
+ */
+export const FILES_SPLIT_RATIO = 0.55;
+export const FILES_MIN_ROWS = 6;
+export const FILES_MIN_ROWS_WITH_GIT = 3;
+
 /** Minimum rows reserved for the git section of the left column. */
 export const GIT_MIN_ROWS = 4;
 

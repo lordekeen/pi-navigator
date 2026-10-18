@@ -30,7 +30,7 @@ import {
   TAB_WIDTH,
 } from "./constants";
 import { escapeSpans, sanitizeText, sliceStyled, visibleTextWidth } from "./ansi";
-import { truncateUtf8ToBytes } from "./bytes";
+import { boundText, truncateUtf8ToBytes } from "./bytes";
 import { type ImageAttemptRenderer, type RenderOutcome } from "./images";
 import type { SearchMatch, ViewerFile } from "./types";
 
@@ -307,9 +307,7 @@ export type ImageRenderer = (absPath: string) => Promise<RenderOutcome>;
 
 /** Bound a renderer failure reason so the card hint stays within the cap. */
 function boundImageError(reason: string): string {
-  return reason.length > IMAGE_ERROR_MAX_CHARS
-    ? reason.slice(0, IMAGE_ERROR_MAX_CHARS - 1) + "\u2026"
-    : reason;
+  return boundText(reason, IMAGE_ERROR_MAX_CHARS);
 }
 
 /**

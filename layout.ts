@@ -9,10 +9,15 @@
  */
 
 import {
+  FILES_MIN_ROWS,
+  FILES_MIN_ROWS_WITH_GIT,
+  FILES_SPLIT_RATIO,
   GIT_MIN_ROWS,
   LEFT_COLUMN_HIDE_BELOW,
   LEFT_COLUMN_MAX,
   LEFT_COLUMN_MIN,
+  LEFT_COLUMN_MIN_BODY_ROWS,
+  LEFT_COLUMN_MIN_VIEWER_WIDTH,
   LEFT_COLUMN_RATIO,
   OVERLAY_HEIGHT_RATIO,
   OVERLAY_MARGIN_ROWS,
@@ -42,9 +47,9 @@ export function bodyRows(overlayH: number): number {
 }
 
 export function useLeftColumn(innerW: number, body: number, showTree: boolean): boolean {
-  if (!showTree || body < 8) return false;
+  if (!showTree || body < LEFT_COLUMN_MIN_BODY_ROWS) return false;
   const candidate = leftColumnWidth(innerW);
-  return innerW >= LEFT_COLUMN_HIDE_BELOW && innerW - candidate - 1 >= 30;
+  return innerW >= LEFT_COLUMN_HIDE_BELOW && innerW - candidate - 1 >= LEFT_COLUMN_MIN_VIEWER_WIDTH;
 }
 
 export function leftColumnWidth(innerW: number): number {
@@ -89,10 +94,10 @@ export function viewerArea(termRows: number): number {
 }
 
 export function splitRows(body: number): { filesH: number; gitH: number } {
-  let filesH = Math.max(6, Math.floor(body * 0.55));
+  let filesH = Math.max(FILES_MIN_ROWS, Math.floor(body * FILES_SPLIT_RATIO));
   let gitH = body - filesH - 1;
   if (gitH < GIT_MIN_ROWS) {
-    filesH = Math.max(3, body - GIT_MIN_ROWS - 1);
+    filesH = Math.max(FILES_MIN_ROWS_WITH_GIT, body - GIT_MIN_ROWS - 1);
     gitH = Math.max(2, body - filesH - 1);
   }
   return { filesH, gitH };

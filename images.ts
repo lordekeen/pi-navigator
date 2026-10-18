@@ -63,6 +63,7 @@ import {
 import type { NavigatorImageMode } from "./settings";
 import { parseTruthyEnv } from "./env";
 import { sanitizeText } from "./ansi";
+import { boundText, clamp } from "./bytes";
 
 
 /** Effective image renderer for a session (spec §5.4, D10). */
@@ -83,10 +84,6 @@ function nodeReadText(path: string): string | undefined {
   }
 }
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
 /**
  * Bound a user-facing failure detail to IMAGE_ERROR_MAX_CHARS. This is the
  * single untrusted-boundary bounder: every failure/probe detail (chafa
@@ -97,10 +94,7 @@ function clamp(value: number, min: number, max: number): number {
  * Sanitizing before the length cap keeps the stored string ≤ the cap.
  */
 function bounded(text: string): string {
-  const clean = sanitizeText(text);
-  return clean.length <= IMAGE_ERROR_MAX_CHARS
-    ? clean
-    : `${clean.slice(0, IMAGE_ERROR_MAX_CHARS - 1)}…`;
+  return boundText(sanitizeText(text), IMAGE_ERROR_MAX_CHARS);
 }
 
 /**
