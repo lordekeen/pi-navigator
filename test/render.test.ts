@@ -43,6 +43,7 @@ import { entriesFromPaths } from "./tree_fixtures";
 import type { GitState, ViewerFile } from "../types";
 import type { LoadFileOptions } from "../viewer";
 import { NavigatorOverlay } from "../navigator";
+import { ViewerModel } from "../viewer_model";
 
 const KEYS = {
   down: "\x1b[B",
@@ -1469,6 +1470,55 @@ describe("viewer minimap carve (Issue #165)", () => {
         expectWidthSafe(harness.overlay, width);
       }
     }
+  });
+
+  it("builds the map marks from the current search pass (Issue #212)", () => {
+    const needleAt = (line: number): ViewerFile => ({
+      kind: "text",
+      relPath: "src/big.ts",
+      sizeBytes: 4096,
+      lineCount: 200,
+      tokens: 2048,
+      lines: Array.from({ length: 200 }, (_, i) => (i === line ? "const needle = 1;" : `const value${i} = 0;`)),
+    });
+    const theme = makeNavigatorTheme({
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+      underline: (text: string) => text,
+      inverse: (text: string) => text,
+    } as never);
+    const model = new ViewerModel({ theme: () => theme, styleKey: () => "k" });
+    const input = (file: ViewerFile) => ({
+      file,
+      rightW: 80,
+      bodyArea: 20,
+      wrap: false,
+      renderMarkdown: false,
+      diskChanged: false,
+      imageCard: false,
+      minimap: { encoding: "braille" as const, palette: "mono" as const, width: 6, on: true },
+      scroll: 0,
+      hscroll: 0,
+    });
+    const blockOf = (blocks: readonly { start: number; end: number }[], line: number): number =>
+      blocks.findIndex((block) => line >= block.start && line < block.end);
+
+    model.render(input(needleAt(5)));
+    model.setQuery("needle");
+    const first = model.render(input(needleAt(5)));
+    const blocksA = first.minimap?.sketch.blocks ?? [];
+    expect(first.minimap?.marks).not.toBeNull();
+    expect(first.minimap?.marks?.current).toBe(blockOf(blocksA, 5));
+
+    // A fresh load re-renders with different content in the SAME pass; the
+    // marks must come from that pass's re-scan, not from the previous match
+    // set (the #212 off-by-one pass).
+    model.invalidate("content");
+    const second = model.render(input(needleAt(150)));
+    const blocksB = second.minimap?.sketch.blocks ?? [];
+    expect(second.minimap?.marks?.current).toBe(blockOf(blocksB, 150));
+    expect(second.minimap?.marks?.marked[blockOf(blocksB, 5)]).toBe(false);
   });
 
   it("drops the frame's border thumb while the map's band is the cue (Issue #165)", async () => {

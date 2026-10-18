@@ -211,7 +211,12 @@ export class ViewerModel {
     // is the map texts' row count once they are built.
     const map = input.minimap;
     let mapW = 0;
-    let minimap: { sketch: MinimapSketch; width: number; marks: MinimapMarks | null } | null = null;
+    // The map is DECIDED here (it settles rowsW) but its marks are built after
+    // the search re-scan below (Issue #212).
+    let mapPlan: {
+      entry: { texts: string[]; rowLines: number[] | null };
+      sketch: MinimapSketch;
+    } | null = null;
     if (
       file &&
       map.encoding !== "off" &&
@@ -236,7 +241,7 @@ export class ViewerModel {
         );
         if (sketch) {
           mapW = map.width;
-          minimap = { sketch, width: mapW, marks: this.minimapMarks(entry, sketch) };
+          mapPlan = { entry, sketch };
         }
       }
     }
@@ -245,9 +250,21 @@ export class ViewerModel {
     const rowsW = contentW - (mapW > 0 ? mapW + MINIMAP_DIVIDER_WIDTH : 0);
 
     const mdLines = useRendered && file ? this.getRenderedMarkdownLines(file, rowsW) : null;
+
+    // Issue #212: the search re-scan runs after the rendered lines it scans
+    // and before the map marks are derived, so one pass can never mark the
+    // previous file's match set.
     this.latestFile = file;
     this.latestRendered = useRendered;
     this.recomputeSearchIfNeeded();
+    const minimap =
+      mapPlan === null
+        ? null
+        : {
+            sketch: mapPlan.sketch,
+            width: mapW,
+            marks: this.minimapMarks(mapPlan.entry, mapPlan.sketch),
+          };
 
     let content: ViewerContent = { kind: "none" };
     let win: ViewerWindow;
