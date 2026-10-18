@@ -42,6 +42,7 @@
     "settings.ts",
     "settings_menu.ts",
     "help.ts",
+    "chafa.ts",
     "images.ts",
     "frame.ts",
     "layout.ts",
