@@ -7,6 +7,15 @@
  */
 
 
+/**
+ * Title path clipping (Issue #215): the most code points a shortened title
+ * path may keep, and how many of them the ellipsis takes from the tail.
+ * Counted in code points, not UTF-16 units, so a cut can never split a
+ * surrogate pair.
+ */
+export const TITLE_PATH_MAX = 48;
+export const TITLE_PATH_TAIL = TITLE_PATH_MAX - 1;
+
 /** Git and tree refresh base interval while the overlay is open. */
 export const REFRESH_INTERVAL_MS = 3000;
 

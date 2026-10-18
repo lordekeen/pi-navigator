@@ -172,6 +172,15 @@ describe("shortPath", () => {
     expect(out.startsWith("\u2026")).toBe(true);
     expect(out.length).toBeLessThanOrEqual(48);
   });
+
+  it("clips on code-point boundaries, never emitting a lone surrogate (Issue #215)", () => {
+    const path = "/w/" + "\u{1F600}".repeat(50);
+    const out = shortPath(path, "");
+    expect(out.startsWith("\u2026")).toBe(true);
+    // Neither a lone high surrogate nor a lone low one may survive the cut.
+    expect(out).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u);
+    expect(Array.from(out)).toHaveLength(48);
+  });
 });
 
 describe("getFooterHint markdown applicability (Issue #135 L1)", () => {

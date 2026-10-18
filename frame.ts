@@ -14,6 +14,7 @@
 
 import { visibleWidth } from "@earendil-works/pi-tui";
 
+import { TITLE_PATH_MAX, TITLE_PATH_TAIL } from "./constants";
 import {
   FOCUS_BINDINGS,
   FOCUS_HINTS,
@@ -52,14 +53,20 @@ export function padTo(content: string, width: number): string {
 export function shortPath(path: string, home: string): string {
   // Issue #201: the one display boundary shared by the title row's cwd and the
   // viewer header's relPath, so a repo-controlled path cannot carry a control
-  // byte into a rendered cell. Order: sanitize first, then clip — the 48-cell
-  // cut can never split a control sequence (they are already gone) and the cut
-  // lands on printable text; the post-clip length stays <= 48.
+  // byte into a rendered cell. Order: sanitize first, then clip — the cut can
+  // never split a control sequence (they are already gone) and lands on
+  // printable text; the post-clip length stays <= TITLE_PATH_MAX.
   let shortened = sanitizeText(path);
   if (home && (shortened === home || shortened.startsWith(home + "/"))) {
     shortened = "~" + shortened.slice(home.length);
   }
-  if (shortened.length > 48) shortened = "\u2026" + shortened.slice(shortened.length - 47);
+  // Issue #215: clip by code point, not UTF-16 unit — slicing a string at a
+  // unit boundary can leave half of an astral character (a lone surrogate)
+  // in the title row.
+  const chars = Array.from(shortened);
+  if (chars.length > TITLE_PATH_MAX) {
+    shortened = "\u2026" + chars.slice(chars.length - TITLE_PATH_TAIL).join("");
+  }
   return shortened;
 }
 
