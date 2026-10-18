@@ -13,7 +13,7 @@ import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 
 import { isNativelyRenderable, type ImageSupport } from "./images";
 import type { NavigatorTheme } from "./theme";
-import type { Focus, SearchMatch, ViewerFile, ViewerScrollWindow } from "./types";
+import type { Focus, OpenTarget, SearchMatch, ViewerFile, ViewerScrollWindow } from "./types";
 import { hardTruncate, sanitizeText, sliceStyled } from "./ansi";
 import { formatSize, isMarkdownPath, type DisplayRow } from "./viewer";
 import { renderMinimap, type MinimapMarks, type MinimapSketch } from "./minimap_view";
@@ -153,6 +153,12 @@ export interface ViewerPaneView {
   switching: boolean;
   /** Header target relPath while switching (`commit:` prefix for diffs). */
   targetRelPath: string | null;
+  /**
+   * The typed identity of what the viewer displays (Issue #224). Commit
+   * identity comes from here, never from parsing the `commit:` relPath
+   * convention — a real file may be named that way.
+   */
+  target: OpenTarget | null;
   /** True when the open file changed on disk (notice row). */
   diskChanged: boolean;
   /** Search input bar replaces the viewer header. */
@@ -308,9 +314,12 @@ export function buildViewerHeader(view: ViewerPaneView, rightW: number): string 
   const file = view.switching ? null : view.file;
   // v3: a commit diff shows "commit <hash>" instead of a path — mirrors git
   // show's header and keeps the long commit:<hash> identity string out of
-  // the title row.
-  const isCommit = (file?.kind === "diff" && file.commitHash) || currentPath.startsWith("commit:");
-  const commitHash = file?.commitHash ?? (currentPath.startsWith("commit:") ? currentPath.slice("commit:".length) : "");
+  // the title row. Issue #224: identity comes from the typed target, so a
+  // file literally named `commit:notes.txt` stays a path.
+  const target = view.target;
+  const isCommit = target?.kind === "commit" || (file?.kind === "diff" && file.commitHash !== undefined);
+  const commitHash =
+    target?.kind === "commit" ? target.hash : (file?.commitHash ?? "");
   const headerPath = isCommit ? `commit ${commitHash}` : shortPath(currentPath, view.home);
   const left = " " + (view.focus === "viewer" ? T.accent(T.bold(headerPath)) : T.muted(headerPath));
   const meta: string[] = [];

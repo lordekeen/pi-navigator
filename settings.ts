@@ -14,6 +14,7 @@
  * in this module reads process.env.
  */
 
+import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 // pi-lens-ignore: TS2304
 import { dirname } from "node:path";
@@ -26,6 +27,7 @@ import {
   NAVIGATOR_LAYOUT_FLAG,
 } from "./constants";
 import { ICONS_ENV, parseIconMode } from "./icons";
+import { boundText } from "./bytes";
 import { parseTruthyEnv } from "./env";
 import { NAVIGATOR_LAYOUTS, type NavigatorLayout } from "./types";
 
@@ -283,10 +285,6 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
-}
-
-function bounded(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max)}…`;
 }
 
 /**
@@ -626,7 +624,7 @@ export function loadNavigatorSettings(paths: {
     raw = JSON.parse(readFileSync(paths.userPath, "utf8"));
   } catch (error) {
     if ((error as { code?: string } | null)?.code !== "ENOENT") {
-      warnings.push(`pi-navigator settings unreadable: ${bounded(String(error), 160)}`);
+      warnings.push(`pi-navigator settings unreadable: ${boundText(String(error), 160)}`);
     }
     // Missing or corrupt file: fall through to defaults.
     raw = {};
@@ -682,14 +680,24 @@ export function serializeNavigatorSettings(settings: NavigatorSettings): Record<
 export function writeNavigatorSettings(path: string, settings: NavigatorSettings): void {
   const dir = dirname(path);
   if (dir) mkdirSync(dir, { recursive: true });
-  const tmp = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  // Issue #226: an unpredictable temp name plus O_EXCL creation. `wx` fails
+  // rather than clobbering a path that already exists, and the UUID removes
+  // the pid+Date.now()+Math.random() guessability the old name had.
+  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  let created = false;
   let renamed = false;
   try {
-    writeFileSync(tmp, JSON.stringify(serializeNavigatorSettings(settings), null, 2), "utf8");
+    writeFileSync(tmp, JSON.stringify(serializeNavigatorSettings(settings), null, 2), {
+      encoding: "utf8",
+      flag: "wx",
+    });
+    created = true;
     renameSync(tmp, path);
     renamed = true;
   } finally {
-    if (!renamed) {
+    // Only a temp file WE created may be removed: an EEXIST from `wx` means
+    // the path belonged to someone else and must survive.
+    if (created && !renamed) {
       try {
         unlinkSync(tmp);
       } catch {
@@ -713,7 +721,7 @@ export function commitNavigatorSettings(
     writeNavigatorSettings(path, settings);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return { ok: false, error: bounded(message, 160) };
+    return { ok: false, error: boundText(message, 160) };
   }
   const reloaded = loadNavigatorSettings({ userPath: path });
   return { ok: true, settings: reloaded.settings, warnings: reloaded.warnings };

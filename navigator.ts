@@ -1626,6 +1626,7 @@ export class NavigatorOverlay implements Focusable {
       loading: this.viewLoading,
       switching: isSwitching,
       targetRelPath: targetPath(this.viewTarget),
+      target: this.viewTarget ?? targetOf(this.viewFile),
       diskChanged: this.diskChanged,
       searchMode: this.mode === "search",
       renderMarkdown: this.viewRenderMarkdown,

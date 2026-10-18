@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { sanitizeText } from "../ansi";
+import { sanitizeText, stripAnsi } from "../ansi";
 
 describe("sanitizeText (Issue #201)", () => {
   it("strips control characters, keeps \\n, and maps \\t to a space", () => {
@@ -16,5 +16,12 @@ describe("sanitizeText (Issue #201)", () => {
     expect(sanitizeText("nel\u0085\u009fdel\u007f")).toBe("neldel");
     expect(sanitizeText("ls\u2028ps\u2029")).toBe("lsps");
     expect(sanitizeText(sanitizeText("x\x1by"))).toBe(sanitizeText("x\x1by")); // idempotent
+  });
+});
+
+describe("stripAnsi (Issue #225)", () => {
+  it("removes SGR wrappers, leaving the framed text", () => {
+    expect(stripAnsi("\u001b[2mframed\u001b[0m")).toBe("framed");
+    expect(stripAnsi("plain")).toBe("plain");
   });
 });

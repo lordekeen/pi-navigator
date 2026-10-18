@@ -15,6 +15,12 @@ export default defineConfig({
   test: {
     include: ["test/**/*.test.ts"],
     environment: "node",
+    // Issue #237: the CI runner is 2 cores while Vitest spawns one worker per
+    // file (26), so fs/subprocess tests can queue past the 5s default and fail
+    // spuriously (three unrelated timeouts in an 18.1s run). A generous bound
+    // still catches a real hang; it only removes the starvation false-failure.
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
     // A spy installed by one test file must not leak into the next, or the
     // suite's green turns order-dependent (Issue #222 records the leaked
     // setTimeout spy in test/session.test.ts).

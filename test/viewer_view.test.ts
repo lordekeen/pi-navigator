@@ -90,6 +90,7 @@ function paneView(partial: Partial<ViewerPaneView> = {}): ViewerPaneView {
     loading: false,
     switching: false,
     targetRelPath: null,
+    target: null,
     diskChanged: false,
     searchMode: false,
     renderMarkdown: false,
@@ -283,6 +284,16 @@ describe("renderViewerPane", () => {
 });
 
 describe("buildViewerHeader", () => {
+  it("does not treat a file named commit:notes.txt as a commit (Issue #224)", () => {
+    const file = viewerFile({ relPath: "commit:notes.txt" });
+    const row = buildViewerHeader(
+      paneView({ file, target: { kind: "file", relPath: "commit:notes.txt" } }),
+      80,
+    );
+    expect(row).toContain("commit:notes.txt");
+    expect(row).not.toContain("commit notes.txt");
+  });
+
   it("prefixes commit diffs with the short hash", () => {
     const diff = viewerFile({ kind: "diff", relPath: "commit:abc1234", commitHash: "abc1234" });
     expect(buildViewerHeader(paneView({ file: diff }), 60)).toContain("commit abc1234");

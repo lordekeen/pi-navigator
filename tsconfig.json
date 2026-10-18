@@ -12,5 +12,5 @@
     "noFallthroughCasesInSwitch": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["index.ts", "session.ts", "navigator.ts", "tree.ts", "git.ts", "viewer.ts", "diff.ts", "icons.ts", "env.ts", "theme.ts", "types.ts", "constants.ts", "images.ts", "settings.ts", "settings_menu.ts", "help.ts", "frame.ts", "layout.ts", "files_view.ts", "git_view.ts", "help_view.ts", "ansi.ts", "bytes.ts", "open_target.ts", "viewer_view.ts", "viewer_model.ts", "minimap_view.ts", "test/**/*.ts", "vitest.config.ts"]
+  "include": ["index.ts", "session.ts", "navigator.ts", "tree.ts", "git.ts", "viewer.ts", "diff.ts", "icons.ts", "env.ts", "theme.ts", "types.ts", "constants.ts", "chafa.ts", "native_image.ts", "image_pipeline.ts", "images.ts", "settings.ts", "settings_menu.ts", "help.ts", "frame.ts", "layout.ts", "files_view.ts", "git_view.ts", "help_view.ts", "ansi.ts", "bytes.ts", "open_target.ts", "viewer_view.ts", "viewer_model.ts", "minimap_view.ts", "test/**/*.ts", "vitest.config.ts"]
 }
