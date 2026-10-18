@@ -297,6 +297,53 @@ describe("buildFileRow", () => {
     expect(row).not.toContain("warning:is.t");
   });
 
+  it("never splits a ZWJ cluster when styling a match (Issue #214)", () => {
+    const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}";
+    const name = `a${family}b.txt`;
+    const hitNode = node({
+      name,
+      lowerName: name.toLowerCase(),
+      path: `/work/${name}`,
+      relPath: name,
+      lowerRelPath: name.toLowerCase(),
+    });
+    // The query matches INSIDE the family sequence, so a naive slice would put
+    // SGR between its members: the terminal then paints four separate emoji,
+    // two cells wider than the row budget.
+    const row = buildFileRow(
+      { kind: "match", node: hitNode, prefix: "", nameIndex: name.indexOf("\u{1F469}") },
+      false,
+      24,
+      ctx({ filterQuery: "\u{1F469}", theme: toneTheme }),
+    );
+    expect(visibleWidth(row)).toBe(24);
+    const span = row.slice(row.indexOf("\u{1F468}"), row.lastIndexOf("\u{1F466}"));
+    expect(span).not.toContain("warning:");
+    expect(span).not.toContain("bold:");
+  });
+
+  it("clips a long match prefix on grapheme boundaries (Issue #214)", () => {
+    const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}";
+    const prefix = "/" + family.repeat(30) + "/";
+    const hitNode = node({
+      name: "b.txt",
+      lowerName: "b.txt",
+      path: "/work/b.txt",
+      relPath: "b.txt",
+      lowerRelPath: "b.txt",
+    });
+    const row = buildFileRow(
+      { kind: "match", node: hitNode, prefix, nameIndex: 0 },
+      false,
+      40,
+      ctx({ filterQuery: "b", theme: toneTheme }),
+    );
+    expect(visibleWidth(row)).toBe(40);
+    // The ellipsis must not be followed by a ZWJ, a lone low surrogate, or a
+    // lone high surrogate — each means the cut landed inside a cluster.
+    expect(row).not.toMatch(/\u2026(?:\u200D|[\uDC00-\uDFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF]))/u);
+  });
+
   it("marks a changed directory with a rollup • twin and leaves an unchanged one bare", () => {
     const changedDir = buildFileRow({ kind: "dir", node: srcDir }, false, leftW, ctx());
     expect(changedDir).toContain(" \u2022"); // badge cell: space + marker

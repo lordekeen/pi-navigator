@@ -15,7 +15,7 @@ import type { FileNode, FilesRow, Focus } from "./types";
 import { mapExtensionToIcon } from "./icons";
 import { joinLeftRight, padTo, truncateAndWidth } from "./frame";
 import { codeText } from "./git_view";
-import { sanitizeText } from "./ansi";
+import { graphemeBoundaries, sanitizeText, snapToGrapheme } from "./ansi";
 
 export interface FilesViewContext {
   theme: NavigatorTheme;
@@ -88,16 +88,29 @@ export function buildFileRow(row: FilesRow, isCursor: boolean, leftW: number, ct
     iconW ? nameStyle(mapExtensionToIcon(row.node.relPath, row.node.isDir)) + " " : "";
 
   if (row.kind === "match") {
-    const prefixRaw = row.prefix.length > 18 ? "\u2026" + row.prefix.slice(-18) : row.prefix;
+    // Issue #214: clip the prefix on grapheme boundaries. A cut inside a ZWJ
+    // sequence makes the terminal paint its members separately, which is wider
+    // than the row budget and leaves the row short.
+    const prefixBounds = graphemeBoundaries(row.prefix);
+    const prefixStart = prefixBounds[Math.max(0, prefixBounds.length - 18)] ?? 0;
+    const prefixRaw =
+      prefixBounds.length > 18 ? "\u2026" + row.prefix.slice(prefixStart) : row.prefix;
     // Issue #201: a file/directory name is repo content handed to a theme
     // channel; sanitize each slice at the render site. Never touch
     // row.node.name/relPath themselves — relPath is an identity key.
     const prefix = T.dim(sanitizeText(prefixRaw));
     const name = row.node.name;
     if (row.nameIndex >= 0 && ctx.filterQuery) {
-      const before = sanitizeText(name.slice(0, row.nameIndex));
-      const hit = sanitizeText(name.slice(row.nameIndex, row.nameIndex + ctx.filterQuery.length));
-      const after = sanitizeText(name.slice(row.nameIndex + ctx.filterQuery.length));
+      // Issue #214: both cut points snap to cluster boundaries (start down,
+      // end up), so a query matching inside a ZWJ family highlights the whole
+      // family instead of inserting SGR in the middle of it.
+      const nameBounds = graphemeBoundaries(name);
+      const start = snapToGrapheme(name, row.nameIndex);
+      const end =
+        nameBounds.find((bound) => bound >= row.nameIndex + ctx.filterQuery.length) ?? name.length;
+      const before = sanitizeText(name.slice(0, start));
+      const hit = sanitizeText(name.slice(start, end));
+      const after = sanitizeText(name.slice(end));
       body = icon(T.dim) + prefix + T.text(before) + T.warning(T.bold(hit)) + T.text(after);
     } else {
       body = icon(T.dim) + prefix + T.text(sanitizeText(name));

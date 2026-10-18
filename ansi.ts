@@ -9,6 +9,34 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 const ANSI_PATTERN = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/**
+ * Code-unit offsets where each grapheme cluster starts (Issue #214).
+ * `Intl.Segmenter` ships with the runtime, so this adds no dependency and
+ * agrees with the terminal about ZWJ sequences, flags and combining marks.
+ */
+export function graphemeBoundaries(text: string): number[] {
+  const bounds: number[] = [];
+  for (const segment of graphemeSegmenter.segment(text)) bounds.push(segment.index);
+  return bounds;
+}
+
+/**
+ * Snap a code-unit index down to the start of the grapheme cluster that
+ * contains it (Issue #214), so a highlight boundary can never fall inside a
+ * ZWJ sequence or an astral pair.
+ */
+export function snapToGrapheme(text: string, index: number): number {
+  if (index <= 0) return 0;
+  let start = 0;
+  for (const segment of graphemeSegmenter.segment(text)) {
+    if (segment.index > index) break;
+    start = segment.index;
+  }
+  return start;
+}
+
 /** Remove every CSI/OSC escape sequence; the result is plain text. */
 export function stripAnsi(text: string): string {
   return text.replace(ANSI_PATTERN, "");
