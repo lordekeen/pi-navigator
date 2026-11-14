@@ -165,6 +165,17 @@ describe("ci.yml (Issue #210)", () => {
     expect(workflow).toContain("npm test");
     expect(workflow).toContain("cancel-in-progress: true");
   });
+
+  it("gates high-severity dependency advisories at PR time (Issue #242)", () => {
+    // `npm ci` prints advisories but never fails, so a dev-toolchain advisory
+    // rots silently between releases (0.18.4's commit message claimed zero and
+    // six had landed within a month). The audit gate runs once — the result does
+    // not depend on the Node runtime — and only high/critical block, so a
+    // moderate transitive advisory stays visible without stalling every PR.
+    const workflow = readFileSync(join(repoRoot, ".github/workflows/ci.yml"), "utf8");
+    expect(workflow).toContain("npm audit --audit-level=high");
+    expect(workflow).toMatch(/if:\s*matrix\.node == 24\s*\n\s*run:\s*npm audit/);
+  });
 });
 
 describe("shipped module config (Issue #227)", () => {

@@ -52,5 +52,12 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
+      # Dev-toolchain advisories rot silently: `npm ci` prints them but never
+      # fails, and a "0 vulnerabilities" note in a commit message expires the
+      # moment upstream publishes (Issue #242). Gate on high/critical only, so a
+      # moderate transitive advisory stays visible without blocking every PR.
+      # The audit result does not depend on the Node runtime, so run it once.
+      - if: matrix.node == 24
+        run: npm audit --audit-level=high
       - run: npm run typecheck
       - run: npm test
